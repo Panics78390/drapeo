@@ -1,4 +1,5 @@
 #include "ui/PatternEditor.h"
+#include "garment/PatternOps.h"
 
 #include <algorithm>
 #include <cmath>
@@ -255,6 +256,61 @@ void PatternEditor::frameParts(const garment::Garment& g, const std::vector<int>
     zoom_ = std::clamp(std::min((canvasSize_.x - 80.0f) / ext.x, (canvasSize_.y - 80.0f) / ext.y), 40.0f, 6000.0f);
 }
 
+bool PatternEditor::transformBox(const garment::Garment& g, glm::vec2& lo, glm::vec2& hi) const
+{
+    lo = glm::vec2(1e9f);
+    hi = glm::vec2(-1e9f);
+    if (selectedPoints.size() > 1 && selectedPanel >= 0 && selectedPanel < static_cast<int>(g.panels.size())) {
+        const auto& pts = g.panels[static_cast<std::size_t>(selectedPanel)].points;
+        for (const int i : selectedPoints)
+            if (i >= 0 && i < static_cast<int>(pts.size())) {
+                lo = glm::min(lo, pts[static_cast<std::size_t>(i)]);
+                hi = glm::max(hi, pts[static_cast<std::size_t>(i)]);
+            }
+    } else {
+        for (const int p : targets())
+            if (p >= 0 && p < static_cast<int>(g.panels.size()))
+                for (const auto& q : g.panels[static_cast<std::size_t>(p)].points) {
+                    lo = glm::min(lo, q);
+                    hi = glm::max(hi, q);
+                }
+    }
+    if (lo.x > hi.x) return false;
+    // Cadre jamais plat (arête horizontale ou verticale) : 1 mm minimum.
+    const glm::vec2 c = (lo + hi) * 0.5f;
+    lo = glm::min(lo, c - glm::vec2(0.0005f));
+    hi = glm::max(hi, c + glm::vec2(0.0005f));
+    return true;
+}
+
+void PatternEditor::beginTransform(const garment::Garment& g)
+{
+    tOrig_.clear();
+    tAttach_.clear();
+    if (selectedPoints.size() > 1) {
+        const auto& pts = g.panels[static_cast<std::size_t>(selectedPanel)].points;
+        for (const int i : selectedPoints) tOrig_.push_back({selectedPanel, i, pts[static_cast<std::size_t>(i)]});
+    } else {
+        const auto ids = targets();
+        for (const int p : ids) {
+            const auto& pts = g.panels[static_cast<std::size_t>(p)].points;
+            for (int i = 0; i < static_cast<int>(pts.size()); ++i) tOrig_.push_back({p, i, pts[static_cast<std::size_t>(i)]});
+        }
+        for (int a = 0; a < static_cast<int>(g.attachments.size()); ++a)
+            if (std::find(ids.begin(), ids.end(), g.attachments[static_cast<std::size_t>(a)].base) != ids.end())
+                tAttach_.push_back({a, g.attachments[static_cast<std::size_t>(a)].at});
+    }
+    transformBox(g, tLo_, tHi_);
+}
+
+int PatternEditor::insertOnEdge(garment::Garment& g, garment::EdgeRef e, float t)
+{
+    if (e.panel < 0 || e.panel >= static_cast<int>(g.panels.size())) return -1;
+    const glm::vec2 a = g.edgeStart(e), b = g.edgeEnd(e);
+    g.insertPoint(e.panel, e.edge, a + (b - a) * std::clamp(t, 0.02f, 0.98f));
+    return e.edge + 1;
+}
+
 void PatternEditor::placeNewPanel(garment::Panel& panel) const
 {
     if (panel.points.empty() || silhouette.texture == 0) return;
@@ -409,6 +465,19 @@ std::string PatternEditor::hint() const
         if (selectedPoints.size() > 1)
             return std::to_string(selectedPoints.size()) + " points choisis : glisser l'un d'eux pour les déplacer, flèches (Maj : 1 cm), Suppr pour les supprimer.";
         return "Sélection : glisser une pièce, un point ou une arête. Maj+clic : plusieurs points. Ctrl+rectangle : points. Rectangle dans le vide : pièces. Double-clic sur un bord : ajouter un point.";
+    case Tool::Transform:
+        return "Transformer : coin du cadre = agrandir (Maj : proportions), rond du haut = pivoter (Maj : 15°). Ctrl+rectangle : points.";
+    case Tool::CurvePoint:
+        return "Points de courbe : clic sur un bord pour y créer un point et le glisser, clic sur un point pour le déplacer.";
+    case Tool::Curvature:
+        return "Courbure : glissez un bord pour le courber (il passe par la souris). Lisser (L) adoucit ensuite.";
+    case Tool::Smooth:
+        return "Lisser : maintenez le clic et passez le pinceau sur le contour pour l'adoucir.";
+    case Tool::AddPoint:
+        return "Ajouter un point : clic sur un bord pour le couper en deux à cet endroit.";
+    case Tool::Slash:
+        return slashPanel_ < 0 ? "Fendre et écarter : cliquez le point ou le bord où la pièce s'ouvre."
+                               : "Fendre et écarter : cliquez maintenant le point charnière (la pièce pivote autour de lui).";
     case Tool::Polygon:
         return drawing_.empty() ? "Polygone : cliquez pour poser le premier point."
                                 : "Polygone : cliquez pour ajouter des points, cliquez sur le premier (ou Entrée) pour fermer. Échap : annuler.";
@@ -524,7 +593,112 @@ bool PatternEditor::draw(garment::Garment& g)
 
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
             const glm::vec2 w = snap(mw);
-            switch (tool) {
+            // Outil Transformer : poignées du cadre de la sélection
+            bool handled = false;
+            if (tool == Tool::Transform) {
+                glm::vec2 lo, hi;
+                if (transformBox(g, lo, hi)) {
+                    const ImVec2 corners[4] = {toScreen({lo.x, lo.y}), toScreen({hi.x, lo.y}), toScreen({hi.x, hi.y}), toScreen({lo.x, hi.y})};
+                    const glm::vec2 wc[4] = {{lo.x, lo.y}, {hi.x, lo.y}, {hi.x, hi.y}, {lo.x, hi.y}};
+                    const ImVec2 rot(toScreen({(lo.x + hi.x) * 0.5f, hi.y}).x, toScreen({0.0f, hi.y}).y - 26.0f);
+                    if (std::hypot(mouse.x - rot.x, mouse.y - rot.y) < kPickRadius + 2.0f) {
+                        beginTransform(g);
+                        drag_ = Drag::Rotate;
+                        tAnchor_ = (lo + hi) * 0.5f;
+                        tGrab_ = mw;
+                        handled = true;
+                    }
+                    for (int k = 0; k < 4 && !handled; ++k)
+                        if (std::hypot(mouse.x - corners[k].x, mouse.y - corners[k].y) < kPickRadius + 2.0f) {
+                            beginTransform(g);
+                            drag_ = Drag::Scale;
+                            tAnchor_ = wc[(k + 2) % 4];   // coin opposé fixe
+                            tGrab_ = wc[k];
+                            handled = true;
+                        }
+                    if (!handled && selectedPoints.size() > 1 && mw.x >= lo.x && mw.x <= hi.x && mw.y >= lo.y && mw.y <= hi.y &&
+                        pickPoint(g, selectedPanel, mouse) < 0) {
+                        beginTransform(g);   // dans le cadre des points choisis : les déplacer
+                        drag_ = Drag::Move;
+                        tGrab_ = mw;
+                        handled = true;
+                    }
+                }
+            }
+            if (!handled) switch (tool) {
+            case Tool::CurvePoint:
+            case Tool::AddPoint: {
+                int hitPoint = selectedPanel >= 0 && selectedPanel < static_cast<int>(g.panels.size()) ? pickPoint(g, selectedPanel, mouse) : -1;
+                int hitPanel = hitPoint >= 0 ? selectedPanel : -1;
+                for (int p = 0; hitPoint < 0 && p < static_cast<int>(g.panels.size()); ++p)
+                    if ((hitPoint = pickPoint(g, p, mouse)) >= 0) hitPanel = p;
+                if (hitPoint < 0 && hoverEdge_.panel >= 0) {
+                    // Nouveau point sur le bord, à l'endroit cliqué
+                    hitPanel = hoverEdge_.panel;
+                    hitPoint = insertOnEdge(g, hoverEdge_, edgeT);
+                    applySymmetry(g, hitPanel, hitPoint);
+                    committed = true;
+                }
+                if (hitPoint >= 0) {
+                    selectedPanel = hitPanel;
+                    selectedPoint = hitPoint;
+                    selectedPoints.clear();
+                    selectedEdge = -1;
+                    selection.clear();
+                    if (tool == Tool::CurvePoint) {   // le point se glisse aussitôt
+                        drag_ = Drag::Point;
+                        snapExcludePanel_ = hitPanel;
+                        const auto& hp = g.panels[static_cast<std::size_t>(hitPanel)];
+                        symPartner_ = garment::symmetricPartner(hp, hitPoint);
+                        symOnAxis_ = hp.symmetric && std::abs(hp.points[static_cast<std::size_t>(hitPoint)].x - hp.symAxisX) < 0.0015f;
+                    }
+                }
+                dragStart_ = dragLast_ = mw;
+                break;
+            }
+            case Tool::Curvature:
+                if (hoverEdge_.panel >= 0) {
+                    curveEdge_ = hoverEdge_;
+                    curveA_ = g.edgeStart(hoverEdge_);
+                    curveB_ = g.edgeEnd(hoverEdge_);
+                    curveFirst_ = -1;   // points ajoutés au premier mouvement
+                    curveCount_ = 0;
+                    selectedPanel = hoverEdge_.panel;
+                    selection.clear();
+                    selectedPoints.clear();
+                    selectedPoint = selectedEdge = -1;
+                    drag_ = Drag::Curve;
+                    dragStart_ = dragLast_ = mw;
+                }
+                break;
+            case Tool::Smooth:
+                drag_ = Drag::Smooth;
+                dragStart_ = dragLast_ = mw;
+                break;
+            case Tool::Slash: {
+                // 1er clic : départ de la fente (point ou bord) ; 2e clic : point charnière sur la même pièce.
+                int panel = -1, point = -1;
+                for (int p = 0; point < 0 && p < static_cast<int>(g.panels.size()); ++p)
+                    if ((point = pickPoint(g, p, mouse)) >= 0) panel = p;
+                if (point < 0 && hoverEdge_.panel >= 0) {
+                    panel = hoverEdge_.panel;
+                    point = insertOnEdge(g, hoverEdge_, edgeT);
+                    if (panel == slashPanel_ && slashPoint_ > hoverEdge_.edge) ++slashPoint_;   // index décalé par le nouveau point
+                    committed = true;
+                }
+                if (point < 0) break;
+                if (slashPanel_ < 0 || panel != slashPanel_) {
+                    slashPanel_ = panel;
+                    slashPoint_ = point;
+                    selectedPanel = panel;
+                    selection.clear();
+                } else if (point != slashPoint_) {
+                    if (garment::slashAndSpread(g, panel, slashPoint_, point, spreadDeg)) committed = true;
+                    slashPanel_ = slashPoint_ = -1;
+                }
+                break;
+            }
+            case Tool::Transform:
             case Tool::Select: {
                 selectedSeam = -1;
                 int hitPanel = -1, hitPoint = -1;
@@ -774,6 +948,127 @@ bool PatternEditor::draw(garment::Garment& g)
             }
             drag_ = Drag::None;
         }
+    } else if (drag_ == Drag::Scale || drag_ == Drag::Rotate || drag_ == Drag::Move) {
+        if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            // Transformer : on repart des positions du début, à chaque image.
+            glm::vec2 sc(1.0f);
+            float ang = 0.0f;
+            glm::vec2 move(0.0f);
+            if (drag_ == Drag::Scale) {
+                const glm::vec2 from = tGrab_ - tAnchor_, to = mw - tAnchor_;
+                sc.x = std::abs(from.x) > 1e-4f ? to.x / from.x : 1.0f;
+                sc.y = std::abs(from.y) > 1e-4f ? to.y / from.y : 1.0f;
+                if (shift_) sc = glm::vec2(std::max(std::abs(sc.x), std::abs(sc.y)) * (sc.x < 0.0f ? -1.0f : 1.0f));   // proportions gardées
+                sc = glm::clamp(sc, glm::vec2(-20.0f), glm::vec2(20.0f));
+                if (std::abs(sc.x) < 0.02f) sc.x = 0.02f;
+                if (std::abs(sc.y) < 0.02f) sc.y = 0.02f;
+            } else if (drag_ == Drag::Rotate) {
+                ang = std::atan2(mw.y - tAnchor_.y, mw.x - tAnchor_.x) - std::atan2(tGrab_.y - tAnchor_.y, tGrab_.x - tAnchor_.x);
+                if (shift_) ang = glm::radians(std::round(glm::degrees(ang) / 15.0f) * 15.0f);   // pas de 15°
+            } else {
+                move = mw - tGrab_;
+                if (shift_) move = glm::round(move * 100.0f) / 100.0f;
+            }
+            const float c = std::cos(ang), sn = std::sin(ang);
+            auto apply = [&](glm::vec2 q) {
+                if (drag_ == Drag::Scale) return tAnchor_ + (q - tAnchor_) * sc;
+                if (drag_ == Drag::Rotate) {
+                    const glm::vec2 d = q - tAnchor_;
+                    return tAnchor_ + glm::vec2(c * d.x - sn * d.y, sn * d.x + c * d.y);
+                }
+                return q + move;
+            };
+            for (const auto& tp : tOrig_)
+                if (tp.panel < static_cast<int>(g.panels.size()) && tp.index < static_cast<int>(g.panels[static_cast<std::size_t>(tp.panel)].points.size()))
+                    g.panels[static_cast<std::size_t>(tp.panel)].points[static_cast<std::size_t>(tp.index)] = apply(tp.p);
+            for (const auto& [a, at] : tAttach_)
+                if (a < static_cast<int>(g.attachments.size())) g.attachments[static_cast<std::size_t>(a)].at = apply(at);
+            dragApplied_ = drag_ == Drag::Rotate ? glm::vec2(ang, 0.0f) : glm::vec2(sc.x - 1.0f + move.x, sc.y - 1.0f + move.y);
+            dragLast_ = mw;
+        } else {
+            if (glm::length(dragApplied_) > 1e-6f) {
+                committed = true;
+                if (selectedPoints.size() > 1) {
+                    applySymmetry(g, selectedPanel, selectedPoints.front());
+                } else {
+                    // Pièces entières : droit fil et axe de symétrie suivent.
+                    std::vector<int> ids;
+                    for (const auto& tp : tOrig_)
+                        if (std::find(ids.begin(), ids.end(), tp.panel) == ids.end()) ids.push_back(tp.panel);
+                    for (const int p : ids) {
+                        auto& pn = g.panels[static_cast<std::size_t>(p)];
+                        if (drag_ == Drag::Rotate) {
+                            pn.grainDeg += glm::degrees(dragApplied_.x);
+                            pn.linkAngle += glm::degrees(dragApplied_.x);
+                            if (pn.symmetric) pn.symmetric = false;   // l'axe n'est plus vertical
+                        } else if (pn.symmetric) {
+                            pn.symAxisX = garment::centroid(pn.points).x;   // pièce symétrique : axe au milieu
+                        }
+                    }
+                }
+            }
+            dragApplied_ = glm::vec2(0.0f);
+            drag_ = Drag::None;
+        }
+    } else if (drag_ == Drag::Curve) {
+        if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            const ImVec2 s0 = toScreen(dragStart_);
+            if (curveFirst_ < 0 && std::hypot(mouse.x - s0.x, mouse.y - s0.y) > 3.0f && curveEdge_.panel >= 0) {
+                // Le bord est découpé en 8 segments qui suivront la courbe.
+                constexpr int kSegs = 8;
+                for (int k = 1; k < kSegs; ++k)
+                    g.insertPoint(curveEdge_.panel, curveEdge_.edge + k - 1, curveA_ + (curveB_ - curveA_) * (static_cast<float>(k) / kSegs));
+                curveFirst_ = curveEdge_.edge + 1;
+                curveCount_ = kSegs - 1;
+            }
+            if (curveFirst_ >= 0) {
+                // Courbe de Bézier qui passe par la souris en son milieu.
+                const glm::vec2 ctrl = 2.0f * mw - (curveA_ + curveB_) * 0.5f;
+                auto& pts = g.panels[static_cast<std::size_t>(curveEdge_.panel)].points;
+                for (int k = 0; k < curveCount_; ++k) {
+                    const float t = static_cast<float>(k + 1) / static_cast<float>(curveCount_ + 1);
+                    const std::size_t i = static_cast<std::size_t>(curveFirst_ + k);
+                    if (i < pts.size()) pts[i] = (1 - t) * (1 - t) * curveA_ + 2 * t * (1 - t) * ctrl + t * t * curveB_;
+                }
+            }
+            dragLast_ = mw;
+        } else {
+            if (curveFirst_ >= 0) {
+                committed = true;
+                applySymmetry(g, curveEdge_.panel, curveFirst_ + curveCount_ / 2);
+            }
+            curveFirst_ = -1;
+            curveEdge_ = {};
+            drag_ = Drag::None;
+        }
+    } else if (drag_ == Drag::Smooth) {
+        if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            // Pinceau : chaque point sous le pinceau se rapproche du milieu de ses voisins.
+            const float radius = 28.0f / zoom_;
+            for (std::size_t p = 0; p < g.panels.size(); ++p) {
+                auto& pts = g.panels[p].points;
+                const std::size_t n = pts.size();
+                if (n < 4) continue;
+                const auto old = pts;
+                for (std::size_t i = 0; i < n; ++i) {
+                    const float d = glm::distance(old[i], mw);
+                    if (d > radius) continue;
+                    const float k = 0.18f * (1.0f - d / radius);
+                    const glm::vec2 mid = (old[(i + n - 1) % n] + old[(i + 1) % n]) * 0.5f;
+                    pts[i] += (mid - old[i]) * k;
+                    dragApplied_ = glm::vec2(1.0f);
+                }
+            }
+            dragLast_ = mw;
+        } else {
+            if (dragApplied_ != glm::vec2(0.0f)) {
+                committed = true;
+                for (std::size_t p = 0; p < g.panels.size(); ++p)
+                    if (g.panels[p].symmetric) garment::symmetrizePanel(g, static_cast<int>(p), mw.x <= g.panels[p].symAxisX);
+            }
+            dragApplied_ = glm::vec2(0.0f);
+            drag_ = Drag::None;
+        }
     } else if (drag_ == Drag::Points) {
         if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
             if (selectedPanel >= 0 && selectedPanel < static_cast<int>(g.panels.size())) {
@@ -933,7 +1228,7 @@ bool PatternEditor::draw(garment::Garment& g)
             }
         }
         // Flèches : déplacer les points choisis, le point ou les pièces de 1 mm (Maj : 1 cm).
-        if (tool == Tool::Select && drag_ == Drag::None) {
+        if (isEditTool(tool) && drag_ == Drag::None) {
             glm::vec2 step(0.0f);
             if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) step.x -= 1.0f;
             if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) step.x += 1.0f;
@@ -954,7 +1249,14 @@ bool PatternEditor::draw(garment::Garment& g)
             }
         }
         if (!io.KeyCtrl) {
-            if (ImGui::IsKeyPressed(ImGuiKey_V)) tool = Tool::Select;
+            if (ImGui::IsKeyPressed(ImGuiKey_Z)) tool = Tool::Select;
+            if (ImGui::IsKeyPressed(ImGuiKey_T)) tool = Tool::Transform;
+            if (ImGui::IsKeyPressed(ImGuiKey_V)) tool = Tool::CurvePoint;
+            if (ImGui::IsKeyPressed(ImGuiKey_C)) tool = Tool::Curvature;
+            if (ImGui::IsKeyPressed(ImGuiKey_L)) tool = Tool::Smooth;
+            if (ImGui::IsKeyPressed(ImGuiKey_A)) tool = Tool::AddPoint;
+            if (ImGui::IsKeyPressed(ImGuiKey_E)) tool = Tool::Slash;
+            if (ImGui::IsKeyPressed(ImGuiKey_I)) traceRequested = true;
             if (ImGui::IsKeyPressed(ImGuiKey_P)) tool = Tool::Polygon;
             if (ImGui::IsKeyPressed(ImGuiKey_B)) tool = Tool::Rectangle;
             if (ImGui::IsKeyPressed(ImGuiKey_S)) tool = Tool::Seam;
@@ -963,6 +1265,7 @@ bool PatternEditor::draw(garment::Garment& g)
         }
     }
     if (tool != Tool::Polygon) drawing_.clear();
+    if (tool != Tool::Slash) slashPanel_ = slashPoint_ = -1;
     if (tool != Tool::Seam) pendingSeam_ = {};
 
     // --- Dessin des pièces -----------------------------------------------------
@@ -1208,6 +1511,42 @@ bool PatternEditor::draw(garment::Garment& g)
         std::snprintf(text, sizeof(text), "%.1f x %.1f cm", static_cast<double>(std::abs(dragLast_.x - dragStart_.x) * 100.0f),
                       static_cast<double>(std::abs(dragLast_.y - dragStart_.y) * 100.0f));
         dl->AddText({b.x + 10, b.y + 6}, kInk, text);
+    }
+
+    // Outil Transformer : cadre, poignées d'échelle et poignée de rotation
+    if (tool == Tool::Transform) {
+        glm::vec2 lo, hi;
+        if (transformBox(g, lo, hi)) {
+            const ImU32 col = IM_COL32(120, 200, 255, 230);
+            const ImVec2 corners[4] = {toScreen({lo.x, lo.y}), toScreen({hi.x, lo.y}), toScreen({hi.x, hi.y}), toScreen({lo.x, hi.y})};
+            for (int k = 0; k < 4; ++k) {   // bord en pointillés
+                const ImVec2 a = corners[k], b = corners[(k + 1) % 4];
+                const float len = std::hypot(b.x - a.x, b.y - a.y);
+                const int n = std::max(1, static_cast<int>(len / 6.0f));
+                for (int s = 0; s < n; s += 2) {
+                    const float t0 = static_cast<float>(s) / n, t1 = std::min(1.0f, static_cast<float>(s + 1) / n);
+                    dl->AddLine({a.x + (b.x - a.x) * t0, a.y + (b.y - a.y) * t0}, {a.x + (b.x - a.x) * t1, a.y + (b.y - a.y) * t1}, col, 1.5f);
+                }
+            }
+            for (const auto& c : corners) {
+                dl->AddRectFilled({c.x - 5, c.y - 5}, {c.x + 5, c.y + 5}, IM_COL32(30, 32, 36, 255));
+                dl->AddRect({c.x - 5, c.y - 5}, {c.x + 5, c.y + 5}, col, 0.0f, 0, 1.5f);
+            }
+            const ImVec2 top = toScreen({(lo.x + hi.x) * 0.5f, hi.y});
+            const ImVec2 rot(top.x, top.y - 26.0f);
+            dl->AddLine(top, rot, col, 1.5f);
+            dl->AddCircleFilled(rot, 6.0f, IM_COL32(30, 32, 36, 255), 16);
+            dl->AddCircle(rot, 6.0f, col, 16, 1.5f);
+        }
+    }
+    // Outil Lisser : cercle du pinceau
+    if (tool == Tool::Smooth && hovered) dl->AddCircle(mouse, 28.0f, IM_COL32(120, 200, 255, 160), 32, 1.5f);
+    // Outil Fendre et écarter : premier point choisi
+    if (tool == Tool::Slash && slashPanel_ >= 0 && slashPanel_ < static_cast<int>(g.panels.size()) && slashPoint_ >= 0 &&
+        slashPoint_ < static_cast<int>(g.panels[static_cast<std::size_t>(slashPanel_)].points.size())) {
+        const ImVec2 sp = toScreen(g.panels[static_cast<std::size_t>(slashPanel_)].points[static_cast<std::size_t>(slashPoint_)]);
+        dl->AddCircle(sp, 8.0f, IM_COL32(255, 90, 90, 240), 16, 2.0f);
+        if (hovered) dl->AddLine(sp, mouse, IM_COL32(255, 90, 90, 160), 1.5f);
     }
 
     // Coordonnées du curseur

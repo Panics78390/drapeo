@@ -1935,7 +1935,10 @@ void App::drawMenuBar()
     }
     if (ImGui::BeginMenu("Outils")) {
         using ui::Tool;
-        if (ImGui::MenuItem("Sélection", "V", editor_.tool == Tool::Select)) editor_.tool = Tool::Select;
+        for (const auto& t : ui::kEditTools)
+            if (ImGui::MenuItem(t.name, t.key, editor_.tool == t.tool)) editor_.tool = t.tool;
+        if (ImGui::MenuItem("Tracer depuis l'image", "I")) editor_.traceRequested = true;
+        ImGui::Separator();
         if (ImGui::MenuItem("Polygone", "P", editor_.tool == Tool::Polygon)) editor_.tool = Tool::Polygon;
         if (ImGui::MenuItem("Rectangle", "B", editor_.tool == Tool::Rectangle)) editor_.tool = Tool::Rectangle;
         if (ImGui::MenuItem("Couture", "S", editor_.tool == Tool::Seam)) editor_.tool = Tool::Seam;
@@ -1993,9 +1996,44 @@ void App::drawToolbar()
     ImGui::SetCursorPosY(y);
 
     using ui::Tool;
-    if (iconButton("sel", Icon::Select, "Sélection (V)\nDéplacer pièces et points, double-clic sur un bord pour ajouter un point",
-                   editor_.tool == Tool::Select, b))
-        editor_.tool = Tool::Select;
+    {
+        // Bouton de l'outil d'édition courant + liste déroulante des outils d'édition
+        const ui::ToolInfo* cur = &ui::kEditTools[0];
+        for (const auto& t : ui::kEditTools)
+            if (t.tool == editor_.tool) cur = &t;
+        char tip[256];
+        std::snprintf(tip, sizeof(tip), "%s (%s)\n%s", cur->name, cur->key, cur->help);
+        if (iconButton("sel", Icon::Select, tip, ui::isEditTool(editor_.tool), b)) editor_.tool = cur->tool;
+        ImGui::SameLine(0, 0);
+        ImGui::SetCursorPosY(y);
+        const float aw = std::round(14.0f * uiScale_);
+        if (ImGui::InvisibleButton("##edittools", ImVec2(aw, b))) ImGui::OpenPopup("##edittoolsmenu");
+        {
+            const ImVec2 r0 = ImGui::GetItemRectMin(), r1 = ImGui::GetItemRectMax();
+            auto* dl = ImGui::GetWindowDrawList();
+            if (ImGui::IsItemHovered()) dl->AddRectFilled(r0, r1, IM_COL32(255, 255, 255, 24), 3.0f);
+            const float cx = (r0.x + r1.x) * 0.5f, cy = (r0.y + r1.y) * 0.5f, h = 3.5f * uiScale_;
+            dl->AddTriangleFilled({cx - h, cy - h * 0.5f}, {cx + h, cy - h * 0.5f}, {cx, cy + h * 0.7f}, IM_COL32(220, 222, 228, 230));
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Outils d'édition du patron");
+        if (ImGui::BeginPopup("##edittoolsmenu")) {
+            for (const auto& t : ui::kEditTools) {
+                if (ImGui::MenuItem(t.name, t.key, editor_.tool == t.tool)) editor_.tool = t.tool;
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", t.help);
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Tracer depuis l'image", "I")) editor_.traceRequested = true;
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Détecte les contours des pièces sur l'image de fond importée");
+            ImGui::EndPopup();
+        }
+        if (editor_.tool == Tool::Slash) {
+            ImGui::SameLine(0, 6);
+            ImGui::SetCursorPosY(y + (b - ImGui::GetFrameHeight()) * 0.5f);
+            ImGui::SetNextItemWidth(std::round(110.0f * uiScale_));
+            ImGui::DragFloat("##spread", &editor_.spreadDeg, 0.5f, -90.0f, 90.0f, "Écart %.1f°");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Angle d'ouverture de « Fendre et écarter »");
+        }
+    }
     ImGui::SameLine(0, 2);
     if (iconButton("poly", Icon::Polygon, "Polygone (P)\nTracer une pièce point par point", editor_.tool == Tool::Polygon, b))
         editor_.tool = Tool::Polygon;
@@ -2110,6 +2148,13 @@ void App::drawPatternPane()
     editor_.bodyScale = avatarHeight_ / 1.75f;
     editor_.torsoCenterX = bodyAxes_.torsoCenter.x;
     if (editor_.draw(garment_)) commitGarment();
+    if (editor_.traceRequested) {
+        editor_.traceRequested = false;
+        if (backdropImage_.width > 0)
+            detectBackdropPieces();
+        else
+            setStatus("Tracer depuis l'image : importez d'abord une image de patron (Fichier > Ouvrir un projet / importer un patron, Ctrl+I).", true);
+    }
     if (editor_.menuRequested) {
         editor_.menuRequested = false;
         ImGui::OpenPopup("##menuPieces");
@@ -3376,7 +3421,9 @@ void App::drawAboutWindow()
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     if (ImGui::BeginPopupModal("Raccourcis clavier", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         const char* rows[][2] = {
-            {"V / P / B / S", "Outils Sélection, Polygone, Rectangle, Couture"},
+            {"Z / T / V / C", "Éditer le patron, Transformer, Points de courbe, Courbure"},
+            {"L / A / E / I", "Lisser, Ajouter un point, Fendre et écarter, Tracer depuis l'image"},
+            {"P / B / S", "Outils Polygone, Rectangle, Couture"},
             {"Double-clic sur un bord", "Ajouter un point"},
             {"Suppr", "Supprimer la sélection"},
             {"Maj (en traçant)", "Aimanter à la grille de 1 cm"},

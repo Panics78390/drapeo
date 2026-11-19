@@ -12,7 +12,7 @@ Logiciel original de création de vêtements 3D : on dessine des **patrons 2D**,
 
 ## Fonctions
 
-- **Éditeur de patrons 2D** : outils Sélection (V), Polygone (P), Rectangle (B), Couture (S) ; double-clic sur un bord pour ajouter un point, Maj pour aimanter à la grille de 1 cm, copie miroir, cotes des bords.
+- **Éditeur de patrons 2D** : outils d'édition (menu déroulant à côté de la flèche) : Éditer le patron (Z), Transformer points / arêtes (T, cadre avec poignées d'échelle et de rotation), Éditer les points de courbe (V), Éditer la courbure (C, tirer un bord pour le courber), Lisser la courbe (L, pinceau), Ajouter un point / couper un bord (A), Fendre et écarter (E, deux points puis angle d'écart), Tracer depuis l'image (I) ; outils Polygone (P), Rectangle (B), Couture (S) ; double-clic sur un bord pour ajouter un point, Maj pour aimanter à la grille de 1 cm, copie miroir, cotes des bords.
 - **Coutures** numérotées et colorées, inversion du sens, alerte quand les deux côtés n'ont pas la même longueur. Une couture peut suivre **plusieurs bords** (emmanchure, encolure, entrejambe) : boutons + / − de l'inspecteur, ou Maj + clic sur le bord voisin.
 - **Placement** de chaque pièce autour du corps : **buste, bras gauche / droit, jambe gauche / droite** (devant, dos, côtés, hauteur, distance). Simulation en pause, un clic sur une pièce dans la vue 3D affiche un **gizmo** : flèches X / Y / Z, carrés de plan, anneaux de rotation, et disque central pour glisser la pièce autour du corps.
 - **Futures coutures visibles en 3D** (bouton « Coutures ») : un clic (Alt + clic si elle passe derrière le tissu) **active ou désactive** une couture ; une couture désactivée n'est pas cousue.

@@ -19,7 +19,25 @@
 
 namespace drapeo::ui {
 
-enum class Tool { Select, Polygon, Rectangle, Seam };
+enum class Tool { Select, Transform, CurvePoint, Curvature, Smooth, AddPoint, Slash, Polygon, Rectangle, Seam };
+
+/// Outils d'édition du patron (menu de la barre d'outils) : nom, raccourci, aide.
+struct ToolInfo {
+    Tool tool;
+    const char* name;
+    const char* key;
+    const char* help;
+};
+inline constexpr ToolInfo kEditTools[] = {
+    {Tool::Select, "Éditer le patron", "Z", "Choisir et glisser pièces, points et arêtes"},
+    {Tool::Transform, "Transformer points / arêtes", "T", "Cadre autour de la sélection : coins = agrandir, rond du haut = pivoter"},
+    {Tool::CurvePoint, "Éditer les points de courbe", "V", "Clic sur un bord : nouveau point à glisser ; clic sur un point : le glisser"},
+    {Tool::Curvature, "Éditer la courbure", "C", "Glisser un bord pour le courber"},
+    {Tool::Smooth, "Lisser la courbe", "L", "Pinceau : passer sur les points pour adoucir le contour"},
+    {Tool::AddPoint, "Ajouter un point / couper un bord", "A", "Clic sur un bord : y ajoute un point"},
+    {Tool::Slash, "Fendre et écarter", "E", "Clic sur le bord de départ, puis sur le point charnière : la pièce s'ouvre en pointe"},
+};
+[[nodiscard]] inline bool isEditTool(Tool t) { return t != Tool::Polygon && t != Tool::Rectangle && t != Tool::Seam; }
 
 /// Image de patron (photo, scan, page de PDF) affichée sous les pièces, à l'échelle.
 struct Backdrop {
@@ -51,6 +69,8 @@ public:
     float bodyScale = 1.0f;     // hauteur de l'avatar / 1,75 m
     float torsoCenterX = 0.0f;  // abscisse du centre du buste (avatar de 1,75 m)
     bool magnet = true;           // aimant : points et pièces s'accrochent aux points et bords voisins
+    float spreadDeg = 15.0f;      // « Fendre et écarter » : angle d'ouverture
+    bool traceRequested = false;  // touche I : l'application détecte les pièces sur l'image de fond
 
     [[nodiscard]] bool isSelected(int panel) const;
 
@@ -123,7 +143,7 @@ private:
     bool needsFrame_ = true;
 
     // États d'interaction
-    enum class Drag { None, Point, Points, Panel, Pan, Rect, Backdrop, Marquee } drag_ = Drag::None;
+    enum class Drag { None, Point, Points, Panel, Pan, Rect, Backdrop, Marquee, Scale, Rotate, Move, Curve, Smooth } drag_ = Drag::None;
     glm::vec2 dragStart_{0.0f};
     glm::vec2 dragLast_{0.0f};
     std::vector<glm::vec2> drawing_;  // polygone en cours
@@ -132,6 +152,24 @@ private:
     bool shift_ = false;
     bool hovered_ = false;
     bool pointMarquee_ = false;   // Ctrl + rectangle : sélection de points
+    // Outil Transformer : cadre de la sélection et positions au début du glisser
+    struct TPoint {
+        int panel, index;
+        glm::vec2 p;
+    };
+    std::vector<TPoint> tOrig_;
+    std::vector<std::pair<int, glm::vec2>> tAttach_;   // poses dont la base est transformée
+    glm::vec2 tLo_{0.0f}, tHi_{0.0f}, tAnchor_{0.0f}, tGrab_{0.0f};
+    bool transformBox(const garment::Garment& g, glm::vec2& lo, glm::vec2& hi) const;
+    void beginTransform(const garment::Garment& g);
+    // Outil Courbure : bord en cours de courbure
+    garment::EdgeRef curveEdge_;
+    glm::vec2 curveA_{0.0f}, curveB_{0.0f};
+    int curveFirst_ = -1, curveCount_ = 0;
+    // Outil Fendre et écarter : premier point choisi
+    int slashPanel_ = -1, slashPoint_ = -1;
+    /// Ajoute un point sur le bord survolé (renvoie son index, -1 sinon).
+    int insertOnEdge(garment::Garment& g, garment::EdgeRef e, float t);
     [[nodiscard]] bool pointChosen(int panel, int point) const;
     /// Nouvelle pièce tracée sur la silhouette : placée à cet endroit du corps en 3D.
     void placeNewPanel(garment::Panel& panel) const;

@@ -513,6 +513,37 @@ int addInnerShape(Garment& g, int panel, float inset)
     return idx;
 }
 
+bool slashAndSpread(Garment& g, int panel, int iA, int iB, float degrees)
+{
+    if (panel < 0 || panel >= static_cast<int>(g.panels.size())) return false;
+    const auto pts = g.panels[static_cast<std::size_t>(panel)].points;
+    const int n = static_cast<int>(pts.size());
+    if (iA < 0 || iB < 0 || iA >= n || iB >= n || iA == iB || std::abs(degrees) < 1e-3f) return false;
+    const int span = ((iB - iA) % n + n) % n;   // nombre de pas de A à B
+    if (span < 2) return false;                 // rien entre A et B : rien à faire pivoter
+    auto inSide = [&](int k) { return k != iA && k != iB && ((k - iA) % n + n) % n < span; };
+    const glm::vec2 pivot = pts[static_cast<std::size_t>(iB)];
+    std::vector<glm::vec2> best;
+    float bestArea = -1.0f;
+    for (const float sign : {1.0f, -1.0f}) {
+        std::vector<glm::vec2> out;
+        for (int k = 0; k < n; ++k) {
+            const glm::vec2 q = pts[static_cast<std::size_t>(k)];
+            out.push_back(inSide(k) ? pivot + linkTransform(q - pivot, sign * degrees, false) : q);
+            if (k == iA) out.push_back(pivot + linkTransform(q - pivot, sign * degrees, false));   // bord de l'ouverture
+        }
+        const float area = std::abs(signedArea(out));
+        if (area > bestArea) {
+            bestArea = area;
+            best = std::move(out);
+        }
+    }
+    std::vector<int> hint(static_cast<std::size_t>(n));
+    for (int k = 0; k < n; ++k) hint[static_cast<std::size_t>(k)] = k + (k > iA ? 1 : 0);
+    replaceOutline(g, panel, best, &hint);
+    return true;
+}
+
 std::vector<int> panelsLike(const Garment& g, int panel, SameProperty prop)
 {
     std::vector<int> out;

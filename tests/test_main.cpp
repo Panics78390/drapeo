@@ -648,6 +648,17 @@ int main()
         sq.panels[0].points = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
         CHECK(garment::offsetPanel(sq, 0, 0.05f));
         CHECK(std::abs(garment::signedArea(sq.panels[0].points) - 1.21f) < 1e-3f);
+        // Fendre et écarter : le coin (1,0) pivote autour de (1,1), la pièce s'ouvre en (0,0)
+        {
+            garment::Garment sl;
+            sl.panels.push_back({});
+            sl.panels[0].points = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+            CHECK(garment::slashAndSpread(sl, 0, 0, 2, 15.0f));
+            CHECK(sl.panels[0].points.size() == 5);
+            CHECK(near(sl.panels[0].points[0], {0, 0}) && near(sl.panels[0].points[3], {1, 1}));
+            CHECK(std::abs(garment::signedArea(sl.panels[0].points)) > 1.0f);
+            CHECK(!garment::slashAndSpread(sl, 0, 0, 1, 15.0f));   // points voisins : rien à écarter
+        }
         // Simplifier : les points alignés disparaissent, sauf sur une couture
         sq.panels[0].points = {{0, 0}, {0.5f, 0.0005f}, {1, 0}, {1, 0.5f}, {1, 1}, {0, 1}};
         sq.panels.push_back(sq.panels[0]);

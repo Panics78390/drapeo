@@ -56,6 +56,11 @@ int simplifyPanel(Garment& g, int panel, float tolerance);
 /// Renvoie l'index du renfort, ou -1.
 int addInnerShape(Garment& g, int panel, float inset);
 
+/// Fendre et écarter : la partie du contour entre les points `fromPoint` et `hingePoint` (dans le sens
+/// des index) pivote de `degrees` autour du point charnière, ce qui ouvre la pièce en pointe au point de départ.
+/// Le sens d'ouverture est choisi pour agrandir la pièce. Renvoie false si les points ne conviennent pas.
+bool slashAndSpread(Garment& g, int panel, int fromPoint, int hingePoint, float degrees);
+
 /// Propriété commune pour « sélectionner les pièces semblables ».
 enum class SameProperty { Color, Zone, LinkGroup };
 std::vector<int> panelsLike(const Garment& g, int panel, SameProperty property);
