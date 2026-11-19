@@ -86,6 +86,16 @@ bool alignPoint(Garment& g, int panel, int point, bool horizontal, bool next);
 /// (le pli). Si le pli est vertical, la pièce devient symétrique autour de lui.
 bool unfoldPanel(Garment& g, int panel, int edge);
 
+/// Contour d'une pièce repéré par la longueur parcourue depuis le point 0 (m), dans le sens des index.
+float contourLength(const Garment& g, int panel);
+float contourParam(const Garment& g, int panel, int edge, float t);   // position du point (edge, t)
+glm::vec2 contourPoint(const Garment& g, int panel, float s);          // point à la longueur s (modulo le tour)
+
+/// Couture libre : la portion de contour de A qui part de `sA` et parcourt `lenA` (m, négatif = sens
+/// inverse des index) est cousue sur la portion de B qui part de `sB` et parcourt `lenB`. Les débuts
+/// sont cousus ensemble. Des points sont ajoutés aux extrémités si besoin. Renvoie l'index de la couture, ou -1.
+int sewFree(Garment& g, int panelA, float sA, float lenA, int panelB, float sB, float lenB);
+
 /// Propriété commune pour « sélectionner les pièces semblables ».
 enum class SameProperty { Color, Zone, LinkGroup };
 std::vector<int> panelsLike(const Garment& g, int panel, SameProperty property);

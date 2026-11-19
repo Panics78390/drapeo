@@ -1,5 +1,6 @@
 #include "io/ProjectFile.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <sstream>
 
@@ -39,7 +40,7 @@ std::string writeProject(const garment::Garment& g, const ProjectAvatar* avatar)
         o << "posee " << a.patch << ' ' << a.base << ' ' << a.at.x << ' ' << a.at.y << ' ' << a.startEdge << ' ' << a.count << "\n";
     for (const auto& s : g.seams)
         o << "couture " << s.a.panel << ' ' << s.a.edge << ' ' << s.countA << ' ' << s.b.panel << ' ' << s.b.edge << ' '
-          << s.countB << ' ' << (s.flipped ? 1 : 0) << ' ' << (s.enabled ? 1 : 0) << "\n";
+          << s.countB << ' ' << (s.flipped ? 1 : 0) << ' ' << (s.enabled ? 1 : 0) << ' ' << s.order << "\n";
     return o.str();
 }
 
@@ -124,6 +125,8 @@ bool parseProject(const std::string& text, garment::Garment& out, std::string& e
             s.flipped = flipped != 0;
             int enabled = 1;
             if (ls >> enabled) s.enabled = enabled != 0;
+            int order = 0;
+            if (ls >> order) s.order = std::clamp(order, 0, 2);
             g.seams.push_back(s);
         }
     }

@@ -68,6 +68,8 @@ struct Seam {
     bool flipped = false;   // inverse le sens d'appariement choisi automatiquement
     int countA = 1, countB = 1;
     bool enabled = true;    // une couture désactivée reste dessinée mais n'est pas cousue
+    int order = 0;          // 0 : sens choisi automatiquement ; 1 : début de A contre début de B ;
+                            // 2 : début de A contre fin de B (couture libre : sens donné à la souris)
 };
 
 /// Pièce posée sur une autre (poche plaquée, rabat, renfort) : le contour de

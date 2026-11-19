@@ -483,6 +483,13 @@ std::string PatternEditor::hint() const
                                 : "Polygone : cliquez pour ajouter des points, cliquez sur le premier (ou Entrée) pour fermer. Échap : annuler.";
     case Tool::Rectangle:
         return "Rectangle : cliquez-glissez pour tracer une pièce rectangulaire.";
+    case Tool::FreeSeam:
+        switch (freeStage_) {
+        case 0: return "Couture libre : cliquez le début de la première portion (sur un point ou n'importe où sur un bord).";
+        case 1: return "Couture libre : suivez le contour avec la souris (le sens compte), puis cliquez la fin de la portion. Échap : annuler.";
+        case 2: return "Couture libre : cliquez le début de la portion à coudre en face (il sera cousu sur le début de la première).";
+        default: return "Couture libre : suivez le contour et cliquez la fin. Les longueurs des deux portions s'affichent. Échap : annuler.";
+        }
     case Tool::Seam:
         return pendingSeam_.panel < 0 ? "Couture : cliquez sur le premier bord."
                                       : "Couture : cliquez sur le second bord à coudre. Échap : annuler.";
@@ -575,6 +582,30 @@ bool PatternEditor::draw(garment::Garment& g)
     // --- Survol ---------------------------------------------------------------
     float edgeT = 0.0f;
     hoverEdge_ = hovered ? pickEdge(g, mouse, &edgeT) : garment::EdgeRef{};
+
+    // Couture libre : position survolée sur un contour (accrochée aux points) et suivi du parcours
+    freeHoverPanel_ = -1;
+    if (tool == Tool::FreeSeam && hovered) {
+        for (int p = 0; freeHoverPanel_ < 0 && p < static_cast<int>(g.panels.size()); ++p)
+            if (const int k = pickPoint(g, p, mouse); k >= 0) {
+                freeHoverPanel_ = p;
+                freeHoverS_ = garment::contourParam(g, p, k, 0.0f);
+            }
+        if (freeHoverPanel_ < 0 && hoverEdge_.panel >= 0) {
+            freeHoverPanel_ = hoverEdge_.panel;
+            freeHoverS_ = garment::contourParam(g, hoverEdge_.panel, hoverEdge_.edge, edgeT);
+        }
+        FreeRun* cur = freeStage_ == 1 ? &freeA_ : freeStage_ == 3 ? &freeB_ : nullptr;
+        if (cur && freeHoverPanel_ == cur->panel) {
+            const float L = garment::contourLength(g, cur->panel);
+            float d = freeHoverS_ - freePrevS_;
+            if (d > 0.5f * L) d -= L;
+            if (d < -0.5f * L) d += L;
+            cur->len = std::clamp(cur->len + d, -L, L);
+            freePrevS_ = freeHoverS_;
+        }
+    }
+    if (tool != Tool::FreeSeam) freeStage_ = 0;
 
     // --- Interactions ---------------------------------------------------------
     if (hovered) {
@@ -852,6 +883,30 @@ bool PatternEditor::draw(garment::Garment& g)
             case Tool::Rectangle:
                 drag_ = Drag::Rect;
                 dragStart_ = dragLast_ = w;
+                break;
+            case Tool::FreeSeam:
+                if (freeHoverPanel_ < 0) break;
+                if (freeStage_ == 0 || freeStage_ == 2) {
+                    FreeRun& r = freeStage_ == 0 ? freeA_ : freeB_;
+                    r = {freeHoverPanel_, freeHoverS_, 0.0f};
+                    freePrevS_ = freeHoverS_;
+                    selectedPanel = freeHoverPanel_;
+                    selection.clear();
+                    ++freeStage_;
+                } else {
+                    FreeRun& r = freeStage_ == 1 ? freeA_ : freeB_;
+                    if (freeHoverPanel_ != r.panel || std::abs(r.len) < 2.0f / zoom_) break;   // fin sur la même pièce
+                    if (freeStage_ == 1) {
+                        freeStage_ = 2;
+                    } else {
+                        const int sid = garment::sewFree(g, freeA_.panel, freeA_.s0, freeA_.len, freeB_.panel, freeB_.s0, freeB_.len);
+                        if (sid >= 0) {
+                            selectedSeam = sid;
+                            committed = true;
+                        }
+                        freeStage_ = 0;
+                    }
+                }
                 break;
             case Tool::Seam:
                 if (hoverEdge_.panel >= 0) {
@@ -1222,7 +1277,7 @@ bool PatternEditor::draw(garment::Garment& g)
             if (selection.size() == 1) selection.clear();
         }
         if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-            if (drawing_.empty() && pendingSeam_.panel < 0) {
+            if (drawing_.empty() && pendingSeam_.panel < 0 && freeStage_ == 0) {
                 selectedPoints.clear();
                 selectedEdge = -1;
                 selection.clear();
@@ -1230,6 +1285,7 @@ bool PatternEditor::draw(garment::Garment& g)
             }
             drawing_.clear();
             pendingSeam_ = {};
+            freeStage_ = 0;
         }
         if (ImGui::IsKeyPressed(ImGuiKey_Enter) && drawing_.size() >= 3) {
             garment::Panel panel;
@@ -1314,6 +1370,7 @@ bool PatternEditor::draw(garment::Garment& g)
             if (ImGui::IsKeyPressed(ImGuiKey_P)) tool = Tool::Polygon;
             if (ImGui::IsKeyPressed(ImGuiKey_B)) tool = Tool::Rectangle;
             if (ImGui::IsKeyPressed(ImGuiKey_S)) tool = Tool::Seam;
+            if (ImGui::IsKeyPressed(ImGuiKey_G)) tool = Tool::FreeSeam;
             if (ImGui::IsKeyPressed(ImGuiKey_F)) frameAll(g);
             if (ImGui::IsKeyPressed(ImGuiKey_M)) magnet = !magnet;
         }
@@ -1617,6 +1674,66 @@ bool PatternEditor::draw(garment::Garment& g)
         bool onPoint = false;
         for (int p = 0; !onPoint && p < static_cast<int>(g.panels.size()); ++p) onPoint = pickPoint(g, p, mouse) >= 0;
         if (!onPoint) dl->AddCircle(mouse, 28.0f, IM_COL32(120, 200, 255, 160), 32, 1.5f);
+    }
+    // Couture libre : portions choisies, traits qui relient leurs débuts et leurs fins, longueurs
+    if (tool == Tool::FreeSeam) {
+        const ImU32 pink = IM_COL32(236, 72, 153, 255);
+        auto runLine = [&](const FreeRun& r, std::vector<ImVec2>& out) {
+            out.clear();
+            if (r.panel < 0 || r.panel >= static_cast<int>(g.panels.size())) return;
+            const auto& pts = g.panels[static_cast<std::size_t>(r.panel)].points;
+            const int n = static_cast<int>(pts.size());
+            const float L = garment::contourLength(g, r.panel);
+            out.push_back(toScreen(garment::contourPoint(g, r.panel, r.s0)));
+            // Points du contour traversés, dans le sens du parcours
+            std::vector<std::pair<float, int>> inside;
+            for (int k = 0; k < n; ++k) {
+                float d = garment::contourParam(g, r.panel, k, 0.0f) - r.s0;
+                if (r.len >= 0.0f) {
+                    d = std::fmod(d + 2.0f * L, L);
+                    if (d > 1e-6f && d < r.len - 1e-6f) inside.push_back({d, k});
+                } else {
+                    d = std::fmod(-d + 2.0f * L, L);
+                    if (d > 1e-6f && d < -r.len - 1e-6f) inside.push_back({d, k});
+                }
+            }
+            std::sort(inside.begin(), inside.end());
+            for (const auto& [d, k] : inside) out.push_back(toScreen(pts[static_cast<std::size_t>(k)]));
+            out.push_back(toScreen(garment::contourPoint(g, r.panel, r.s0 + r.len)));
+        };
+        std::vector<ImVec2> la, lb;
+        if (freeStage_ >= 1) runLine(freeA_, la);
+        if (freeStage_ >= 3) runLine(freeB_, lb);
+        for (const auto* l : {&la, &lb})
+            if (l->size() >= 2) dl->AddPolyline(l->data(), static_cast<int>(l->size()), pink, 0, 4.0f);
+        auto dashed = [&](ImVec2 a, ImVec2 b) {
+            const float len = std::hypot(b.x - a.x, b.y - a.y);
+            const int n = std::max(1, static_cast<int>(len / 7.0f));
+            for (int s = 0; s < n; s += 2) {
+                const float t0 = static_cast<float>(s) / n, t1 = std::min(1.0f, static_cast<float>(s + 1) / n);
+                dl->AddLine({a.x + (b.x - a.x) * t0, a.y + (b.y - a.y) * t0}, {a.x + (b.x - a.x) * t1, a.y + (b.y - a.y) * t1}, pink, 1.5f);
+            }
+        };
+        if (la.size() >= 2 && lb.size() >= 2) {
+            dashed(la.front(), lb.front());
+            dashed(la.back(), lb.back());
+        }
+        if (freeStage_ == 2 && la.size() >= 2 && freeHoverPanel_ >= 0) dashed(la.front(), toScreen(garment::contourPoint(g, freeHoverPanel_, freeHoverS_)));
+        if (freeHoverPanel_ >= 0) {
+            const ImVec2 hp = toScreen(garment::contourPoint(g, freeHoverPanel_, freeHoverS_));
+            dl->AddCircleFilled(hp, 5.0f, IM_COL32(80, 220, 255, 255), 12);
+        }
+        if (freeStage_ >= 1 && hovered) {
+            char text[80];
+            if (freeStage_ <= 2)
+                std::snprintf(text, sizeof(text), "%.1f cm", static_cast<double>(std::abs(freeA_.len) * 100.0f));
+            else
+                std::snprintf(text, sizeof(text), "%.1f cm / %.1f cm", static_cast<double>(std::abs(freeA_.len) * 100.0f),
+                              static_cast<double>(std::abs(freeB_.len) * 100.0f));
+            const bool match = freeStage_ == 3 && std::abs(std::abs(freeA_.len) - std::abs(freeB_.len)) < 0.005f;
+            dl->AddRectFilled({mouse.x + 12, mouse.y + 10}, {mouse.x + 18 + ImGui::CalcTextSize(text).x, mouse.y + 30}, IM_COL32(20, 20, 24, 210), 3.0f);
+            dl->AddText({mouse.x + 15, mouse.y + 12}, match ? IM_COL32(120, 230, 140, 255) : kInk, text);
+        }
     }
     // Aperçu de la coupe (fenêtre « Couper la ligne »)
     for (const auto& q : splitPreview) {

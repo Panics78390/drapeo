@@ -19,7 +19,7 @@
 
 namespace drapeo::ui {
 
-enum class Tool { Select, Transform, CurvePoint, Curvature, Smooth, AddPoint, Slash, Polygon, Rectangle, Seam };
+enum class Tool { Select, Transform, CurvePoint, Curvature, Smooth, AddPoint, Slash, Polygon, Rectangle, Seam, FreeSeam };
 
 /// Outils d'édition du patron (menu de la barre d'outils) : nom, raccourci, aide.
 struct ToolInfo {
@@ -37,7 +37,16 @@ inline constexpr ToolInfo kEditTools[] = {
     {Tool::AddPoint, "Ajouter un point / couper un bord", "A", "Clic sur un bord ou une courbe : la couper au point cliqué ou en parties égales"},
     {Tool::Slash, "Fendre et écarter", "E", "Clic sur le bord de départ, puis sur le point charnière : la pièce s'ouvre en pointe"},
 };
-[[nodiscard]] inline bool isEditTool(Tool t) { return t != Tool::Polygon && t != Tool::Rectangle && t != Tool::Seam; }
+[[nodiscard]] inline bool isEditTool(Tool t)
+{
+    return t != Tool::Polygon && t != Tool::Rectangle && t != Tool::Seam && t != Tool::FreeSeam;
+}
+/// Outils de couture (liste déroulante du bouton Couture)
+inline constexpr ToolInfo kSeamTools[] = {
+    {Tool::Seam, "Couture bord à bord", "S", "Cliquer deux bords à coudre ensemble"},
+    {Tool::FreeSeam, "Couture libre", "G",
+     "Clic au début puis à la fin d'une portion de contour (elle peut passer par plusieurs bords), puis pareil sur l'autre pièce"},
+};
 
 /// Image de patron (photo, scan, page de PDF) affichée sous les pièces, à l'échelle.
 struct Backdrop {
@@ -177,6 +186,16 @@ private:
     garment::Garment roundOrig_;
     int roundPanel_ = -1, roundPoint_ = -1;
     float roundT_ = 0.0f;
+    // Outil Couture libre : portions de contour (longueur parcourue depuis le point 0, signée)
+    struct FreeRun {
+        int panel = -1;
+        float s0 = 0.0f, len = 0.0f;
+    };
+    FreeRun freeA_, freeB_;
+    int freeStage_ = 0;        // 0 : début de A, 1 : fin de A, 2 : début de B, 3 : fin de B
+    float freePrevS_ = 0.0f;   // dernière position survolée (pour suivre le sens de la souris)
+    int freeHoverPanel_ = -1;
+    float freeHoverS_ = 0.0f;
     // Outil Fendre et écarter : premier point choisi
     int slashPanel_ = -1, slashPoint_ = -1;
     /// Ajoute un point sur le bord survolé (renvoie son index, -1 sinon).

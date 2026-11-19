@@ -781,6 +781,127 @@ bool unfoldPanel(Garment& g, int panel, int edge)
     return true;
 }
 
+float contourLength(const Garment& g, int panel)
+{
+    if (panel < 0 || panel >= static_cast<int>(g.panels.size())) return 0.0f;
+    const auto& pts = g.panels[static_cast<std::size_t>(panel)].points;
+    float len = 0.0f;
+    for (std::size_t k = 0; k < pts.size(); ++k) len += glm::distance(pts[k], pts[(k + 1) % pts.size()]);
+    return len;
+}
+
+float contourParam(const Garment& g, int panel, int edge, float t)
+{
+    if (panel < 0 || panel >= static_cast<int>(g.panels.size())) return 0.0f;
+    const auto& pts = g.panels[static_cast<std::size_t>(panel)].points;
+    const int n = static_cast<int>(pts.size());
+    float s = 0.0f;
+    for (int k = 0; k < edge && k < n; ++k) s += glm::distance(pts[static_cast<std::size_t>(k)], pts[static_cast<std::size_t>((k + 1) % n)]);
+    if (edge >= 0 && edge < n) s += glm::clamp(t, 0.0f, 1.0f) * glm::distance(pts[static_cast<std::size_t>(edge)], pts[static_cast<std::size_t>((edge + 1) % n)]);
+    return s;
+}
+
+glm::vec2 contourPoint(const Garment& g, int panel, float s)
+{
+    if (panel < 0 || panel >= static_cast<int>(g.panels.size())) return glm::vec2(0.0f);
+    const auto& pts = g.panels[static_cast<std::size_t>(panel)].points;
+    const int n = static_cast<int>(pts.size());
+    const float total = contourLength(g, panel);
+    if (n == 0 || total <= 0.0f) return n ? pts[0] : glm::vec2(0.0f);
+    s = std::fmod(s, total);
+    if (s < 0.0f) s += total;
+    for (int k = 0; k < n; ++k) {
+        const glm::vec2 a = pts[static_cast<std::size_t>(k)], b = pts[static_cast<std::size_t>((k + 1) % n)];
+        const float len = glm::distance(a, b);
+        if (s <= len || k == n - 1) return len > 1e-9f ? glm::mix(a, b, glm::clamp(s / len, 0.0f, 1.0f)) : a;
+        s -= len;
+    }
+    return pts[0];
+}
+
+namespace {
+// Index du point du contour à la position q ; un point est ajouté sur le bord qui la contient si besoin.
+int pointAt(Garment& g, int panel, glm::vec2 q)
+{
+    auto& pts = g.panels[static_cast<std::size_t>(panel)].points;
+    const int n = static_cast<int>(pts.size());
+    int best = -1;
+    float bd = 1e9f;
+    for (int k = 0; k < n; ++k)
+        if (const float d = glm::distance(pts[static_cast<std::size_t>(k)], q); d < bd) {
+            bd = d;
+            best = k;
+        }
+    if (bd < 2e-4f) return best;   // déjà un point ici (à 0,2 mm près)
+    int edge = -1;
+    float ed = 1e9f;
+    for (int k = 0; k < n; ++k)
+        if (const float d = distanceToSegment(q, pts[static_cast<std::size_t>(k)], pts[static_cast<std::size_t>((k + 1) % n)]); d < ed) {
+            ed = d;
+            edge = k;
+        }
+    if (edge < 0) return -1;
+    g.insertPoint(panel, edge, q);
+    return edge + 1;
+}
+} // namespace
+
+int sewFree(Garment& g, int panelA, float sA, float lenA, int panelB, float sB, float lenB)
+{
+    const int np = static_cast<int>(g.panels.size());
+    if (panelA < 0 || panelB < 0 || panelA >= np || panelB >= np) return -1;
+    const float LA = contourLength(g, panelA), LB = contourLength(g, panelB);
+    if (std::abs(lenA) < 1e-3f || std::abs(lenB) < 1e-3f || LA <= 0.0f || LB <= 0.0f) return -1;
+    lenA = glm::clamp(lenA, -LA, LA);
+    lenB = glm::clamp(lenB, -LB, LB);
+    // Extrémités en coordonnées du patron (elles ne bougent pas quand on ajoute des points).
+    const glm::vec2 a0 = contourPoint(g, panelA, sA), a1 = contourPoint(g, panelA, sA + lenA);
+    const glm::vec2 b0 = contourPoint(g, panelB, sB), b1 = contourPoint(g, panelB, sB + lenB);
+    const bool fullA = std::abs(lenA) > LA - 1e-4f, fullB = std::abs(lenB) > LB - 1e-4f;
+    if (pointAt(g, panelA, a0) < 0 || pointAt(g, panelA, a1) < 0 || pointAt(g, panelB, b0) < 0 || pointAt(g, panelB, b1) < 0) return -1;
+    // Index (relus après tous les ajouts : une même pièce peut porter les deux côtés)
+    auto idx = [&](int panel, glm::vec2 q) {
+        const auto& pts = g.panels[static_cast<std::size_t>(panel)].points;
+        for (int k = 0; k < static_cast<int>(pts.size()); ++k)
+            if (glm::distance(pts[static_cast<std::size_t>(k)], q) < 2e-4f) return k;
+        return -1;
+    };
+    auto run = [&](int panel, glm::vec2 p0, glm::vec2 p1, float len, bool full, EdgeRef& first, int& count) {
+        const int n = static_cast<int>(g.panels[static_cast<std::size_t>(panel)].points.size());
+        const int i0 = idx(panel, p0), i1 = idx(panel, p1);
+        if (i0 < 0 || i1 < 0) return false;
+        if (len > 0.0f) {
+            first = {panel, i0};
+            count = ((i1 - i0) % n + n) % n;
+        } else {
+            first = {panel, i1};
+            count = ((i0 - i1) % n + n) % n;
+        }
+        if (count == 0 && full) count = n;
+        return count > 0;
+    };
+    Seam s;
+    if (!run(panelA, a0, a1, lenA, fullA, s.a, s.countA) || !run(panelB, b0, b1, lenB, fullB, s.b, s.countB)) return -1;
+    // Sur une même pièce, les deux portions ne doivent pas se recouvrir.
+    if (panelA == panelB) {
+        const int n = static_cast<int>(g.panels[static_cast<std::size_t>(panelA)].points.size());
+        for (int i = 0; i < s.countA; ++i)
+            for (int j = 0; j < s.countB; ++j)
+                if ((s.a.edge + i) % n == (s.b.edge + j) % n) return -1;
+    }
+    // Les listes de sommets suivent le sens des index : début de la liste = début de la portion si
+    // elle avance, sa fin sinon.
+    s.order = (lenA > 0.0f) == (lenB > 0.0f) ? 1 : 2;
+    for (int side = 0; side < 2; ++side) {
+        const EdgeRef st = side == 0 ? s.a : s.b;
+        const int cnt = side == 0 ? s.countA : s.countB;
+        const int n = static_cast<int>(g.panels[static_cast<std::size_t>(st.panel)].points.size());
+        for (int k = 0; k < cnt; ++k) g.removeSeamsOn({st.panel, (st.edge + k) % n});
+    }
+    g.seams.push_back(s);
+    return static_cast<int>(g.seams.size()) - 1;
+}
+
 std::vector<int> panelsLike(const Garment& g, int panel, SameProperty prop)
 {
     std::vector<int> out;

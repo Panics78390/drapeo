@@ -700,6 +700,30 @@ int main()
             CHECK(std::abs(std::abs(garment::signedArea(h.panels[0].points)) - 2.0f * before) < 1e-4f);
             CHECK(h.panels[0].symmetric && h.panels[0].symAxisX == 0.0f);
         }
+        // Couture libre : le bas d'une longue bande cousu sur le tour d'une arche (sauf son bas)
+        {
+            garment::Garment bag;
+            bag.panels.push_back({});
+            bag.panels[0].points = {{0, 0.6f}, {1.0f, 0.6f}, {1.0f, 0.7f}, {0, 0.7f}};   // bande de 1 m
+            bag.panels.push_back({});
+            bag.panels[1].points = {{0, 0}, {0.3f, 0}, {0.3f, 0.35f}, {0, 0.35f}};      // dos : tour sans le bas = 1 m
+            CHECK(std::abs(garment::contourLength(bag, 1) - 1.3f) < 1e-5f);
+            CHECK(near(garment::contourPoint(bag, 1, 0.45f), {0.3f, 0.15f}));
+            CHECK(std::abs(garment::contourParam(bag, 1, 2, 0.5f) - 0.80f) < 1e-5f);
+            // A : bord du bas de la bande, de gauche à droite ; B : de (0,0) en remontant (sens inverse des index)
+            const int sid = garment::sewFree(bag, 0, 0.0f, 1.0f, 1, 0.0f, -1.0f);
+            CHECK(sid >= 0 && bag.seams[static_cast<std::size_t>(sid)].countB == 3 && bag.seams[static_cast<std::size_t>(sid)].order == 2);
+            // Portion qui commence au milieu d'un bord : un point est ajouté
+            garment::Garment b2 = bag;
+            b2.seams.clear();
+            const int s2 = garment::sewFree(b2, 0, 0.25f, 0.5f, 1, 0.1f, 0.5f);
+            CHECK(s2 >= 0 && b2.panels[0].points.size() == 6 && b2.panels[1].points.size() == 6);
+            CHECK(garment::sewFree(b2, 0, 0.0f, 0.0f, 1, 0.0f, 0.5f) < 0);   // portion vide : refusée
+            // Le maillage coud bien la bande sur le dos
+            garment::GarmentMesh gm;
+            std::string err;
+            CHECK(garment::buildGarmentMesh(bag, {}, gm, err) && !gm.seamPairs.empty());
+        }
         // Simplifier : les points alignés disparaissent, sauf sur une couture
         sq.panels[0].points = {{0, 0}, {0.5f, 0.0005f}, {1, 0}, {1, 0.5f}, {1, 1}, {0, 1}};
         sq.panels.push_back(sq.panels[0]);

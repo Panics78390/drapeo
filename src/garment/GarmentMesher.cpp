@@ -389,7 +389,7 @@ bool buildGarmentMesh(const Garment& garment, const MeshingOptions& options, Gar
             direct += glm::distance(out.mesh.positions[A[k]], out.mesh.positions[B[k]]);
             reversed += glm::distance(out.mesh.positions[A[k]], out.mesh.positions[B[m - 1 - k]]);
         }
-        bool reverse = reversed < direct;
+        bool reverse = s.order == 0 ? reversed < direct : s.order == 2;
         if (s.flipped) reverse = !reverse;
         for (std::size_t k = 0; k < m; ++k) {
             const uint32_t a = A[k], b = B[reverse ? m - 1 - k : k];

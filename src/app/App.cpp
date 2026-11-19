@@ -1940,7 +1940,8 @@ void App::drawMenuBar()
         ImGui::Separator();
         if (ImGui::MenuItem("Polygone", "P", editor_.tool == Tool::Polygon)) editor_.tool = Tool::Polygon;
         if (ImGui::MenuItem("Rectangle", "B", editor_.tool == Tool::Rectangle)) editor_.tool = Tool::Rectangle;
-        if (ImGui::MenuItem("Couture", "S", editor_.tool == Tool::Seam)) editor_.tool = Tool::Seam;
+        for (const auto& t : ui::kSeamTools)
+            if (ImGui::MenuItem(t.name, t.key, editor_.tool == t.tool)) editor_.tool = t.tool;
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Modèles")) {
@@ -2040,8 +2041,35 @@ void App::drawToolbar()
     if (iconButton("rect", Icon::Rectangle, "Rectangle (B)\nTracer une pièce rectangulaire", editor_.tool == Tool::Rectangle, b))
         editor_.tool = Tool::Rectangle;
     ImGui::SameLine(0, 2);
-    if (iconButton("seam", Icon::Seam, "Couture (S)\nCliquer deux bords à coudre ensemble", editor_.tool == Tool::Seam, b))
-        editor_.tool = Tool::Seam;
+    {
+        // Bouton de l'outil de couture courant + liste déroulante (bord à bord, libre)
+        const ui::ToolInfo* cur = &ui::kSeamTools[0];
+        for (const auto& t : ui::kSeamTools)
+            if (t.tool == editor_.tool) cur = &t;
+        char tip[256];
+        std::snprintf(tip, sizeof(tip), "%s (%s)\n%s", cur->name, cur->key, cur->help);
+        const bool seamTool = editor_.tool == Tool::Seam || editor_.tool == Tool::FreeSeam;
+        if (iconButton("seam", Icon::Seam, tip, seamTool, b)) editor_.tool = cur->tool;
+        ImGui::SameLine(0, 0);
+        ImGui::SetCursorPosY(y);
+        const float aw = std::round(14.0f * uiScale_);
+        if (ImGui::InvisibleButton("##seamtools", ImVec2(aw, b))) ImGui::OpenPopup("##seamtoolsmenu");
+        {
+            const ImVec2 r0 = ImGui::GetItemRectMin(), r1 = ImGui::GetItemRectMax();
+            auto* dl = ImGui::GetWindowDrawList();
+            if (ImGui::IsItemHovered()) dl->AddRectFilled(r0, r1, IM_COL32(255, 255, 255, 24), 3.0f);
+            const float cx = (r0.x + r1.x) * 0.5f, cy = (r0.y + r1.y) * 0.5f, h = 3.5f * uiScale_;
+            dl->AddTriangleFilled({cx - h, cy - h * 0.5f}, {cx + h, cy - h * 0.5f}, {cx, cy + h * 0.7f}, IM_COL32(220, 222, 228, 230));
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Outils de couture");
+        if (ImGui::BeginPopup("##seamtoolsmenu")) {
+            for (const auto& t : ui::kSeamTools) {
+                if (ImGui::MenuItem(t.name, t.key, editor_.tool == t.tool)) editor_.tool = t.tool;
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", t.help);
+            }
+            ImGui::EndPopup();
+        }
+    }
     ImGui::SameLine(0, 2);
     if (iconButton("magnet", Icon::Magnet, "Aimant (M)\nLes points et les pièces s'accrochent aux points et bords voisins", editor_.magnet, b))
         editor_.magnet = !editor_.magnet;
@@ -3595,7 +3623,7 @@ void App::drawAboutWindow()
         const char* rows[][2] = {
             {"Z / T / V / C", "Éditer le patron, Transformer, Points de courbe, Courbure"},
             {"L / A / E / I", "Lisser, Ajouter un point, Fendre et écarter, Tracer depuis l'image"},
-            {"P / B / S", "Outils Polygone, Rectangle, Couture"},
+            {"P / B / S / G", "Outils Polygone, Rectangle, Couture bord à bord, Couture libre"},
             {"Double-clic sur un bord", "Ajouter un point"},
             {"Suppr", "Supprimer la sélection"},
             {"Maj (en traçant)", "Aimanter à la grille de 1 cm"},
