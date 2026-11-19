@@ -379,7 +379,23 @@ int App::run(const AppOptions& options)
         if (clothValid_) {
             geometry::computeVertexNormals(solver_.positions(), solver_.indices(), normals_);
             solver_.computeStrain(strain_);
-            renderer_.updateCloth(solver_.positions(), normals_, strain_);
+            // Pièces posées (poches, bandes, écussons) : légèrement décollées à l'affichage
+            // pour qu'elles ne se mélangent pas avec le tissu sur lequel elles sont cousues.
+            if (!garment_.attachments.empty()) {
+                std::vector<char> isPatch(garment_.panels.size(), 0);
+                for (const auto& a : garment_.attachments)
+                    if (a.patch >= 0 && a.patch < static_cast<int>(isPatch.size())) isPatch[static_cast<std::size_t>(a.patch)] = 1;
+                const auto& pos = solver_.positions();
+                displayPositions_.assign(pos.begin(), pos.end());
+                for (std::size_t i = 0; i < displayPositions_.size() && i < garmentMesh_.panelOfVertex.size() && i < normals_.size(); ++i) {
+                    const int pv = garmentMesh_.panelOfVertex[i];
+                    if (pv >= 0 && pv < static_cast<int>(isPatch.size()) && isPatch[static_cast<std::size_t>(pv)])
+                        displayPositions_[i] += normals_[i] * 0.004f;
+                }
+                renderer_.updateCloth(displayPositions_, normals_, strain_);
+            } else {
+                renderer_.updateCloth(solver_.positions(), normals_, strain_);
+            }
         }
 
         // Fond de toute la fenêtre, puis la vue 3D dans sa zone.

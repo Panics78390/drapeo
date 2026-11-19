@@ -137,6 +137,7 @@ private:
     int frameCount_ = 0;
     float simTime_ = 0.0f;
 
+    std::vector<glm::vec3> displayPositions_;   // positions affichées (pièces posées décollées)
     // Buffers réutilisés à chaque image
     std::vector<glm::vec3> normals_;
     std::vector<float> strain_;
