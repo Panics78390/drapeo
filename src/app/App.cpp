@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <unordered_map>
 #include <vector>
 
 #include <GLFW/glfw3.h>
@@ -652,6 +653,8 @@ void App::resetCloth()
     solver_.setSeams(garmentMesh_.seamPairs, sewingSeconds_);
     renderer_.setClothTopology(garmentMesh_.mesh.indices, garmentMesh_.mesh.vertexCount());
     clothValid_ = true;
+    highlighted_ = {-2};   // recalcul de la mise en évidence au prochain affichage
+    selectionEdges_.clear();
     updateClothColors();
     apply3DState();
 }
@@ -708,15 +711,19 @@ void App::redo()
 void App::updateClothColors()
 {
     appearance_.color = material_.color;
-    if (!clothValid_ || !panelColors_) {
+    const bool anySelected = std::any_of(highlighted_.begin(), highlighted_.end(), [](int p) { return p >= 0; });
+    if (!clothValid_ || (!panelColors_ && !anySelected)) {
         renderer_.setClothColors({});
         return;
     }
     std::vector<glm::vec3> colors(garmentMesh_.panelOfVertex.size());
+    const glm::vec3 highlight(0.96f, 0.86f, 0.34f);   // pièce sélectionnée dans la vue patron
     for (std::size_t i = 0; i < colors.size(); ++i) {
         const int p = garmentMesh_.panelOfVertex[i];
-        colors[i] = (p >= 0 && p < static_cast<int>(garment_.panels.size())) ? garment_.panels[static_cast<std::size_t>(p)].color
-                                                                           : material_.color;
+        const bool valid = p >= 0 && p < static_cast<int>(garment_.panels.size());
+        colors[i] = valid && panelColors_ ? garment_.panels[static_cast<std::size_t>(p)].color : material_.color;
+        if (valid && std::find(highlighted_.begin(), highlighted_.end(), p) != highlighted_.end())
+            colors[i] = glm::mix(colors[i], highlight, 0.55f);
     }
     renderer_.setClothColors(colors);
 }
@@ -1190,6 +1197,12 @@ void App::handleShortcuts()
 
 void App::handleViewportInput()
 {
+    // Sélection de la vue patron : la pièce est mise en évidence dans la vue 3D.
+    if (auto current = editor_.targets(); current != highlighted_) {
+        highlighted_ = std::move(current);
+        selectionEdges_.clear();
+        updateClothColors();
+    }
     const ImGuiIO& io = ImGui::GetIO();
     const ImVec2 m = io.MousePos;
     const bool inside = m.x >= viewPos_.x && m.y >= viewPos_.y && m.x < viewPos_.x + viewSize_.x &&
@@ -1258,8 +1271,9 @@ void App::handleViewportInput()
             toggleSeam(hoverSeam3D_);
             pickedPanel = true;
         }
-        // 3. En pause : clic gauche sur une pièce = la sélectionner et la glisser autour du corps.
-        if (!pickedPanel && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !playing_ && clothValid_ && !io.KeyShift) {
+        // 3. Clic gauche sur une pièce = la sélectionner (aussi dans la vue patron) ; glisser = la faire
+        //    tourner autour du corps (la simulation se met en pause dès que la pièce bouge).
+        if (!pickedPanel && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && clothValid_ && !io.KeyShift) {
             float depth = 0.0f;
             const int p = pickParticle(depth);
             if (p >= 0 && static_cast<std::size_t>(p) < garmentMesh_.panelOfVertex.size()) {
@@ -1268,8 +1282,7 @@ void App::handleViewportInput()
                 if (const int ai = garment_.attachmentOf(dragPanel_); ai >= 0) dragPanel_ = garment_.attachments[static_cast<std::size_t>(ai)].base;
                 dragMoved_ = false;
                 dragLastHit_ = solver_.positions()[static_cast<std::size_t>(p)];
-                editor_.selectedPanel = dragPanel_;
-                editor_.selectedPoint = editor_.selectedSeam = -1;
+                editor_.select({dragPanel_});
                 pickedPanel = true;
             }
         }
@@ -1294,6 +1307,10 @@ void App::handleViewportInput()
     if (dragPanel_ >= 0) {
         if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && clothValid_) {
             if (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f) {
+                if (playing_) {   // pièce saisie pendant la simulation : pause pour la mise en place
+                    playing_ = false;
+                    refreshPanelParticles(dragPanel_);
+                }
                 glm::vec3 o, d;
                 camera_.ray(ndcX, ndcY, aspect, o, d);
                 dragPanelTo(o, d);
@@ -1578,6 +1595,44 @@ int App::seamHitTest3D(glm::vec2 m, float* depth) const
         }
     }
     return hit;
+}
+
+void App::drawSelection3D()
+{
+    // Contour de la pièce sélectionnée, tracé sur le tissu en 3D.
+    if (!clothValid_ || highlighted_.empty() || highlighted_.front() < 0) return;
+    const auto& pov = garmentMesh_.panelOfVertex;
+    auto chosen = [&](uint32_t v) {
+        if (v >= pov.size()) return false;
+        const int p = pov[v];
+        return std::find(highlighted_.begin(), highlighted_.end(), p) != highlighted_.end() && p < static_cast<int>(garment_.panels.size()) &&
+               !garment_.panels[static_cast<std::size_t>(p)].hidden3D;
+    };
+    if (selectionEdges_.empty()) {   // bords de la pièce : arêtes d'un seul triangle
+        std::unordered_map<uint64_t, int> count;
+        const auto& idx = garmentMesh_.mesh.indices;
+        for (std::size_t t = 0; t + 2 < idx.size(); t += 3) {
+            if (!chosen(idx[t]) || !chosen(idx[t + 1]) || !chosen(idx[t + 2])) continue;
+            for (int k = 0; k < 3; ++k) {
+                uint32_t a = idx[t + static_cast<std::size_t>(k)], b = idx[t + static_cast<std::size_t>((k + 1) % 3)];
+                if (a > b) std::swap(a, b);
+                ++count[(static_cast<uint64_t>(a) << 32) | b];
+            }
+        }
+        for (const auto& [key, c] : count)
+            if (c == 1) selectionEdges_.push_back({static_cast<uint32_t>(key >> 32), static_cast<uint32_t>(key & 0xffffffffu)});
+        if (selectionEdges_.empty()) selectionEdges_.push_back({0u, 0u});   // rien à tracer (évite de recalculer)
+    }
+    const auto& pos = displayPositions_.size() == solver_.positions().size() ? displayPositions_ : solver_.positions();
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    dl->PushClipRect({viewPos_.x, viewPos_.y}, {viewPos_.x + viewSize_.x, viewPos_.y + viewSize_.y}, true);
+    for (const auto& e : selectionEdges_) {
+        if (e[0] == e[1] || e[0] >= pos.size() || e[1] >= pos.size()) continue;
+        bool f0 = false, f1 = false;
+        const glm::vec2 a = projectToScreen(pos[e[0]], &f0), b = projectToScreen(pos[e[1]], &f1);
+        if (f0 && f1) dl->AddLine({a.x, a.y}, {b.x, b.y}, IM_COL32(255, 222, 70, 235), 2.0f);
+    }
+    dl->PopClipRect();
 }
 
 void App::drawGrain3D()
@@ -2450,11 +2505,12 @@ void App::drawViewportOverlay()
         const ImVec2 ts = ImGui::CalcTextSize(msg);
         dl->AddText({o.x + (viewSize_.x - ts.x) * 0.5f, o.y + viewSize_.y * 0.5f}, ImGui::GetColorU32(kTextDim), msg);
     }
+    drawSelection3D();
     drawSeams3D();
     drawGrain3D();
     drawGizmo();
-    const char* help = playing_ ? "Clic gauche : tourner    Maj / clic milieu : déplacer    Molette : zoom    Clic droit : saisir le tissu    Espace : pause"
-                                : "En pause : clic sur une pièce = gizmo (déplacer, tourner)    Alt + clic sur une couture : activer / désactiver    Ailleurs : tourner la vue";
+    const char* help = playing_ ? "Pièce : clic = la choisir, glisser = la faire tourner autour du corps    Ailleurs : tourner la vue    Maj / clic milieu : déplacer    Clic droit : saisir le tissu"
+                                : "En pause : glisser une pièce = la faire tourner autour du corps, gizmo pour la déplacer ou la pivoter    Alt + clic sur une couture : activer / désactiver    Ailleurs : tourner la vue";
     const ImVec2 hs = ImGui::CalcTextSize(help);
     if (hs.x < viewSize_.x - 2 * pad)
         dl->AddText({o.x + pad, o.y + viewSize_.y - hs.y - pad * 0.7f}, IM_COL32(150, 154, 162, 170), help);

@@ -77,6 +77,16 @@ private:
     glm::vec2 snap(glm::vec2 w) const;
     /// Petit décalage qui accroche un point des pièces `ids` (déplacées de `delta`) au point le plus proche d'une autre pièce.
     glm::vec2 magnetOffset(const garment::Garment& g, const std::vector<int>& ids, glm::vec2 delta) const;
+    /// Guides d'alignement : décale les points `moving` pour que l'un d'eux s'aligne (même x ou même y)
+    /// sur un point de `others`, et mémorise les guides à dessiner. Renvoie la correction.
+    glm::vec2 alignTo(const std::vector<glm::vec2>& moving, const std::vector<glm::vec2>& others) const;
+    /// Points de référence des pièces (sommets + centre), hors pièces `skip` et hors point en cours de glisser.
+    std::vector<glm::vec2> alignTargets(const garment::Garment& g, const std::vector<int>& skip) const;
+    struct Guide {
+        glm::vec2 a, b;        // segment du guide (m)
+        bool measure = false;  // affiche la longueur
+    };
+    mutable std::vector<Guide> guides_;
     const garment::Garment* g_ = nullptr;   // vêtement en cours d'édition (pour l'aimant)
     mutable bool snapped_ = false;          // l'aimant a accroché le dernier point
     mutable glm::vec2 snapPos_{0.0f};

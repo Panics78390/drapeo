@@ -38,6 +38,93 @@ ImVec2 PatternEditor::toScreen(glm::vec2 w) const
     return {cx + (w.x - center_.x) * zoom_, cy - (w.y - center_.y) * zoom_};
 }
 
+std::vector<glm::vec2> PatternEditor::alignTargets(const garment::Garment& g, const std::vector<int>& skip) const
+{
+    std::vector<glm::vec2> out;
+    for (int p = 0; p < static_cast<int>(g.panels.size()); ++p) {
+        if (std::find(skip.begin(), skip.end(), p) != skip.end()) continue;
+        const auto& pts = g.panels[static_cast<std::size_t>(p)].points;
+        glm::vec2 lo(1e9f), hi(-1e9f);
+        for (int i = 0; i < static_cast<int>(pts.size()); ++i) {
+            lo = glm::min(lo, pts[static_cast<std::size_t>(i)]);
+            hi = glm::max(hi, pts[static_cast<std::size_t>(i)]);
+            // Point en cours de glisser (et son miroir) : pas une référence.
+            if (drag_ == Drag::Point && p == selectedPanel && (i == selectedPoint || i == symPartner_)) continue;
+            out.push_back(pts[static_cast<std::size_t>(i)]);
+        }
+        if (!pts.empty()) out.push_back((lo + hi) * 0.5f);   // centre de la pièce
+    }
+    for (const auto& q : drawing_) out.push_back(q);         // polygone en cours : ses propres points
+    return out;
+}
+
+glm::vec2 PatternEditor::alignTo(const std::vector<glm::vec2>& moving, const std::vector<glm::vec2>& others) const
+{
+    guides_.clear();
+    const float radius = kPickRadius / zoom_;
+    float bx = radius, by = radius;
+    glm::vec2 corr(0.0f);
+    bool hx = false, hy = false;
+    for (const auto& m : moving)
+        for (const auto& o : others) {
+            if (const float d = std::abs(o.x - m.x); d < bx) {
+                bx = d;
+                corr.x = o.x - m.x;
+                hx = true;
+            }
+            if (const float d = std::abs(o.y - m.y); d < by) {
+                by = d;
+                corr.y = o.y - m.y;
+                hy = true;
+            }
+        }
+    if (!hx && !hy) return corr;
+    const float eps = 2e-5f;
+    for (int axis = 0; axis < 2; ++axis) {
+        if ((axis == 0 && !hx) || (axis == 1 && !hy)) continue;
+        // Toutes les valeurs alignées (haut, bas, centre...) : un guide pour chacune.
+        const int other = 1 - axis;
+        std::vector<float> values;
+        for (const auto& m : moving) {
+            const float v = m[axis] + corr[axis];
+            bool shared = false;
+            for (const auto& o : others) shared = shared || std::abs(o[axis] - v) < eps;
+            bool known = false;
+            for (const float k : values) known = known || std::abs(k - v) < eps;
+            if (shared && !known) values.push_back(v);
+        }
+        glm::vec2 bestM(0.0f), bestO(0.0f);
+        float bestGap = 1e9f;
+        for (const float value : values) {
+            float lo = 1e9f, hi = -1e9f;
+            for (const auto& m : moving) {
+                const glm::vec2 q = m + corr;
+                if (std::abs(q[axis] - value) >= eps) continue;
+                lo = std::min(lo, q[other]);
+                hi = std::max(hi, q[other]);
+                for (const auto& o : others) {
+                    if (std::abs(o[axis] - value) >= eps) continue;
+                    lo = std::min(lo, o[other]);
+                    hi = std::max(hi, o[other]);
+                    if (const float gap = std::abs(o[other] - q[other]); gap > eps && gap < bestGap) {
+                        bestGap = gap;
+                        bestM = q;
+                        bestO = o;
+                    }
+                }
+            }
+            const float ext = 0.03f;   // le guide dépasse un peu des points
+            Guide gl;
+            gl.a[axis] = gl.b[axis] = value;
+            gl.a[other] = lo - ext;
+            gl.b[other] = hi + ext;
+            guides_.push_back(gl);
+        }
+        if (bestGap < 1e8f) guides_.push_back({bestM, bestO, true});
+    }
+    return corr;
+}
+
 glm::vec2 PatternEditor::snap(glm::vec2 w) const
 {
     snapped_ = false;
@@ -54,6 +141,10 @@ glm::vec2 PatternEditor::snap(glm::vec2 w) const
                     hit = q;
                     snapped_ = true;
                 }
+        }
+        if (!snapped_) {   // guides d'alignement avec les points des pièces (et de la pièce elle-même)
+            const glm::vec2 corr = alignTo({w}, alignTargets(*g_, {}));
+            if (!guides_.empty()) return w + corr;
         }
         if (!snapped_) {
             for (int p = 0; p < static_cast<int>(g_->panels.size()); ++p) {
@@ -103,7 +194,23 @@ glm::vec2 PatternEditor::magnetOffset(const garment::Garment& g, const std::vect
             }
         }
     }
-    return corr;
+    if (snapped_) {
+        guides_.clear();
+        return corr;
+    }
+    // Pas de point à accrocher : guides d'alignement (bords, sommets, centres des autres pièces).
+    std::vector<glm::vec2> mv;
+    for (const int m : ids) {
+        if (m < 0 || m >= static_cast<int>(g.panels.size())) continue;
+        glm::vec2 lo(1e9f), hi(-1e9f);
+        for (const auto& v0 : g.panels[static_cast<std::size_t>(m)].points) {
+            mv.push_back(v0 + delta);
+            lo = glm::min(lo, v0 + delta);
+            hi = glm::max(hi, v0 + delta);
+        }
+        mv.push_back((lo + hi) * 0.5f);
+    }
+    return alignTo(mv, alignTargets(g, ids));
 }
 
 void PatternEditor::frameAll(const garment::Garment& g)
@@ -283,6 +390,7 @@ bool PatternEditor::draw(garment::Garment& g)
     ImGuiIO& io = ImGui::GetIO();
     shift_ = io.KeyShift;
     g_ = &g;
+    if (drag_ != Drag::Point && drag_ != Drag::Panel && drag_ != Drag::Rect && tool != Tool::Polygon) guides_.clear();
     // Sélection multiple périmée (pièce choisie ailleurs, pièces supprimées) : on l'oublie.
     if (!selection.empty()) {
         const bool stale = std::find(selection.begin(), selection.end(), selectedPanel) == selection.end() ||
@@ -868,6 +976,27 @@ bool PatternEditor::draw(garment::Garment& g)
             std::vector<ImVec2> ps;
             for (const auto& q : preview) ps.push_back(toScreen(q));
             if (ps.size() >= 3) dl->AddPolyline(ps.data(), static_cast<int>(ps.size()), IM_COL32(120, 200, 255, 230), ImDrawFlags_Closed, 2.0f);
+        }
+    }
+    // Guides d'alignement (magenta) et distance entre les points alignés
+    if (!guides_.empty() && (drag_ == Drag::Point || drag_ == Drag::Panel || drag_ == Drag::Rect || tool == Tool::Polygon)) {
+        const ImU32 kGuide = IM_COL32(225, 70, 225, 230);
+        for (const auto& gd : guides_) {
+            const ImVec2 a = toScreen(gd.a), b = toScreen(gd.b);
+            if (!gd.measure) {
+                dl->AddLine(a, b, kGuide, 1.2f);
+                continue;
+            }
+            dl->AddCircleFilled(a, 3.0f, kGuide);
+            dl->AddCircleFilled(b, 3.0f, kGuide);
+            char text[32];
+            std::snprintf(text, sizeof(text), "%.1f cm", static_cast<double>(glm::distance(gd.a, gd.b) * 100.0f));
+            const ImVec2 ts = ImGui::CalcTextSize(text);
+            const ImVec2 mid((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
+            const bool horizontal = std::abs(b.x - a.x) >= std::abs(b.y - a.y);
+            const ImVec2 at = horizontal ? ImVec2(mid.x - ts.x * 0.5f, mid.y - ts.y - 4.0f) : ImVec2(mid.x + 6.0f, mid.y - ts.y * 0.5f);
+            dl->AddRectFilled({at.x - 3, at.y - 1}, {at.x + ts.x + 3, at.y + ts.y + 1}, IM_COL32(20, 20, 24, 210), 3.0f);
+            dl->AddText(at, kGuide, text);
         }
     }
     // Aimant accroché : petit repère sur le point visé

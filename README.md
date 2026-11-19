@@ -107,6 +107,14 @@ La flèche de la pièce sélectionnée est aussi reportée sur le tissu dans la 
 Glissez la poche dans le patron pour la déplacer sur sa base ; déplacer la base emporte ses poches.
 **Détacher de la pièce** la libère.
 
+## Guides d'alignement et sélection en 3D
+
+- Quand on déplace une pièce ou un point dans la vue patron (aimant actif, touche M), des guides magenta
+  apparaissent dès qu'un bord, un sommet ou le centre s'aligne sur celui d'une autre pièce : la pièce s'y accroche
+  et la distance entre les points alignés est affichée.
+- La pièce choisie dans la vue patron est mise en évidence dans la vue 3D (teinte et contour jaunes). Un clic sur une
+  pièce en 3D la choisit aussi dans le patron ; la glisser la fait tourner autour du corps (la simulation se met en pause).
+
 ## Menu clic droit des pièces (vue patron)
 
 Un clic droit sans glisser sur une pièce (ou sur une sélection) ouvre son menu ; clic droit glissé = déplacer la vue.

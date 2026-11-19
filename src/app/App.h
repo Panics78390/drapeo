@@ -15,6 +15,7 @@
 // =============================================================================
 #pragma once
 
+#include <array>
 #include <string>
 #include <vector>
 
@@ -247,6 +248,9 @@ private:
     [[nodiscard]] int seamHitTest3D(glm::vec2 mouse, float* depth = nullptr) const;
     void drawSeams3D();
     void drawGrain3D();
+    void drawSelection3D();
+    std::vector<int> highlighted_;                          // pièces mises en évidence en 3D
+    std::vector<std::array<uint32_t, 2>> selectionEdges_;   // leurs bords dans le maillage
     void toggleSeam(int seam);
 
     friend void dropCallback(GLFWwindow*, int, const char**);
