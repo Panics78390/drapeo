@@ -682,8 +682,7 @@ void App::commitGarment()
     if (undoStack_.size() > 100) undoStack_.erase(undoStack_.begin());
     redoStack_.clear();
     committed_ = garment_;
-    resetCloth();
-    playing_ = true;
+    resetCloth();   // la pause est respectée : on ne relance pas la simulation
 }
 
 void App::undo()
