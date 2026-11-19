@@ -535,6 +535,25 @@ bool PatternEditor::draw(garment::Garment& g)
         dl->AddText({sc.x - ts.x * 0.5f, sc.y - ts.y * 0.5f}, kInk, panel.name.c_str());
     }
 
+    // --- Droit fil : flèche à deux pointes sur chaque pièce -----------------------
+    for (std::size_t p = 0; p < g.panels.size(); ++p) {
+        if (g.panels[p].points.size() < 3) continue;
+        glm::vec2 wa, wb;
+        garment::grainLine(g.panels[p], wa, wb);
+        const ImVec2 a = toScreen(wa), b = toScreen(wb);
+        const float len = std::hypot(b.x - a.x, b.y - a.y);
+        if (len < 12.0f) continue;
+        const bool sel = isSelected(static_cast<int>(p));
+        const ImU32 col = sel ? IM_COL32(240, 190, 110, 230) : IM_COL32(235, 235, 235, 120);
+        dl->AddLine(a, b, col, 1.4f);
+        const glm::vec2 u((b.x - a.x) / len, (b.y - a.y) / len), v(-u.y, u.x);
+        const float h = std::min(9.0f, len * 0.2f);
+        for (const auto& [tip, dir] : {std::pair{b, u}, std::pair{a, -u}}) {
+            dl->AddTriangleFilled(tip, {tip.x - dir.x * h + v.x * h * 0.45f, tip.y - dir.y * h + v.y * h * 0.45f},
+                                  {tip.x - dir.x * h - v.x * h * 0.45f, tip.y - dir.y * h - v.y * h * 0.45f}, col);
+        }
+    }
+
     // --- Pièces posées (poches, rabats, renforts) : contour en tirets sur leur base
     for (const auto& at : g.attachments) {
         if (at.patch < 0 || at.base < 0 || at.patch >= static_cast<int>(g.panels.size()) || at.base >= static_cast<int>(g.panels.size()))

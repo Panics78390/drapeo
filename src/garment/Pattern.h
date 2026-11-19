@@ -37,6 +37,7 @@ struct Panel {
     std::vector<glm::vec2> points;   // contour fermé, sens quelconque
     glm::vec3 color{0.85f, 0.83f, 0.78f};
     Placement placement;
+    float grainDeg = 90.0f;   // droit fil dans le patron (degrés, 90 = vertical)
 };
 
 /// Un bord = le segment entre points[edge] et points[(edge + 1) % n] de la pièce.
@@ -101,6 +102,9 @@ struct Garment {
     void setAttachKind(Attachment& a, AttachKind kind) const;
     [[nodiscard]] AttachKind attachKind(const Attachment& a) const;
 };
+
+/// Segment du droit fil d'une pièce (à travers son centre, aux deux tiers de sa longueur).
+void grainLine(const Panel& panel, glm::vec2& a, glm::vec2& b);
 
 /// Bord du haut d'un contour (le plus haut parmi les bords plutôt horizontaux).
 int topEdge(const std::vector<glm::vec2>& poly);

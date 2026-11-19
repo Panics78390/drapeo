@@ -501,6 +501,14 @@ int main()
         garment::MeshingOptions opt;
         CHECK(garment::buildGarmentMesh(g, opt, m, error));
         CHECK(!m.seamPairs.empty());
+        // Droit fil : enregistré dans le projet, flèche verticale par défaut
+        g.panels[0].grainDeg = 45.0f;
+        garment::Garment back;
+        CHECK(io::parseProject(io::writeProject(g), back, error) && std::abs(back.panels[0].grainDeg - 45.0f) < 1e-4f &&
+              std::abs(back.panels[1].grainDeg - 90.0f) < 1e-4f);
+        glm::vec2 ga, gb;
+        garment::grainLine(g.panels[1], ga, gb);
+        CHECK(std::abs(ga.x - gb.x) < 1e-5f && gb.y > ga.y);
     });
 
     std::printf("\n%d vérifications, %d échec(s)\n", g_checks, g_failures);

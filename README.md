@@ -71,6 +71,12 @@ Menu **Fichier → Importer un patron...** (Ctrl+I) ou glisser-déposer le fichi
 
 ![Import d'une image de patron](docs/capture-import-image.png)
 
+## Droit fil
+
+Chaque pièce porte une flèche de droit fil dans le patron (verticale par défaut). On la règle dans
+**Propriétés > Droit fil** (curseur, ou boutons vertical / biais / horizontal) ; elle est enregistrée dans le projet.
+La flèche de la pièce sélectionnée est aussi reportée sur le tissu dans la vue 3D, pour voir le sens de la pièce sur le corps.
+
 ## Coudre une poche sur le vêtement
 
 1. Dessinez la poche (outil Rectangle ou Polygone) ou importez-la, puis posez-la sur la pièce voulue dans le patron 2D.

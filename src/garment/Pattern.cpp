@@ -114,6 +114,21 @@ void remapSeams(Garment& g, int panel, int oldN, int newN, Map map)
 }
 } // namespace
 
+void grainLine(const Panel& panel, glm::vec2& a, glm::vec2& b)
+{
+    const float r = glm::radians(panel.grainDeg);
+    const glm::vec2 d(std::cos(r), std::sin(r));
+    const glm::vec2 c = panel.points.size() >= 3 ? centroid(panel.points) : glm::vec2(0.0f);
+    float lo = 0.0f, hi = 0.0f;
+    for (const auto& q : panel.points) {
+        const float t = glm::dot(q - c, d);
+        lo = std::min(lo, t);
+        hi = std::max(hi, t);
+    }
+    a = c + d * (lo * 0.66f);
+    b = c + d * (hi * 0.66f);
+}
+
 int topEdge(const std::vector<glm::vec2>& poly)
 {
     const int n = static_cast<int>(poly.size());
@@ -253,6 +268,7 @@ int Garment::addMirrorCopy(int panel, float gap)
     for (auto& p : copy.points) p.x = 2.0f * axis - p.x;
     std::reverse(copy.points.begin(), copy.points.end());
     copy.name += " (miroir)";
+    copy.grainDeg = 180.0f - copy.grainDeg;   // le droit fil est retourné comme la pièce
     copy.placement.angleDeg = copy.placement.angleDeg + 180.0f;
     if (copy.placement.angleDeg > 180.0f) copy.placement.angleDeg -= 360.0f;
     panels.push_back(copy);

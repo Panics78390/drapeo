@@ -1494,6 +1494,61 @@ int App::seamHitTest3D(glm::vec2 m, float* depth) const
     return hit;
 }
 
+void App::drawGrain3D()
+{
+    // Droit fil de la pièce sélectionnée, reporté sur le tissu en 3D.
+    const int sel = editor_.selectedPanel;
+    if (!clothValid_ || sel < 0 || sel >= static_cast<int>(garment_.panels.size())) return;
+    const auto& pos = solver_.positions();
+    const auto& uvs = garmentMesh_.mesh.uvs;
+    glm::vec2 wa, wb;
+    garment::grainLine(garment_.panels[static_cast<std::size_t>(sel)], wa, wb);
+    constexpr int kSteps = 12;
+    std::vector<glm::vec2> pts;
+    const auto& idx = solver_.indices();
+    const auto& pov = garmentMesh_.panelOfVertex;
+    auto inPanel = [&](uint32_t v) { return v < pos.size() && v < uvs.size() && v < pov.size() && pov[v] == sel; };
+    for (int k = 0; k <= kSteps; ++k) {
+        const glm::vec2 w = wa + (wb - wa) * (static_cast<float>(k) / kSteps);
+        // Triangle du patron qui contient le point : interpolation barycentrique de sa position 3D.
+        glm::vec3 p3(0.0f), n3(0.0f);
+        bool found = false;
+        for (std::size_t t = 0; t + 2 < idx.size() && !found; t += 3) {
+            const uint32_t i0 = idx[t], i1 = idx[t + 1], i2 = idx[t + 2];
+            if (!inPanel(i0) || !inPanel(i1) || !inPanel(i2)) continue;
+            const glm::vec2 a = uvs[i0], b = uvs[i1], c = uvs[i2];
+            const float den = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
+            if (std::abs(den) < 1e-12f) continue;
+            const float l0 = ((b.y - c.y) * (w.x - c.x) + (c.x - b.x) * (w.y - c.y)) / den;
+            const float l1 = ((c.y - a.y) * (w.x - c.x) + (a.x - c.x) * (w.y - c.y)) / den;
+            const float l2 = 1.0f - l0 - l1;
+            if (l0 < -1e-4f || l1 < -1e-4f || l2 < -1e-4f) continue;
+            p3 = pos[i0] * l0 + pos[i1] * l1 + pos[i2] * l2;
+            if (i0 < normals_.size() && i1 < normals_.size() && i2 < normals_.size())
+                n3 = normals_[i0] * l0 + normals_[i1] * l1 + normals_[i2] * l2;
+            found = true;
+        }
+        if (!found) continue;
+        bool front = false;
+        const glm::vec2 sp = projectToScreen(p3 + n3 * 0.004f, &front);
+        if (!front) return;
+        pts.push_back(sp);
+    }
+    if (pts.size() < 2) return;
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    dl->PushClipRect({viewPos_.x, viewPos_.y}, {viewPos_.x + viewSize_.x, viewPos_.y + viewSize_.y}, true);
+    const ImU32 col = IM_COL32(240, 190, 110, 235);
+    for (std::size_t k = 1; k < pts.size(); ++k) dl->AddLine({pts[k - 1].x, pts[k - 1].y}, {pts[k].x, pts[k].y}, col, 2.0f);
+    auto head = [&](glm::vec2 tip, glm::vec2 from) {
+        const glm::vec2 u = glm::normalize(tip - from + glm::vec2(1e-6f)), v(-u.y, u.x);
+        const glm::vec2 p1 = tip - u * 10.0f + v * 4.5f, p2 = tip - u * 10.0f - v * 4.5f;
+        dl->AddTriangleFilled({tip.x, tip.y}, {p1.x, p1.y}, {p2.x, p2.y}, col);
+    };
+    head(pts.back(), pts[pts.size() - 2]);
+    head(pts.front(), pts[1]);
+    dl->PopClipRect();
+}
+
 void App::drawSeams3D()
 {
     if (!showSeams3D_ || !clothValid_) return;
@@ -1847,6 +1902,7 @@ void App::drawViewportOverlay()
         dl->AddText({o.x + (viewSize_.x - ts.x) * 0.5f, o.y + viewSize_.y * 0.5f}, ImGui::GetColorU32(kTextDim), msg);
     }
     drawSeams3D();
+    drawGrain3D();
     drawGizmo();
     const char* help = playing_ ? "Clic gauche : tourner    Maj / clic milieu : déplacer    Molette : zoom    Clic droit : saisir le tissu    Espace : pause"
                                 : "En pause : clic sur une pièce = gizmo (déplacer, tourner)    Alt + clic sur une couture : activer / désactiver    Ailleurs : tourner la vue";
@@ -1931,6 +1987,19 @@ void App::inspectorPanel()
     if (ImGui::ColorEdit3("##couleur", &panel.color.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel)) {
         updateClothColors();
         committed_ = garment_;
+    }
+
+    label("Droit fil");
+    const float fw = (ImGui::GetContentRegionAvail().x - 3 * ImGui::GetStyle().ItemSpacing.x) / 4.0f;
+    ImGui::SetNextItemWidth(fw * 2.0f + ImGui::GetStyle().ItemSpacing.x);
+    ImGui::SliderFloat("##droitfil", &panel.grainDeg, 0.0f, 180.0f, "%.0f°");
+    if (ImGui::IsItemDeactivatedAfterEdit()) committed_ = garment_;
+    for (const auto& [text, deg] : {std::pair{"|", 90.0f}, std::pair{"/", 45.0f}, std::pair{"--", 0.0f}}) {
+        ImGui::SameLine();
+        if (ImGui::Button(text, ImVec2((fw * 2.0f - 2 * ImGui::GetStyle().ItemSpacing.x) / 3.0f, 0))) {
+            panel.grainDeg = deg;
+            committed_ = garment_;
+        }
     }
 
     float perimeter = 0.0f;

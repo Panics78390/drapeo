@@ -218,6 +218,7 @@ private:
     int hoverSeam3D_ = -1;
     [[nodiscard]] int seamHitTest3D(glm::vec2 mouse, float* depth = nullptr) const;
     void drawSeams3D();
+    void drawGrain3D();
     void toggleSeam(int seam);
 
     friend void dropCallback(GLFWwindow*, int, const char**);
