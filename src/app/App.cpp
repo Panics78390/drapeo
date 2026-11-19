@@ -14,6 +14,7 @@
 
 #include "app/FileDialog.h"
 #include "io/ProjectFile.h"
+#include "io/Settings.h"
 #include "app/LogoData.h"
 #include "geometry/ClothMesh.h"
 #include "geometry/Mannequin.h"
@@ -324,7 +325,14 @@ int App::run(const AppOptions& options)
     appearance_.sheen = material_.sheen;
 
     loadDefaultMannequin();
-    if (!options_.avatarPath.empty()) loadAvatar(options_.avatarPath);
+    if (!options_.avatarPath.empty()) {
+        loadAvatar(options_.avatarPath);
+    } else {
+        // Dernier avatar utilisé ; à défaut, un modèle 3D posé à côté de drapeo.exe.
+        std::string startAvatar;
+        if (!io::rememberedAvatar(startAvatar)) startAvatar = io::avatarNextToExecutable();
+        if (!startAvatar.empty()) loadAvatar(startAvatar);
+    }
     setGarment(garment::makeTankTop());
     setStatus("Bienvenue dans Drapeo. Modifiez le patron à gauche : le vêtement est recousu en 3D.", false);
     editor_.selectedPanel = 0;
@@ -896,6 +904,13 @@ void App::removeBackdrop()
     editor_.backdrop = {};
 }
 
+void App::newGarment()
+{
+    setGarment({});
+    removeBackdrop();
+    setStatus("Nouveau vêtement : patron vide.", false);
+}
+
 void App::saveProjectFile()
 {
     if (garment_.empty()) {
@@ -989,6 +1004,7 @@ bool App::loadAvatar(const std::string& path)
     builtinAvatar_ = false;
     avatarPath_ = path;
     avatarRotation_ = 0.0f;
+    if (options_.frames <= 0) io::rememberAvatar(path);   // rechargé au prochain démarrage
     // Hauteur proposée : celle du fichier si elle est plausible, sinon 1,75 m.
     const float h = avatarSource_.sourceHeight;
     avatarHeight_ = (h > 0.3f && h < 3.0f) ? h : 1.75f;
@@ -1061,7 +1077,7 @@ void App::handleShortcuts()
     if (ctrl && ImGui::IsKeyPressed(ImGuiKey_I, false)) openPatternDialog();
     if (ctrl && ImGui::IsKeyPressed(ImGuiKey_E, false)) exportGarment();
     if (ctrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) saveProjectFile();
-    if (ctrl && ImGui::IsKeyPressed(ImGuiKey_N, false)) setGarment({});
+    if (ctrl && ImGui::IsKeyPressed(ImGuiKey_N, false)) newGarment();
     if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_Space, false)) playing_ = !playing_;
     if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_R, false)) resetCloth();
 }
@@ -1571,7 +1587,7 @@ void App::drawMenuBar()
         ImGui::SameLine(0, 18);
     }
     if (ImGui::BeginMenu("Fichier")) {
-        if (ImGui::MenuItem("Nouveau vêtement", "Ctrl+N")) setGarment({});
+        if (ImGui::MenuItem("Nouveau vêtement", "Ctrl+N")) newGarment();
         ImGui::Separator();
         if (ImGui::MenuItem("Importer un avatar (FBX, OBJ)...", "Ctrl+O")) openAvatarDialog();
         if (ImGui::MenuItem("Ouvrir un projet / importer un patron...", "Ctrl+I")) openPatternDialog();
@@ -1753,6 +1769,14 @@ void App::drawPatternPane()
         ImGui::SetCursorPos({0, h});
     }
     if (editor_.draw(garment_)) commitGarment();
+    if (editor_.backdrop.moved) {
+        editor_.backdrop.moved = false;
+        backdropOrigin_ = editor_.backdrop.min;
+    }
+    if (editor_.backdrop.removeRequested) {
+        removeBackdrop();
+        setStatus("Image de fond retirée.", false);
+    }
     ImGui::End();
 }
 
@@ -2200,7 +2224,10 @@ void App::inspectorAvatar()
     if (ImGui::Button("Importer FBX / OBJ...", ImVec2(hw, 0))) openAvatarDialog();
     ImGui::SameLine();
     ImGui::BeginDisabled(builtinAvatar_);
-    if (ImGui::Button("Mannequin intégré", ImVec2(hw, 0))) loadDefaultMannequin();
+    if (ImGui::Button("Mannequin intégré", ImVec2(hw, 0))) {
+        loadDefaultMannequin();
+        if (options_.frames <= 0) io::rememberAvatar({});
+    }
     ImGui::EndDisabled();
     ImGui::TextDisabled("Astuce : glissez un .fbx ou .obj sur la fenêtre.");
     ImGui::Spacing();

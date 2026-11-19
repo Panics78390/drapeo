@@ -66,7 +66,7 @@ ctest --test-dir build-tests --output-on-failure
 Menu **Fichier → Importer un patron...** (Ctrl+I) ou glisser-déposer le fichier sur la fenêtre.
 
 - **PDF vectoriel** (patrons vendus en PDF) : les contours fermés deviennent des pièces, à l'échelle réelle. Les petits tracés (crans, texte) et les lignes de couture intérieures sont ignorés. Les pages d'un PDF de plusieurs planches sont posées côte à côte, et chaque pièce prend le nom de son repère (« H3 DEVANT DU BUSTE »).
-- **Image ou PDF scanné** : indiquez la **largeur réelle** de l'image (préremplie si le fichier contient sa résolution), cochez **Détecter les pièces**. L'image reste en calque ; dans le panneau **Image de fond** on règle l'opacité, l'échelle, la position et le seuil, puis on relance la détection.
+- **Image ou PDF scanné** : indiquez la **largeur réelle** de l'image (préremplie si le fichier contient sa résolution), cochez **Détecter les pièces**. L'image reste en calque ; dans le panneau **Image de fond** on règle l'opacité, l'échelle, la position et le seuil, puis on relance la détection. Dans la vue 2D, un clic sur l'image la sélectionne (cadre orange) : on la glisse pour la déplacer et **Suppr** la retire. **Fichier > Nouveau vêtement** repart d'un patron vide, sans image.
 - Après l'import : placez chaque pièce (Devant / Dos) et reliez les bords avec l'outil **Couture**.
 
 ![Import d'une image de patron](docs/capture-import-image.png)
@@ -80,6 +80,8 @@ Menu **Fichier → Importer un patron...** (Ctrl+I) ou glisser-déposer le fichi
 L'avatar est converti en mètres, axe Y vers le haut, posé au sol et centré. Si sa taille n'a pas l'air d'être en mètres (fichier en cm ou sans unité), il est mis à 1,75 m ; réglez ensuite **Taille** et **Rotation** dans le panneau Avatar. Le vêtement est replacé et recousu sur le nouveau corps (collisions via un BVH des triangles). Les personnages riggés sont importés dans leur pose de liaison (T-pose ou A-pose en général).
 
 Un mannequin de test original est fourni : `assets/mannequin.obj` (généré par `tools/make_mannequin.py`).
+
+Au démarrage, Drapeo recharge le dernier avatar utilisé (mémorisé dans `%APPDATA%\Drapeo\reglages.txt`). La première fois, il prend le premier `.fbx` (ou `.obj`) placé à côté de `drapeo.exe`.
 
 ## Commandes
 

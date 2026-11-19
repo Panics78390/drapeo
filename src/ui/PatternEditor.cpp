@@ -107,6 +107,8 @@ std::string PatternEditor::hint() const
 {
     switch (tool) {
     case Tool::Select:
+        if (backdrop.selected)
+            return "Image de fond sélectionnée : glisser pour la déplacer, Suppr pour la retirer.";
         return "Sélection : glisser une pièce ou un point. Double-clic sur un bord : ajouter un point. Suppr : supprimer.";
     case Tool::Polygon:
         return drawing_.empty() ? "Polygone : cliquez pour poser le premier point."
@@ -165,7 +167,11 @@ bool PatternEditor::draw(garment::Garment& g)
         const int alpha = static_cast<int>(std::clamp(backdrop.opacity, 0.0f, 1.0f) * 255.0f);
         dl->AddImage(backdrop.texture, toScreen({backdrop.min.x, backdrop.max.y}), toScreen({backdrop.max.x, backdrop.min.y}),
                      ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, alpha));
-        dl->AddRect(toScreen({backdrop.min.x, backdrop.max.y}), toScreen({backdrop.max.x, backdrop.min.y}), IM_COL32(255, 255, 255, 40));
+        if (backdrop.selected) {
+            dl->AddRect(toScreen({backdrop.min.x, backdrop.max.y}), toScreen({backdrop.max.x, backdrop.min.y}), IM_COL32(232, 160, 60, 230), 0.0f, 0, 2.0f);
+        } else {
+            dl->AddRect(toScreen({backdrop.min.x, backdrop.max.y}), toScreen({backdrop.max.x, backdrop.min.y}), IM_COL32(255, 255, 255, 40));
+        }
     }
     {   // échelle graphique
         const ImVec2 o(c0.x + 14, c1.y - 16);
@@ -215,6 +221,13 @@ bool PatternEditor::draw(garment::Garment& g)
                     drag_ = Drag::Panel;
                 } else {
                     selectedPanel = selectedPoint = -1;
+                }
+                // Clic dans le vide sur l'image de fond : on la sélectionne pour la déplacer.
+                backdrop.selected = false;
+                if (selectedPanel < 0 && backdrop.texture != 0 && backdrop.visible &&
+                    mw.x >= backdrop.min.x && mw.x <= backdrop.max.x && mw.y >= backdrop.min.y && mw.y <= backdrop.max.y) {
+                    backdrop.selected = true;
+                    drag_ = Drag::Backdrop;
                 }
                 dragStart_ = dragLast_ = mw;
                 break;
@@ -308,6 +321,18 @@ bool PatternEditor::draw(garment::Garment& g)
             if (drag_ == Drag::Point && glm::distance(dragStart_, mw) > 1e-4f) committed = true;
             drag_ = Drag::None;
         }
+    } else if (drag_ == Drag::Backdrop) {
+        if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            const glm::vec2 d = mw - dragLast_;
+            if (d != glm::vec2(0.0f)) {
+                backdrop.min += d;
+                backdrop.max += d;
+                backdrop.moved = true;
+            }
+            dragLast_ = mw;
+        } else {
+            drag_ = Drag::None;
+        }
     } else if (drag_ == Drag::Rect) {
         dragLast_ = snap(mw);
         if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
@@ -341,7 +366,10 @@ bool PatternEditor::draw(garment::Garment& g)
             committed = true;
         }
         if (ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace)) {
-            if (selectedSeam >= 0 && selectedSeam < static_cast<int>(g.seams.size())) {
+            if (backdrop.selected && selectedPanel < 0 && selectedSeam < 0) {
+                backdrop.removeRequested = true;
+                backdrop.selected = false;
+            } else if (selectedSeam >= 0 && selectedSeam < static_cast<int>(g.seams.size())) {
                 g.seams.erase(g.seams.begin() + selectedSeam);
                 selectedSeam = -1;
                 committed = true;

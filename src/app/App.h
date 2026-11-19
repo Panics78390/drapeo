@@ -74,6 +74,7 @@ private:
     void updateBackdropRect();
     void detectBackdropPieces();
     void removeBackdrop();
+    void newGarment();
     void exportGarment();
 
     // --- Avatar ---------------------------------------------------------------

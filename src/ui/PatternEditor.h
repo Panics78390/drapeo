@@ -26,6 +26,9 @@ struct Backdrop {
     glm::vec2 min{0.0f}, max{0.0f};   // coins bas-gauche et haut-droit (m)
     float opacity = 0.65f;
     bool visible = true;
+    bool selected = false;          // cliquée dans la vue 2D (glisser pour déplacer, Suppr pour retirer)
+    bool moved = false;             // déplacée à la souris depuis la dernière lecture
+    bool removeRequested = false;   // Suppr pressée alors qu'elle était sélectionnée
 };
 
 class PatternEditor {
@@ -62,7 +65,7 @@ private:
     bool needsFrame_ = true;
 
     // États d'interaction
-    enum class Drag { None, Point, Panel, Pan, Rect } drag_ = Drag::None;
+    enum class Drag { None, Point, Panel, Pan, Rect, Backdrop } drag_ = Drag::None;
     glm::vec2 dragStart_{0.0f};
     glm::vec2 dragLast_{0.0f};
     std::vector<glm::vec2> drawing_;  // polygone en cours
