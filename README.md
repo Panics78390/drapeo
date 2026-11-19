@@ -70,10 +70,6 @@ Menu **Fichier → Importer un patron...** (Ctrl+I) ou glisser-déposer le fichi
 
 ![Import d'une image de patron](docs/capture-import-image.png)
 
-Exemple : une combinaison une pièce importée d'un PDF de deux planches, montée avec des coutures sur plusieurs bords (emmanchures, fourche, entrejambes) et des manches et jambes posées sur les bras et les jambes du mannequin.
-
-![Combinaison assemblée](docs/capture-combinaison.png)
-
 ## Importer un avatar (FBX, OBJ)
 
 - menu **Fichier → Importer un avatar (FBX, OBJ)...** (Ctrl+O), ou
