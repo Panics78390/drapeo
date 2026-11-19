@@ -114,6 +114,35 @@ void remapSeams(Garment& g, int panel, int oldN, int newN, Map map)
 }
 } // namespace
 
+void taperPanel(Garment& g, int panel, float amount, TaperMode mode, TaperAnchor anchor)
+{
+    if (panel < 0 || panel >= static_cast<int>(g.panels.size())) return;
+    auto& pts = g.panels[static_cast<std::size_t>(panel)].points;
+    if (pts.size() < 3) return;
+    glm::vec2 lo(1e9f), hi(-1e9f);
+    for (const auto& q : pts) {
+        lo = glm::min(lo, q);
+        hi = glm::max(hi, q);
+    }
+    const float ax = anchor == TaperAnchor::Left ? lo.x : anchor == TaperAnchor::Right ? hi.x : (lo.x + hi.x) * 0.5f;
+    const float h = std::max(hi.y - lo.y, 1e-6f);
+    auto map = [&](glm::vec2 q) {
+        const float t = std::clamp((q.y - lo.y) / h, 0.0f, 1.0f);   // 0 = bas, 1 = haut
+        float w = 1.0f;
+        switch (mode) {
+        case TaperMode::Uniform: w = 1.0f; break;
+        case TaperMode::Bottom: w = 1.0f - t; break;
+        case TaperMode::Middle: w = 1.0f - std::abs(2.0f * t - 1.0f); break;
+        case TaperMode::Top: w = t; break;
+        }
+        const float f = std::max(0.1f, 1.0f + amount * w);
+        return glm::vec2(ax + (q.x - ax) * f, q.y);
+    };
+    for (auto& q : pts) q = map(q);
+    for (auto& a : g.attachments)
+        if (a.base == panel) a.at = map(a.at);
+}
+
 void grainLine(const Panel& panel, glm::vec2& a, glm::vec2& b)
 {
     const float r = glm::radians(panel.grainDeg);

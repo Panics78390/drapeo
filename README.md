@@ -71,6 +71,13 @@ Menu **Fichier → Importer un patron...** (Ctrl+I) ou glisser-déposer le fichi
 
 ![Import d'une image de patron](docs/capture-import-image.png)
 
+## Cintrer
+
+Dans **Propriétés > Cintrer**, on resserre ou on élargit la pièce sélectionnée (ou toutes les pièces sélectionnées
+au rectangle / Maj+clic) d'un pourcentage, **surtout en bas**, **au milieu** (taille d'une robe ou d'une combinaison),
+**en haut** ou partout, en gardant fixe le centre ou un bord (le milieu devant, par exemple). Les poches cousues suivent.
+Ctrl+Z annule.
+
 ## Droit fil
 
 Chaque pièce porte une flèche de droit fil dans le patron (verticale par défaut). On la règle dans

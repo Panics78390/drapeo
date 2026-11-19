@@ -511,6 +511,20 @@ int main()
         CHECK(std::abs(ga.x - gb.x) < 1e-5f && gb.y > ga.y);
     });
 
+    run("Cintrer une pièce", [] {
+        garment::Garment g;
+        garment::Panel p;
+        p.points = {{0, 0}, {0.4f, 0}, {0.4f, 0.6f}, {0, 0.6f}};
+        g.panels = {p};
+        g.attachments.push_back({0, 0, {0.3f, 0.0f}, 0, 0});
+        garment::taperPanel(g, 0, -0.2f, garment::TaperMode::Bottom, garment::TaperAnchor::Left);
+        const auto& q = g.panels[0].points;
+        CHECK(std::abs(q[1].x - 0.32f) < 1e-5f && std::abs(q[2].x - 0.4f) < 1e-5f && q[0].x == 0.0f);   // bas resserré, haut intact
+        CHECK(std::abs(g.attachments[0].at.x - 0.24f) < 1e-5f);                                            // la poche suit
+        garment::taperPanel(g, 0, 0.5f, garment::TaperMode::Uniform, garment::TaperAnchor::Center);
+        CHECK(std::abs((g.panels[0].points[2].x - g.panels[0].points[3].x) - 0.6f) < 1e-5f);
+    });
+
     std::printf("\n%d vérifications, %d échec(s)\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

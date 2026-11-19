@@ -2002,6 +2002,8 @@ void App::inspectorPanel()
         }
     }
 
+    inspectorTaper();
+
     float perimeter = 0.0f;
     for (std::size_t e = 0; e < panel.points.size(); ++e) perimeter += garment_.edgeLength({idx, static_cast<int>(e)});
     ImGui::TextDisabled("%zu points   %.0f cm²   périmètre %.0f cm", panel.points.size(),
@@ -2150,6 +2152,48 @@ void App::inspectorBackdrop()
     ImGui::SameLine();
     if (ImGui::Button("Retirer l'image", ImVec2(hw, 0))) removeBackdrop();
     ImGui::Spacing();
+}
+
+void App::inspectorTaper()
+{
+    // Cintrer : resserrer ou élargir les pièces sélectionnées.
+    std::vector<int> targets = editor_.selection;
+    if (targets.empty() && editor_.selectedPanel >= 0) targets.push_back(editor_.selectedPanel);
+    if (targets.empty()) return;
+    ImGui::SeparatorText(targets.size() > 1 ? "Cintrer les pièces sélectionnées" : "Cintrer la pièce");
+    const float hw = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+    for (int k = 0; k < 2; ++k) {
+        if (k == 1) ImGui::SameLine();
+        const bool on = taperWiden_ == (k == 1);
+        if (on) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.87f, 0.63f, 0.29f, 0.30f));
+        if (ImGui::Button(k == 0 ? "Resserrer" : "Élargir", ImVec2(hw, 0))) taperWiden_ = k == 1;
+        if (on) ImGui::PopStyleColor();
+    }
+    label("De");
+    ImGui::SetNextItemWidth(-1);
+    ImGui::SliderFloat("##cintre", &taperPercent_, 1.0f, 40.0f, "%.0f %%");
+    static const char* const kModes[] = {"Partout pareil", "Surtout en bas", "Surtout au milieu (taille)", "Surtout en haut"};
+    label("Où");
+    ImGui::SetNextItemWidth(-1);
+    ImGui::Combo("##cintremode", &taperMode_, kModes, IM_ARRAYSIZE(kModes));
+    static const char* const kAnchors[] = {"Le centre", "Le bord gauche", "Le bord droit"};
+    label("Garder fixe");
+    ImGui::SetNextItemWidth(-1);
+    ImGui::Combo("##cintreancre", &taperAnchor_, kAnchors, IM_ARRAYSIZE(kAnchors));
+    if (ImGui::Button(taperWiden_ ? "Appliquer : élargir" : "Appliquer : cintrer", ImVec2(-1, 0))) {
+        const float amount = (taperWiden_ ? 1.0f : -1.0f) * std::clamp(taperPercent_, 1.0f, 40.0f) / 100.0f;
+        for (const int p : targets)
+            garment::taperPanel(garment_, p, amount, static_cast<garment::TaperMode>(taperMode_),
+                                static_cast<garment::TaperAnchor>(taperAnchor_));
+        commitGarment();
+        char text[160];
+        std::snprintf(text, sizeof(text), "%zu pièce(s) %s de %.0f %%. Ctrl+Z pour annuler.", targets.size(),
+                      taperWiden_ ? "élargie(s)" : "resserrée(s)", static_cast<double>(taperPercent_));
+        setStatus(text, false);
+    }
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextWrapped("Sélectionnez plusieurs pièces (rectangle, Maj+clic) pour les cintrer ensemble. Ctrl+Z annule.");
+    ImGui::PopStyleColor();
 }
 
 void App::inspectorSewOn(int idx)

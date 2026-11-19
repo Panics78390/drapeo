@@ -103,6 +103,13 @@ struct Garment {
     [[nodiscard]] AttachKind attachKind(const Attachment& a) const;
 };
 
+/// Cintrage : où la pièce est le plus resserrée (ou élargie) et autour de quel bord.
+enum class TaperMode { Uniform, Bottom, Middle, Top };
+enum class TaperAnchor { Center, Left, Right };
+/// Resserre (amount < 0) ou élargit (amount > 0) une pièce en largeur, progressivement selon
+/// `mode` (Bottom : surtout en bas, Middle : surtout à mi-hauteur...). Les poches posées dessus suivent.
+void taperPanel(Garment& g, int panel, float amount, TaperMode mode, TaperAnchor anchor);
+
 /// Segment du droit fil d'une pièce (à travers son centre, aux deux tiers de sa longueur).
 void grainLine(const Panel& panel, glm::vec2& a, glm::vec2& b);
 
