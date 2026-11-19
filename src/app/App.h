@@ -28,6 +28,7 @@
 #include "io/RasterImage.h"
 #include "rendering/Camera.h"
 #include "rendering/Renderer.h"
+#include "simulation/GarmentSetup.h"
 #include "simulation/XpbdSolver.h"
 #include "ui/PatternEditor.h"
 
@@ -70,6 +71,9 @@ private:
     void addImportedPanels(const std::vector<std::vector<glm::vec2>>& outlines, bool arrange,
                            const std::vector<std::string>& names = {});
     void saveProjectFile();
+    /// Projet ouvert / enregistré : rechargé tout seul s'il est modifié par un autre programme (serveur MCP).
+    void watchProject(const std::string& path);
+    void checkWatchedProject();
     void beginImageImport(io::RasterImage image, const std::string& name);
     void finishImageImport();
     void updateBackdropRect();
@@ -195,6 +199,9 @@ private:
     geometry::TriangleBvh avatarBvh_;
     float avatarHeight_ = 1.75f;
     std::string avatarPath_;                     // fichier de l'avatar importé (vide = mannequin)
+    std::string watchedProject_;                 // projet .drapeo surveillé (rechargement automatique)
+    long long watchedStamp_ = 0;                 // date + taille du fichier au dernier chargement
+    double watchCheckTime_ = 0.0;
     garment::BodyAxes bodyAxes_;                 // axes du buste et des membres de l'avatar
     float avatarRotation_ = 0.0f;
 

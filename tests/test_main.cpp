@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <filesystem>
 #include <functional>
 #include <random>
 #include <string>
@@ -15,6 +16,8 @@
 #include "geometry/ClothMesh.h"
 #include "geometry/TriangleBvh.h"
 #include "io/MeshImport.h"
+#include "mcp/Json.h"
+#include "mcp/McpServer.h"
 #include "io/PatternImport.h"
 #include "io/PdfImport.h"
 #include "io/ProjectFile.h"
@@ -841,6 +844,69 @@ int main()
         garment::Garment back;
         std::string error;
         CHECK(io::parseProject(io::writeProject(g, nullptr), back, error) && back.panels[0].placement.flat);
+    });
+
+    run("MCP : JSON lu et réécrit (échappements, unicode, nombres)", [] {
+        mcp::Json j;
+        std::string error;
+        CHECK(mcp::Json::parse(R"({"a":[1,2.5,-3e2,true,null],"t":"éé😀\n\"","o":{}})", j, error));
+        CHECK(j.get("a").size() == 5 && j.get("a").at(2).asNumber() == -300.0 && j.get("a").at(3).asBool());
+        CHECK(j.get("t").asString() == "éé\xF0\x9F\x98\x80\n\"");
+        CHECK(j.dump() == R"({"a":[1,2.5,-300,true,null],"t":"éé)" "\xF0\x9F\x98\x80" R"(\n\"","o":{}})");
+        mcp::Json bad;
+        CHECK(!mcp::Json::parse("{\"a\":}", bad, error));
+        CHECK(!mcp::Json::parse("[1,2", bad, error));
+        CHECK(!mcp::Json::parse("{} x", bad, error));
+    });
+
+    run("MCP : initialisation, liste des outils, création et couture de pièces", [] {
+        const std::string path = (std::filesystem::temp_directory_path() / "drapeo_test_mcp.drapeo").string();
+        std::filesystem::remove(path);
+        mcp::Server server(path);
+        mcp::Json r;
+        std::string error;
+        CHECK(mcp::Json::parse(server.handleLine(R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}})"), r, error));
+        CHECK(r.get("result").get("serverInfo").get("name").asString() == "drapeo");
+        CHECK(server.handleLine(R"({"jsonrpc":"2.0","method":"notifications/initialized"})").empty());
+        CHECK(mcp::Json::parse(server.handleLine(R"({"jsonrpc":"2.0","id":"x","method":"tools/list"})"), r, error));
+        CHECK(r.get("id").asString() == "x" && r.get("result").get("tools").size() >= 20);
+        auto call = [&](const std::string& name, const std::string& args, bool expectOk = true) {
+            mcp::Json a;
+            std::string e, text;
+            mcp::Json::parse(args, a, e);
+            const bool ok = server.callTool(name, a, text, e);
+            CHECK(ok == expectOk);
+            return ok ? text : e;
+        };
+        call("nouveau_projet", R"({"modele":"vide"})");
+        call("ajouter_rectangle", R"({"nom":"Devant","largeur_cm":50,"hauteur_piece_cm":60,"hauteur_cm":90})");
+        call("ajouter_piece", R"({"nom":"Dos","points":[[0,0],[50,0],[50,60],[0,60]],"angle":180,"hauteur_cm":90,"couleur":"#3355aa"})");
+        call("coudre", R"({"piece_a":"Devant","bord_a":1,"piece_b":"dos","bord_b":3})");
+        call("coudre", R"({"piece_a":0,"bord_a":3,"piece_b":1,"bord_b":1})");
+        call("modifier_piece", R"({"piece":1,"retrait_trame":90,"couche":1,"pression":12})");
+        call("coudre", R"({"piece_a":5,"bord_a":0,"piece_b":1,"bord_b":0})", false);
+        call("coudre", R"({"piece_a":0,"bord_a":9,"piece_b":1,"bord_b":0})", false);
+        call("inconnu", "{}", false);
+        garment::Garment g;
+        io::ProjectAvatar av;
+        CHECK(io::loadProject(path, g, error, &av));
+        CHECK(g.panels.size() == 2 && g.seams.size() == 2 && av.present);
+        CHECK(std::abs(g.panels[1].color.b - 0xaa / 255.0f) < 1e-3f && g.panels[1].placement.angleDeg == 180.0f);
+        CHECK(std::abs(g.panels[1].shrinkWeft - 0.9f) < 1e-4f && g.panels[1].layer == 1);
+        CHECK(g.panels[1].points[0].x > g.panels[0].points[1].x);   // rangée à droite de la première
+        // Arrondir un coin cousu retire la couture et le signale.
+        const std::string t = call("arrondir_coin", R"({"piece":0,"point":2,"distance_cm":5})");
+        CHECK(t.find("retirée") != std::string::npos);
+        mcp::Json info;
+        CHECK(mcp::Json::parse(call("projet_info", "{}"), info, error));
+        CHECK(info.get("pieces").size() == 2 && info.get("pieces").at(0).get("points").size() > 4);
+        // Simulation courte sur le mannequin intégré, avec export OBJ.
+        const std::string obj = (std::filesystem::temp_directory_path() / "drapeo_test_mcp.obj").string();
+        mcp::Json sim;
+        CHECK(mcp::Json::parse(call("simuler", R"({"secondes":0.5,"exporter_obj":")" + obj + R"("})"), sim, error));
+        CHECK(sim.get("particules").asNumber() > 100 && sim.has("encombrement") && std::filesystem::exists(obj));
+        std::filesystem::remove(path);
+        std::filesystem::remove(obj);
     });
 
     std::printf("\n%d vérifications, %d échec(s)\n", g_checks, g_failures);

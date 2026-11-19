@@ -62,6 +62,7 @@ add_library(drapeo_core STATIC
   src/garment/GarmentMesher.cpp
   src/simulation/SpatialHash.cpp
   src/simulation/XpbdSolver.cpp
+  src/simulation/GarmentSetup.cpp
   src/simulation/Materials.cpp)
 target_include_directories(drapeo_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src PRIVATE ${cdt_SOURCE_DIR}/CDT/include
                                                 ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb)
@@ -132,11 +133,20 @@ if(DRAPEO_BUILD_APP)
   endif()
 endif()
 
+# --- Serveur MCP (outils pour un assistant : Claude Desktop...) --------------
+add_library(drapeo_mcp STATIC src/mcp/McpServer.cpp)
+target_link_libraries(drapeo_mcp PUBLIC drapeo_core)
+add_executable(drapeo-mcp src/mcp/main.cpp)
+target_link_libraries(drapeo-mcp PRIVATE drapeo_mcp)
+if(WIN32)
+  target_link_libraries(drapeo-mcp PRIVATE shell32)   # CommandLineToArgvW
+endif()
+
 # --- Tests ------------------------------------------------------------------
 if(DRAPEO_BUILD_TESTS)
   enable_testing()
   add_executable(drapeo_tests tests/test_main.cpp)
-  target_link_libraries(drapeo_tests PRIVATE drapeo_core)
+  target_link_libraries(drapeo_tests PRIVATE drapeo_core drapeo_mcp)
   target_compile_definitions(drapeo_tests PRIVATE DRAPEO_ASSETS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets")
   add_test(NAME drapeo_tests COMMAND drapeo_tests)
 endif()

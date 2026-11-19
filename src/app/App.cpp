@@ -4,6 +4,7 @@
 #include <numbers>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <unordered_map>
 #include <vector>
@@ -369,6 +370,7 @@ int App::run(const AppOptions& options)
 
     while (!glfwWindowShouldClose(window_)) {
         glfwPollEvents();
+        checkWatchedProject();
         if (!pendingDrop_.empty()) {
             const std::string path = pendingDrop_;
             pendingDrop_.clear();
@@ -651,26 +653,7 @@ void App::resetCloth()
     }
     garmentMesh_ = std::move(gm);
     solver_.build(garmentMesh_.mesh, material_);
-    // Rétrécissement trame / chaîne : longueurs de repos raccourcies (ou allongées) selon le droit fil.
-    {
-        const auto& pov = garmentMesh_.panelOfVertex;
-        const auto& uv = garmentMesh_.mesh.uvs;
-        const int np = static_cast<int>(garment_.panels.size());
-        bool any = false;
-        for (const auto& p : garment_.panels) any = any || p.shrinkWeft != 1.0f || p.shrinkWarp != 1.0f;
-        if (any && uv.size() == pov.size())
-            solver_.scaleRestLengths([&](uint32_t a, uint32_t b) {
-                if (a >= pov.size() || b >= pov.size() || pov[a] != pov[b] || pov[a] < 0 || pov[a] >= np) return 1.0f;
-                const auto& pn = garment_.panels[static_cast<std::size_t>(pov[a])];
-                const glm::vec2 d = uv[b] - uv[a];
-                const float len = glm::length(d);
-                if (len < 1e-7f) return 1.0f;
-                const float g = glm::radians(pn.grainDeg);
-                const glm::vec2 warp(std::cos(g), std::sin(g)), weft(-warp.y, warp.x);
-                const glm::vec2 s(glm::dot(d, warp) * pn.shrinkWarp, glm::dot(d, weft) * pn.shrinkWeft);
-                return glm::length(s) / len;
-            });
-    }
+    simulation::applyShrinkage(solver_, garment_, garmentMesh_);   // retrait trame / chaîne des pièces
     solver_.spheres().clear();
     solver_.setMeshCollider(&avatarBvh_);
     solver_.setSeams(garmentMesh_.seamPairs, sewingSeconds_);
@@ -792,6 +775,7 @@ void App::importPattern(const std::string& path)
             }
         }
         setGarment(std::move(g));
+        watchProject(path);
         char text[200];
         std::snprintf(text, sizeof(text), "Projet %s ouvert : %zu pièce(s), %zu couture(s).", name.c_str(), garment_.panels.size(),
                       garment_.seams.size());
@@ -1012,6 +996,56 @@ void App::saveProjectFile()
         return;
     }
     setStatus("Projet enregistré : " + path, false);
+    watchProject(path);
+}
+
+namespace {
+/// Date de modification + taille d'un fichier (0 s'il n'existe pas).
+long long fileStamp(const std::string& utf8Path)
+{
+    std::error_code ec;
+    const std::filesystem::path p(std::u8string(utf8Path.begin(), utf8Path.end()));
+    const auto t = std::filesystem::last_write_time(p, ec);
+    if (ec) return 0;
+    const auto size = std::filesystem::file_size(p, ec);
+    if (ec) return 0;
+    return static_cast<long long>(t.time_since_epoch().count()) ^ (static_cast<long long>(size) << 1);
+}
+} // namespace
+
+void App::watchProject(const std::string& path)
+{
+    watchedProject_ = path;
+    watchedStamp_ = fileStamp(path);
+}
+
+void App::checkWatchedProject()
+{
+    if (watchedProject_.empty()) return;
+    const double now = glfwGetTime();
+    if (now - watchCheckTime_ < 0.5) return;
+    watchCheckTime_ = now;
+    const long long stamp = fileStamp(watchedProject_);
+    if (stamp == 0 || stamp == watchedStamp_) return;
+    garment::Garment g;
+    std::string error;
+    if (!io::loadProject(watchedProject_, g, error)) return;   // fichier en cours d'écriture : on réessaiera
+    watchedStamp_ = stamp;
+    // Modifié par un autre programme (assistant via le serveur MCP) : on recharge le vêtement,
+    // l'avatar et l'état de la simulation (lecture / pause) ne changent pas.
+    const bool countChanged = g.panels.size() != garment_.panels.size();
+    undoStack_.push_back(committed_);
+    if (undoStack_.size() > 100) undoStack_.erase(undoStack_.begin());
+    redoStack_.clear();
+    garment_ = std::move(g);
+    committed_ = garment_;
+    editor_.clearSelection();
+    if (countChanged) editor_.frameAll(garment_);
+    resetCloth();
+    char text[200];
+    std::snprintf(text, sizeof(text), "Projet modifié par un autre programme, rechargé : %zu pièce(s), %zu couture(s). (Ctrl+Z pour annuler)",
+                  garment_.panels.size(), garment_.seams.size());
+    setStatus(text, false);
 }
 
 void App::exportGarment()
@@ -2251,35 +2285,7 @@ void App::apply3DState()
         const int p = v < pov.size() ? pov[v] : -1;
         return p >= 0 && p < np ? &garment_.panels[static_cast<std::size_t>(p)] : nullptr;
     };
-    const auto n = static_cast<uint32_t>(std::min(pov.size(), solver_.positions().size()));
-    std::vector<float> stiffness(n, 1.0f);
-    bool anyStiff = false;
-    for (uint32_t i = 0; i < n; ++i) {
-        const garment::Panel* p = panelOf(i);
-        const bool frozen = p != nullptr && p->frozen;
-        if (solver_.isPinned(i) != frozen) solver_.setPinned(i, frozen);   // pièce figée : particules immobiles
-        stiffness[i] = p != nullptr ? std::max(1.0f, p->stiffness) : 1.0f;
-        anyStiff = anyStiff || stiffness[i] > 1.0f;
-    }
-    solver_.setStiffnessScale(anyStiff ? std::move(stiffness) : std::vector<float>{});
-    // Propriétés de simulation des pièces : épaisseur de contact, couche, pression
-    {
-        std::vector<float> extra(n, 0.0f), pressure(n, 0.0f);
-        std::vector<int> layer(n, 0);
-        bool anyExtra = false, anyLayer = false, anyPressure = false;
-        for (uint32_t i = 0; i < n; ++i) {
-            const garment::Panel* p = panelOf(i);
-            if (p == nullptr) continue;
-            extra[i] = p->thickCollision;
-            layer[i] = p->layer;
-            pressure[i] = p->pressure;
-            anyExtra = anyExtra || extra[i] > 0.0f;
-            anyLayer = anyLayer || layer[i] != 0;
-            anyPressure = anyPressure || pressure[i] != 0.0f;
-        }
-        solver_.setParticleProperties(anyExtra ? std::move(extra) : std::vector<float>{}, anyLayer ? std::move(layer) : std::vector<int>{},
-                                      anyPressure ? std::move(pressure) : std::vector<float>{});
-    }
+    simulation::applyPanelProperties(solver_, garment_, garmentMesh_);   // figées, renforcées, épaisseurs, couches, pression
     // Pièces masquées : simulées mais pas dessinées.
     std::vector<uint32_t> shown;
     const auto& idx = garmentMesh_.mesh.indices;

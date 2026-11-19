@@ -25,6 +25,44 @@ Logiciel original de création de vêtements 3D : on dessine des **patrons 2D**,
 - **Import de patrons** : SVG, DXF, **PDF** (vectoriel, ou scanné) et **images PNG / JPEG** (scan ou photo). L'image s'affiche en calque à l'échelle sous le patron, et les pièces sont **détectées automatiquement** (traits ou pièces sombres sur papier clair) ; sinon on les trace par-dessus.
 - **Export du vêtement drapé en OBJ** (UV = patron 2D, un groupe par pièce).
 - Modèles prêts à l'emploi : débardeur, jupe, robe. Annuler / rétablir (Ctrl+Z / Ctrl+Y).
+- **Serveur MCP** (`drapeo-mcp.exe`) : un assistant comme Claude Desktop crée et modifie les patrons, coud, simule et exporte. Voir plus bas.
+
+## Piloter Drapeo depuis un assistant (MCP)
+
+`drapeo-mcp.exe` est un serveur [MCP](https://modelcontextprotocol.io) : il donne à un assistant (Claude Desktop, ou tout client MCP) des outils pour travailler sur un projet `.drapeo`.
+
+[**Télécharger drapeo-mcp.exe**](https://github.com/Panics78390/drapeo/raw/main/windows/drapeo-mcp.exe) et le placer **dans le même dossier que drapeo.exe**.
+
+Dans Claude Desktop : Paramètres → Développeur → Modifier la configuration, puis ajouter dans `claude_desktop_config.json` (adapter les chemins) :
+
+```json
+{
+  "mcpServers": {
+    "drapeo": {
+      "command": "C:\\Users\\VOUS\\Downloads\\Drapeo\\drapeo-mcp.exe",
+      "args": ["--projet", "C:\\Users\\VOUS\\Documents\\Drapeo\\mcp.drapeo"]
+    }
+  }
+}
+```
+
+Redémarrer Claude Desktop. Sans `--projet`, le serveur travaille sur `Documents\Drapeo\mcp.drapeo`.
+
+| Outil | Rôle |
+|---|---|
+| `projet_info` | Pièces (points, bords, longueurs), coutures — en cm |
+| `nouveau_projet`, `ouvrir_projet`, `enregistrer_sous` | Projet vide ou modèle (débardeur, jupe, robe), changer de fichier |
+| `ajouter_piece`, `ajouter_rectangle`, `dupliquer_piece`, `supprimer_piece` | Pièces de patron et leur placement autour du corps |
+| `modifier_piece`, `deplacer_piece` | Nom, couleur, zone, angle, hauteur, droit fil, symétrie, état 3D, propriétés de simulation |
+| `deplacer_point`, `ajouter_point`, `supprimer_point` | Édition du contour |
+| `coudre`, `inverser_couture`, `supprimer_couture` | Coutures bord à bord (sur plusieurs bords si besoin) |
+| `arrondir_coin`, `couper_bord`, `ajouter_pince`, `deplier`, `agrandir_piece` | Opérations de forme |
+| `simuler` | Drapé sur l'avatar du projet, bilan (coutures ouvertes, étirement, pièces tombées) et export OBJ |
+| `ouvrir_dans_drapeo` | Ouvre le projet dans Drapeo |
+
+**En direct** : quand Drapeo a ouvert (ou enregistré) un projet, il le **recharge tout seul** dès qu'un autre programme le modifie ; on voit donc les changements de l'assistant au fur et à mesure (Ctrl+Z annule un rechargement). Dans l'autre sens, enregistrez (Ctrl+S) pour que l'assistant voie vos modifications.
+
+Le serveur parle JSON-RPC 2.0 sur l'entrée / la sortie standard (un message par ligne) ; il n'a pas de fenêtre.
 
 ## Compiler
 
@@ -201,6 +239,7 @@ src/
   rendering/   GlFunctions (chargeur OpenGL sans dépendance), Shader, Camera, Renderer (PBR)
   ui/          PatternEditor (éditeur 2D)
   app/         App (fenêtre, menus, inspecteur), FileDialog, logo intégré
+  mcp/         Json, McpServer (outils MCP) et main de drapeo-mcp
 tools/         make_mannequin.py, make_logo_assets.py
 third_party/   stb_image (domaine public)
 tests/         tests du cœur, sans OpenGL
