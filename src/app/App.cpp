@@ -2159,6 +2159,14 @@ void App::drawPatternPane()
         ImGui::OpenPopup("##menuPieces");
     }
     drawPieceMenu();
+    if (editor_.splitRequested) {
+        editor_.splitRequested = false;
+        splitEdge_ = editor_.splitEdge;
+        splitT_ = editor_.splitT;
+        splitOpen_ = true;
+        ImGui::SetNextWindowPos(ImVec2(ImGui::GetMousePos().x + 24 * uiScale_, ImGui::GetMousePos().y - 20 * uiScale_), ImGuiCond_Always);
+    }
+    drawSplitWindow();
     if (editor_.backdrop.moved) {
         editor_.backdrop.moved = false;
         backdropOrigin_ = editor_.backdrop.min;
@@ -2473,12 +2481,157 @@ void App::pieceAction(PieceAction a)
     }
 }
 
+bool App::applySplit(garment::Garment& g) const
+{
+    const int p = splitEdge_.panel, e = splitEdge_.edge;
+    if (p < 0 || p >= static_cast<int>(g.panels.size())) return false;
+    const auto& pts = g.panels[static_cast<std::size_t>(p)].points;
+    const int n = static_cast<int>(pts.size());
+    if (e < 0 || e >= n) return false;
+    if (splitMode_ == 0) {
+        const glm::vec2 a = pts[static_cast<std::size_t>(e)], b = pts[static_cast<std::size_t>((e + 1) % n)];
+        g.insertPoint(p, e, glm::mix(a, b, glm::clamp(splitT_, 0.02f, 0.98f)));
+        return true;
+    }
+    return garment::splitCurve(g, p, e, std::max(1, splitParts_));
+}
+
+void App::drawSplitWindow()
+{
+    editor_.splitPreview.clear();
+    if (!splitOpen_) return;
+    const int p = splitEdge_.panel;
+    if (p < 0 || p >= static_cast<int>(garment_.panels.size()) || splitEdge_.edge < 0 ||
+        splitEdge_.edge >= static_cast<int>(garment_.panels[static_cast<std::size_t>(p)].points.size())) {
+        splitOpen_ = false;
+        return;
+    }
+    // Aperçu : les endroits de coupe
+    {
+        garment::Garment preview = garment_;
+        if (splitMode_ == 1) {
+            garment::splitCurve(preview, p, splitEdge_.edge, std::max(1, splitParts_), &editor_.splitPreview);
+        } else {
+            const auto& q = garment_.panels[static_cast<std::size_t>(p)].points;
+            const int m = static_cast<int>(q.size());
+            editor_.splitPreview.push_back(glm::mix(q[static_cast<std::size_t>(splitEdge_.edge)],
+                                                    q[static_cast<std::size_t>((splitEdge_.edge + 1) % m)], glm::clamp(splitT_, 0.02f, 0.98f)));
+        }
+    }
+    const auto& pts = garment_.panels[static_cast<std::size_t>(p)].points;
+    const int n = static_cast<int>(pts.size());
+    int first = 0, count = 1;
+    garment::curveAround(garment_, p, splitEdge_.edge, first, count);
+    float curveLen = 0.0f;
+    for (int k = 0; k < count; ++k)
+        curveLen += glm::distance(pts[static_cast<std::size_t>((first + k) % n)], pts[static_cast<std::size_t>((first + k + 1) % n)]);
+    const float edgeLen = glm::distance(pts[static_cast<std::size_t>(splitEdge_.edge)], pts[static_cast<std::size_t>((splitEdge_.edge + 1) % n)]);
+
+    bool open = true;
+    ImGui::SetNextWindowSize(ImVec2(300 * uiScale_, 0), ImGuiCond_Always);
+    if (ImGui::Begin("Couper la ligne", &open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::RadioButton("Au point cliqué", &splitMode_, 0);
+        ImGui::BeginDisabled(splitMode_ != 0);
+        ImGui::Indent();
+        float ratio = splitT_ * 100.0f;
+        ImGui::SetNextItemWidth(150 * uiScale_);
+        if (ImGui::DragFloat("Ratio", &ratio, 0.2f, 2.0f, 98.0f, "%.1f %%")) splitT_ = ratio / 100.0f;
+        ImGui::TextDisabled("%.1f cm  +  %.1f cm", static_cast<double>(edgeLen * splitT_ * 100.0f),
+                            static_cast<double>(edgeLen * (1.0f - splitT_) * 100.0f));
+        ImGui::Unindent();
+        ImGui::EndDisabled();
+        ImGui::RadioButton("En parties égales", &splitMode_, 1);
+        ImGui::BeginDisabled(splitMode_ != 1);
+        ImGui::Indent();
+        ImGui::SetNextItemWidth(150 * uiScale_);
+        ImGui::InputInt("Morceaux", &splitParts_);
+        splitParts_ = std::clamp(splitParts_, 1, 64);
+        ImGui::TextDisabled(count > 1 ? "Courbe de %.1f cm : %.1f cm par morceau" : "Bord de %.1f cm : %.1f cm par morceau",
+                            static_cast<double>(curveLen * 100.0f), static_cast<double>(curveLen * 100.0f / static_cast<float>(splitParts_)));
+        ImGui::Unindent();
+        ImGui::EndDisabled();
+        ImGui::Spacing();
+        const float bw = 120 * uiScale_;
+        if (ImGui::Button("OK", ImVec2(bw, 0)) || ImGui::IsKeyPressed(ImGuiKey_Enter)) {
+            if (applySplit(garment_)) {
+                commitGarment();
+                setStatus("Ligne coupée.", false);
+            } else {
+                setStatus("Les points de coupe existent déjà : rien à ajouter.", false);
+            }
+            open = false;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Annuler", ImVec2(bw, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) open = false;
+    }
+    ImGui::End();
+    if (!open) {
+        splitOpen_ = false;
+        editor_.splitPreview.clear();
+    }
+}
+
+bool App::drawPointMenu()
+{
+    const int p = editor_.menuPanel, k = editor_.menuPoint;
+    if (k < 0 || p < 0 || p >= static_cast<int>(garment_.panels.size()) ||
+        k >= static_cast<int>(garment_.panels[static_cast<std::size_t>(p)].points.size()))
+        return false;
+    ImGui::TextDisabled("Options du point");
+    ImGui::Separator();
+    if (ImGui::MenuItem("Supprimer le point", "Suppr", false, garment_.panels[static_cast<std::size_t>(p)].points.size() > 3)) {
+        garment_.removePoint(p, k);
+        editor_.selectedPoint = -1;
+        editor_.selectedPoints.clear();
+        commitGarment();
+    }
+    if (ImGui::BeginMenu("Ajouter une pince")) {
+        ImGui::SetNextItemWidth(140 * uiScale_);
+        ImGui::DragFloat("Profondeur", &dartDepthCm_, 0.1f, 0.5f, 40.0f, "%.1f cm");
+        ImGui::SetNextItemWidth(140 * uiScale_);
+        ImGui::DragFloat("Largeur", &dartWidthCm_, 0.05f, 0.2f, 20.0f, "%.1f cm");
+        if (ImGui::Button("Ajouter la pince", ImVec2(-1, 0))) {
+            if (garment::addDart(garment_, p, k, dartDepthCm_ / 100.0f, dartWidthCm_ / 100.0f) >= 0) {
+                commitGarment();
+                setStatus("Pince ajoutée.", false);
+            } else {
+                setStatus("Pince impossible ici : les bords voisins sont trop courts.", true);
+            }
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndMenu();
+    }
+    if (ImGui::MenuItem("Convertir en point de courbe")) {
+        const glm::vec2 c = garment_.panels[static_cast<std::size_t>(p)].points[static_cast<std::size_t>(k)];
+        if (garment::roundCorner(garment_, p, k, 0.5f * garment::maxCornerTangent(garment_, p, k), 12) >= 0) {
+            auto& pn = garment_.panels[static_cast<std::size_t>(p)];
+            if (pn.symmetric) garment::symmetrizePanel(garment_, p, c.x <= pn.symAxisX);
+            commitGarment();
+        }
+    }
+    if (ImGui::BeginMenu("Aligner")) {
+        bool done = false;
+        if (ImGui::MenuItem("Horizontalement sur le point précédent")) done = garment::alignPoint(garment_, p, k, true, false);
+        if (ImGui::MenuItem("Horizontalement sur le point suivant")) done = garment::alignPoint(garment_, p, k, true, true);
+        if (ImGui::MenuItem("Verticalement sur le point précédent")) done = garment::alignPoint(garment_, p, k, false, false);
+        if (ImGui::MenuItem("Verticalement sur le point suivant")) done = garment::alignPoint(garment_, p, k, false, true);
+        if (done) commitGarment();
+        ImGui::EndMenu();
+    }
+    return true;
+}
+
 void App::drawPieceMenu()
 {
     using A = PieceAction;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8 * uiScale_, 8 * uiScale_));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8 * uiScale_, 5 * uiScale_));
     if (!ImGui::BeginPopup("##menuPieces")) {
+        ImGui::PopStyleVar(2);
+        return;
+    }
+    if (drawPointMenu()) {
+        ImGui::EndPopup();
         ImGui::PopStyleVar(2);
         return;
     }
@@ -2512,6 +2665,26 @@ void App::drawPieceMenu()
         ImGui::TextDisabled("Patron");
     }
     ImGui::Separator();
+    // Bord sous la souris : déplier la demi-pièce autour de lui, ou le couper
+    if (const auto e = editor_.menuEdge; e.panel >= 0 && e.panel < n) {
+        if (ImGui::MenuItem("Déplier la pièce autour de ce bord")) {
+            if (garment::unfoldPanel(garment_, e.panel, e.edge)) {
+                editor_.selectedPoint = -1;
+                editor_.selectedPoints.clear();
+                commitGarment();
+                setStatus("Pièce dépliée : elle est maintenant symétrique autour du pli.", false);
+            } else {
+                setStatus("Impossible de déplier autour de ce bord.", true);
+            }
+        }
+        if (ImGui::MenuItem("Couper ce bord / cette courbe...")) {
+            splitEdge_ = e;
+            splitT_ = 0.5f;
+            splitOpen_ = true;
+            ImGui::SetNextWindowPos(ImGui::GetMousePos(), ImGuiCond_Always);
+        }
+        ImGui::Separator();
+    }
     if (ImGui::BeginMenu("Sélection")) {
         item("Tout sélectionner", "Ctrl+A", A::SelectAll, n > 0);
         item("Inverser la sélection", "Ctrl+Maj+I", A::InvertSelection, n > 0);

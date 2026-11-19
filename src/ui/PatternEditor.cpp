@@ -472,9 +472,9 @@ std::string PatternEditor::hint() const
     case Tool::Curvature:
         return "Courbure : glissez un bord pour le courber (il passe par la souris). Lisser (L) adoucit ensuite.";
     case Tool::Smooth:
-        return "Lisser : maintenez le clic et passez le pinceau sur le contour pour l'adoucir.";
+        return "Lisser : tirez un coin pour l'arrondir (arc de cercle), ou passez le pinceau sur le contour pour l'adoucir.";
     case Tool::AddPoint:
-        return "Ajouter un point : clic sur un bord pour le couper en deux à cet endroit.";
+        return "Couper : clic sur un bord ou une courbe pour la couper (au point cliqué ou en parties égales). Maj+clic : point direct.";
     case Tool::Slash:
         return slashPanel_ < 0 ? "Fendre et écarter : cliquez le point ou le bord où la pièce s'ouvre."
                                : "Fendre et écarter : cliquez maintenant le point charnière (la pièce pivote autour de lui).";
@@ -632,6 +632,16 @@ bool PatternEditor::draw(garment::Garment& g)
                 int hitPanel = hitPoint >= 0 ? selectedPanel : -1;
                 for (int p = 0; hitPoint < 0 && p < static_cast<int>(g.panels.size()); ++p)
                     if ((hitPoint = pickPoint(g, p, mouse)) >= 0) hitPanel = p;
+                if (tool == Tool::AddPoint && !io.KeyShift && (hoverEdge_.panel >= 0 || hitPoint >= 0)) {
+                    // Outil Ajouter un point / couper : fenêtre « Couper » (au point cliqué ou en parties égales).
+                    // Sur une courbe, les points sont serrés : un clic sur l'un d'eux vise la courbe.
+                    splitRequested = true;
+                    splitEdge = hoverEdge_.panel >= 0 ? hoverEdge_ : garment::EdgeRef{hitPanel, hitPoint};
+                    splitT = hoverEdge_.panel >= 0 ? edgeT : 0.5f;
+                    selectedPanel = splitEdge.panel;
+                    selection.clear();
+                    break;
+                }
                 if (hitPoint < 0 && hoverEdge_.panel >= 0) {
                     // Nouveau point sur le bord, à l'endroit cliqué
                     hitPanel = hoverEdge_.panel;
@@ -671,10 +681,30 @@ bool PatternEditor::draw(garment::Garment& g)
                     dragStart_ = dragLast_ = mw;
                 }
                 break;
-            case Tool::Smooth:
+            case Tool::Smooth: {
+                // Sur un coin : on le tire pour l'arrondir. Ailleurs : pinceau qui adoucit le contour.
+                int panel = -1, point = -1;
+                if (selectedPanel >= 0 && selectedPanel < static_cast<int>(g.panels.size()) && (point = pickPoint(g, selectedPanel, mouse)) >= 0)
+                    panel = selectedPanel;
+                for (int p = 0; point < 0 && p < static_cast<int>(g.panels.size()); ++p)
+                    if ((point = pickPoint(g, p, mouse)) >= 0) panel = p;
+                if (point >= 0) {
+                    roundOrig_ = g;
+                    roundPanel_ = panel;
+                    roundPoint_ = point;
+                    roundT_ = 0.0f;
+                    selectedPanel = panel;
+                    selectedPoint = -1;
+                    selectedPoints.clear();
+                    selection.clear();
+                    drag_ = Drag::Round;
+                    dragStart_ = mw;
+                    break;
+                }
                 drag_ = Drag::Smooth;
                 dragStart_ = dragLast_ = mw;
                 break;
+            }
             case Tool::Slash: {
                 // 1er clic : départ de la fente (point ou bord) ; 2e clic : point charnière sur la même pièce.
                 int panel = -1, point = -1;
@@ -879,11 +909,19 @@ bool PatternEditor::draw(garment::Garment& g)
         if (!ImGui::IsMouseDown(ImGuiMouseButton_Middle) && !ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
             drag_ = Drag::None;
             // Clic droit sans glisser : menu de la pièce sous la souris
-            if (rightPan_ && std::hypot(mouse.x - rightPress_.x, mouse.y - rightPress_.y) < 5.0f && tool == Tool::Select) {
+            if (rightPan_ && std::hypot(mouse.x - rightPress_.x, mouse.y - rightPress_.y) < 5.0f && isEditTool(tool)) {
                 const int hit = pickPanel(g, toWorld(rightPress_));
                 if (hit >= 0 && !isSelected(hit)) select({hit});
                 menuPanel = hit;
                 menuWorld = toWorld(rightPress_);
+                menuPoint = -1;
+                menuEdge = {};
+                for (int p = 0; menuPoint < 0 && p < static_cast<int>(g.panels.size()); ++p)
+                    if ((menuPoint = pickPoint(g, p, rightPress_)) >= 0) {
+                        menuPanel = p;
+                        if (!isSelected(p)) select({p});
+                    }
+                if (menuPoint < 0) menuEdge = hoverEdge_;
                 menuRequested = true;
             }
             rightPan_ = false;
@@ -1039,6 +1077,22 @@ bool PatternEditor::draw(garment::Garment& g)
             }
             curveFirst_ = -1;
             curveEdge_ = {};
+            drag_ = Drag::None;
+        }
+    } else if (drag_ == Drag::Round) {
+        if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            // Le coin s'arrondit d'autant que la souris s'en éloigne (longueur prise sur chaque bord).
+            g = roundOrig_;
+            const auto& corner = g.panels[static_cast<std::size_t>(roundPanel_)].points[static_cast<std::size_t>(roundPoint_)];
+            roundT_ = std::min(glm::distance(mw, corner), garment::maxCornerTangent(g, roundPanel_, roundPoint_));
+            const glm::vec2 c = corner;
+            if (roundT_ > 2.0f / zoom_ && garment::roundCorner(g, roundPanel_, roundPoint_, roundT_, 12) >= 0) {
+                const auto& pn = g.panels[static_cast<std::size_t>(roundPanel_)];
+                if (pn.symmetric) garment::symmetrizePanel(g, roundPanel_, c.x <= pn.symAxisX);   // l'autre coin aussi
+            }
+        } else {
+            if (roundT_ > 2.0f / zoom_) committed = true;
+            roundPanel_ = roundPoint_ = -1;
             drag_ = Drag::None;
         }
     } else if (drag_ == Drag::Smooth) {
@@ -1418,6 +1472,17 @@ bool PatternEditor::draw(garment::Garment& g)
         for (std::size_t i = 0; i < g.panels[p].points.size(); ++i) {
             const ImVec2 s = toScreen(g.panels[p].points[i]);
             const bool ptSel = sel && (static_cast<int>(i) == selectedPoint || pointChosen(static_cast<int>(p), static_cast<int>(i)));
+            // Point à l'intérieur d'une courbe (le contour y tourne peu) : petit rond, les coins restent carrés.
+            const auto& pp = g.panels[p].points;
+            const std::size_t n = pp.size();
+            const glm::vec2 d0 = pp[i] - pp[(i + n - 1) % n], d1 = pp[(i + 1) % n] - pp[i];
+            const float l0 = glm::length(d0), l1 = glm::length(d1);
+            const bool inCurve = l0 > 1e-6f && l1 > 1e-6f && glm::dot(d0, d1) / (l0 * l1) > 0.82f &&
+                                 glm::dot(d0, d1) / (l0 * l1) < 0.99985f && std::max(l0, l1) < 1.6f * std::min(l0, l1);
+            if (inCurve && !ptSel) {
+                dl->AddCircleFilled(s, 2.0f, sel ? kInk : kMuted, 8);
+                continue;
+            }
             const float r = ptSel ? 5.0f : 3.5f;
             dl->AddRectFilled({s.x - r, s.y - r}, {s.x + r, s.y + r}, ptSel ? kAccent : (sel ? kInk : kMuted));
         }
@@ -1539,8 +1604,26 @@ bool PatternEditor::draw(garment::Garment& g)
             dl->AddCircle(rot, 6.0f, col, 16, 1.5f);
         }
     }
-    // Outil Lisser : cercle du pinceau
-    if (tool == Tool::Smooth && hovered) dl->AddCircle(mouse, 28.0f, IM_COL32(120, 200, 255, 160), 32, 1.5f);
+    // Outil Lisser : coin en cours d'arrondi (longueur prise sur chaque bord), sinon cercle du pinceau
+    if (drag_ == Drag::Round && roundPanel_ >= 0 && roundPanel_ < static_cast<int>(roundOrig_.panels.size())) {
+        const auto& op = roundOrig_.panels[static_cast<std::size_t>(roundPanel_)].points;
+        const ImVec2 c = toScreen(op[static_cast<std::size_t>(roundPoint_)]);
+        dl->AddCircle(c, 5.0f, IM_COL32(120, 200, 255, 220), 12, 1.5f);
+        char text[48];
+        std::snprintf(text, sizeof(text), "%.1f cm", static_cast<double>(roundT_ * 100.0f));
+        dl->AddRectFilled({mouse.x + 12, mouse.y + 10}, {mouse.x + 18 + ImGui::CalcTextSize(text).x, mouse.y + 30}, IM_COL32(20, 20, 24, 210), 3.0f);
+        dl->AddText({mouse.x + 15, mouse.y + 12}, kInk, text);
+    } else if (tool == Tool::Smooth && hovered) {
+        bool onPoint = false;
+        for (int p = 0; !onPoint && p < static_cast<int>(g.panels.size()); ++p) onPoint = pickPoint(g, p, mouse) >= 0;
+        if (!onPoint) dl->AddCircle(mouse, 28.0f, IM_COL32(120, 200, 255, 160), 32, 1.5f);
+    }
+    // Aperçu de la coupe (fenêtre « Couper la ligne »)
+    for (const auto& q : splitPreview) {
+        const ImVec2 sp = toScreen(q);
+        dl->AddCircleFilled(sp, 4.5f, IM_COL32(255, 220, 60, 255), 12);
+        dl->AddCircle(sp, 4.5f, IM_COL32(30, 32, 36, 255), 12, 1.0f);
+    }
     // Outil Fendre et écarter : premier point choisi
     if (tool == Tool::Slash && slashPanel_ >= 0 && slashPanel_ < static_cast<int>(g.panels.size()) && slashPoint_ >= 0 &&
         slashPoint_ < static_cast<int>(g.panels[static_cast<std::size_t>(slashPanel_)].points.size())) {

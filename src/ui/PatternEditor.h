@@ -33,8 +33,8 @@ inline constexpr ToolInfo kEditTools[] = {
     {Tool::Transform, "Transformer points / arêtes", "T", "Cadre autour de la sélection : coins = agrandir, rond du haut = pivoter"},
     {Tool::CurvePoint, "Éditer les points de courbe", "V", "Clic sur un bord : nouveau point à glisser ; clic sur un point : le glisser"},
     {Tool::Curvature, "Éditer la courbure", "C", "Glisser un bord pour le courber"},
-    {Tool::Smooth, "Lisser la courbe", "L", "Pinceau : passer sur les points pour adoucir le contour"},
-    {Tool::AddPoint, "Ajouter un point / couper un bord", "A", "Clic sur un bord : y ajoute un point"},
+    {Tool::Smooth, "Lisser la courbe", "L", "Tirer un coin pour l'arrondir ; pinceau ailleurs pour adoucir le contour"},
+    {Tool::AddPoint, "Ajouter un point / couper un bord", "A", "Clic sur un bord ou une courbe : la couper au point cliqué ou en parties égales"},
     {Tool::Slash, "Fendre et écarter", "E", "Clic sur le bord de départ, puis sur le point charnière : la pièce s'ouvre en pointe"},
 };
 [[nodiscard]] inline bool isEditTool(Tool t) { return t != Tool::Polygon && t != Tool::Rectangle && t != Tool::Seam; }
@@ -93,6 +93,13 @@ public:
     bool menuRequested = false;
     int menuPanel = -1;            // pièce sous la souris (-1 : clic dans le vide)
     glm::vec2 menuWorld{0.0f};     // point cliqué (m)
+    int menuPoint = -1;            // point sous la souris (options du point), -1 sinon
+    garment::EdgeRef menuEdge;     // bord sous la souris (déplier, couper), panel -1 sinon
+    // Outil Ajouter un point / couper : clic sur un bord -> l'application ouvre la fenêtre « Couper ».
+    bool splitRequested = false;
+    garment::EdgeRef splitEdge;
+    float splitT = 0.5f;                   // position du clic le long du bord (0..1)
+    std::vector<glm::vec2> splitPreview;   // points proposés, dessinés en aperçu
     void clearSelection()
     {
         selectedPanel = selectedPoint = selectedSeam = selectedEdge = -1;
@@ -143,7 +150,7 @@ private:
     bool needsFrame_ = true;
 
     // États d'interaction
-    enum class Drag { None, Point, Points, Panel, Pan, Rect, Backdrop, Marquee, Scale, Rotate, Move, Curve, Smooth } drag_ = Drag::None;
+    enum class Drag { None, Point, Points, Panel, Pan, Rect, Backdrop, Marquee, Scale, Rotate, Move, Curve, Smooth, Round } drag_ = Drag::None;
     glm::vec2 dragStart_{0.0f};
     glm::vec2 dragLast_{0.0f};
     std::vector<glm::vec2> drawing_;  // polygone en cours
@@ -166,6 +173,10 @@ private:
     garment::EdgeRef curveEdge_;
     glm::vec2 curveA_{0.0f}, curveB_{0.0f};
     int curveFirst_ = -1, curveCount_ = 0;
+    // Outil Lisser : coin en cours d'arrondi (forme de départ gardée pour recalculer à chaque image)
+    garment::Garment roundOrig_;
+    int roundPanel_ = -1, roundPoint_ = -1;
+    float roundT_ = 0.0f;
     // Outil Fendre et écarter : premier point choisi
     int slashPanel_ = -1, slashPoint_ = -1;
     /// Ajoute un point sur le bord survolé (renvoie son index, -1 sinon).

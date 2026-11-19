@@ -544,6 +544,243 @@ bool slashAndSpread(Garment& g, int panel, int iA, int iB, float degrees)
     return true;
 }
 
+namespace {
+// Longueur maximale de tangente au coin k : on garde un peu de chaque bord.
+float cornerLimit(const std::vector<glm::vec2>& pts, int k)
+{
+    const int n = static_cast<int>(pts.size());
+    const glm::vec2 c = pts[static_cast<std::size_t>(k)];
+    const float la = glm::distance(c, pts[static_cast<std::size_t>((k + n - 1) % n)]);
+    const float lb = glm::distance(c, pts[static_cast<std::size_t>((k + 1) % n)]);
+    return 0.98f * std::min(la, lb);
+}
+} // namespace
+
+float maxCornerTangent(const Garment& g, int panel, int point)
+{
+    if (panel < 0 || panel >= static_cast<int>(g.panels.size())) return 0.0f;
+    const auto& pts = g.panels[static_cast<std::size_t>(panel)].points;
+    if (point < 0 || point >= static_cast<int>(pts.size()) || pts.size() < 3) return 0.0f;
+    return cornerLimit(pts, point);
+}
+
+int roundCorner(Garment& g, int panel, int point, float tangentLength, int segments)
+{
+    if (panel < 0 || panel >= static_cast<int>(g.panels.size())) return -1;
+    const auto pts = g.panels[static_cast<std::size_t>(panel)].points;
+    const int n = static_cast<int>(pts.size());
+    if (point < 0 || point >= n || n < 3 || segments < 2) return -1;
+    const glm::vec2 c = pts[static_cast<std::size_t>(point)];
+    const glm::vec2 a = pts[static_cast<std::size_t>((point + n - 1) % n)], b = pts[static_cast<std::size_t>((point + 1) % n)];
+    const float t = std::min(tangentLength, cornerLimit(pts, point));
+    if (t < 1e-4f) return -1;
+    const glm::vec2 ua = glm::normalize(a - c), ub = glm::normalize(b - c);
+    const float cosT = glm::clamp(glm::dot(ua, ub), -1.0f, 1.0f);
+    if (cosT < -0.999f) return -1;   // bords alignés : pas de coin à arrondir
+    const glm::vec2 p1 = c + ua * t, p2 = c + ub * t;
+    const float half = std::acos(cosT) * 0.5f;   // demi-angle du coin
+    const glm::vec2 bis = glm::normalize(ua + ub);
+    const glm::vec2 center = c + bis * (t / std::cos(half));
+    const glm::vec2 r1 = p1 - center, r2 = p2 - center;
+    float a1 = std::atan2(r1.y, r1.x), a2 = std::atan2(r2.y, r2.x);
+    float sweep = a2 - a1;
+    while (sweep > glm::pi<float>()) sweep -= 2.0f * glm::pi<float>();
+    while (sweep < -glm::pi<float>()) sweep += 2.0f * glm::pi<float>();
+    const float radius = glm::length(r1);
+    std::vector<glm::vec2> out;
+    out.reserve(static_cast<std::size_t>(n + segments));
+    for (int k = 0; k < n; ++k) {
+        if (k != point) {
+            out.push_back(pts[static_cast<std::size_t>(k)]);
+            continue;
+        }
+        for (int s = 0; s <= segments; ++s) {
+            const float ang = a1 + sweep * static_cast<float>(s) / static_cast<float>(segments);
+            out.push_back(center + radius * glm::vec2(std::cos(ang), std::sin(ang)));
+        }
+    }
+    // Un point de l'arc qui retombe sur le voisin (tangente = longueur du bord) : on l'enlève.
+    std::vector<glm::vec2> clean;
+    for (const auto& q : out)
+        if (clean.empty() || glm::distance(clean.back(), q) > 1e-4f) clean.push_back(q);
+    while (clean.size() > 3 && glm::distance(clean.front(), clean.back()) < 1e-4f) clean.pop_back();
+    replaceOutline(g, panel, clean);
+    const auto& now = g.panels[static_cast<std::size_t>(panel)].points;
+    for (int k = 0; k < static_cast<int>(now.size()); ++k)
+        if (glm::distance(now[static_cast<std::size_t>(k)], p1) < 1e-4f) return k;
+    return 0;
+}
+
+void curveAround(const Garment& g, int panel, int edge, int& first, int& count, float maxTurnDeg)
+{
+    first = edge;
+    count = 1;
+    if (panel < 0 || panel >= static_cast<int>(g.panels.size())) return;
+    const auto& pts = g.panels[static_cast<std::size_t>(panel)].points;
+    const int n = static_cast<int>(pts.size());
+    if (edge < 0 || edge >= n) return;
+    const float cosMax = std::cos(glm::radians(maxTurnDeg));
+    auto smoothAt = [&](int k) {   // le contour tourne peu au point k
+        const glm::vec2 d0 = pts[static_cast<std::size_t>(k)] - pts[static_cast<std::size_t>((k + n - 1) % n)];
+        const glm::vec2 d1 = pts[static_cast<std::size_t>((k + 1) % n)] - pts[static_cast<std::size_t>(k)];
+        const float l0 = glm::length(d0), l1 = glm::length(d1);
+        if (l0 < 1e-6f || l1 < 1e-6f) return false;
+        // Un bord beaucoup plus long que son voisin (bord droit qui rejoint une courbe) : fin de la courbe.
+        if (std::max(l0, l1) > 1.6f * std::min(l0, l1)) return false;
+        return glm::dot(d0, d1) / (l0 * l1) > cosMax;
+    };
+    // Bords droits : pas de courbe à suivre (le bord seul est coupé).
+    auto bent = [&](int k) {
+        const glm::vec2 d0 = pts[static_cast<std::size_t>(k)] - pts[static_cast<std::size_t>((k + n - 1) % n)];
+        const glm::vec2 d1 = pts[static_cast<std::size_t>((k + 1) % n)] - pts[static_cast<std::size_t>(k)];
+        const float l0 = glm::length(d0), l1 = glm::length(d1);
+        return l0 > 1e-6f && l1 > 1e-6f && glm::dot(d0, d1) / (l0 * l1) < 0.99985f;   // > 1° environ
+    };
+    while (count < n - 1 && smoothAt(first) && bent(first)) {
+        first = (first + n - 1) % n;
+        ++count;
+    }
+    int end = (edge + 1) % n;
+    while (count < n - 1 && smoothAt(end) && bent(end)) {
+        end = (end + 1) % n;
+        ++count;
+    }
+}
+
+bool splitCurve(Garment& g, int panel, int edge, int parts, std::vector<glm::vec2>* cuts)
+{
+    if (panel < 0 || panel >= static_cast<int>(g.panels.size()) || parts < 1) return false;
+    const auto pts = g.panels[static_cast<std::size_t>(panel)].points;
+    const int n = static_cast<int>(pts.size());
+    if (edge < 0 || edge >= n) return false;
+    int first = edge, count = 1;
+    curveAround(g, panel, edge, first, count);
+    // Longueurs cumulées le long de la courbe
+    std::vector<float> acc{0.0f};
+    for (int k = 0; k < count; ++k)
+        acc.push_back(acc.back() + glm::distance(pts[static_cast<std::size_t>((first + k) % n)], pts[static_cast<std::size_t>((first + k + 1) % n)]));
+    const float total = acc.back();
+    if (total < 1e-5f) return false;
+    // Points de coupe : sur un point existant, on le garde ; sinon on l'ajoute dans son bord.
+    // La forme de la courbe ne change pas.
+    std::vector<std::vector<glm::vec2>> extra(static_cast<std::size_t>(count));
+    for (int i = 1; i < parts; ++i) {
+        const float want = total * static_cast<float>(i) / static_cast<float>(parts);
+        int seg = 0;
+        while (seg + 1 < count && acc[static_cast<std::size_t>(seg + 1)] < want) ++seg;
+        const glm::vec2 a = pts[static_cast<std::size_t>((first + seg) % n)], b = pts[static_cast<std::size_t>((first + seg + 1) % n)];
+        const float len = acc[static_cast<std::size_t>(seg + 1)] - acc[static_cast<std::size_t>(seg)];
+        const glm::vec2 q = glm::mix(a, b, len > 1e-7f ? (want - acc[static_cast<std::size_t>(seg)]) / len : 0.0f);
+        if (cuts) cuts->push_back(q);
+        if (glm::distance(q, a) > 1e-4f && glm::distance(q, b) > 1e-4f) extra[static_cast<std::size_t>(seg)].push_back(q);
+    }
+    std::vector<glm::vec2> out;
+    bool added = false;
+    for (int k = 0; k < n; ++k) {
+        out.push_back(pts[static_cast<std::size_t>(k)]);
+        const int rel = ((k - first) % n + n) % n;
+        if (rel < count)
+            for (const auto& q : extra[static_cast<std::size_t>(rel)]) {
+                out.push_back(q);
+                added = true;
+            }
+    }
+    if (added) replaceOutline(g, panel, out);
+    return added;
+}
+
+int addDart(Garment& g, int panel, int point, float depth, float width)
+{
+    if (panel < 0 || panel >= static_cast<int>(g.panels.size())) return -1;
+    const auto pts = g.panels[static_cast<std::size_t>(panel)].points;
+    const int n = static_cast<int>(pts.size());
+    if (point < 0 || point >= n || n < 3 || depth <= 0.0f || width <= 0.0f) return -1;
+    const glm::vec2 c = pts[static_cast<std::size_t>(point)];
+    const glm::vec2 a = pts[static_cast<std::size_t>((point + n - 1) % n)], b = pts[static_cast<std::size_t>((point + 1) % n)];
+    const float half = std::min(width * 0.5f, 0.45f * std::min(glm::distance(a, c), glm::distance(b, c)));
+    if (half < 1e-4f) return -1;
+    const glm::vec2 pa = c + glm::normalize(a - c) * half, pb = c + glm::normalize(b - c) * half;
+    glm::vec2 tan = pb - pa;
+    if (glm::length(tan) < 1e-6f) return -1;
+    tan = glm::normalize(tan);
+    // Intérieur : à gauche du sens de parcours si le contour tourne dans le sens trigonométrique.
+    glm::vec2 inward(-tan.y, tan.x);
+    if (signedArea(pts) < 0.0f) inward = -inward;
+    const glm::vec2 tip = c + inward * depth;
+    std::vector<glm::vec2> out;
+    for (int k = 0; k < n; ++k) {
+        if (k != point) {
+            out.push_back(pts[static_cast<std::size_t>(k)]);
+            continue;
+        }
+        out.push_back(pa);
+        out.push_back(tip);
+        out.push_back(pb);
+    }
+    replaceOutline(g, panel, out);
+    const auto& now = g.panels[static_cast<std::size_t>(panel)].points;
+    for (int k = 0; k < static_cast<int>(now.size()); ++k)
+        if (glm::distance(now[static_cast<std::size_t>(k)], tip) < 1e-5f) return k;
+    return -1;
+}
+
+bool alignPoint(Garment& g, int panel, int point, bool horizontal, bool next)
+{
+    if (panel < 0 || panel >= static_cast<int>(g.panels.size())) return false;
+    auto& pts = g.panels[static_cast<std::size_t>(panel)].points;
+    const int n = static_cast<int>(pts.size());
+    if (point < 0 || point >= n || n < 3) return false;
+    const glm::vec2 ref = pts[static_cast<std::size_t>(next ? (point + 1) % n : (point + n - 1) % n)];
+    auto& q = pts[static_cast<std::size_t>(point)];
+    if (horizontal)
+        q.y = ref.y;
+    else
+        q.x = ref.x;
+    return true;
+}
+
+bool unfoldPanel(Garment& g, int panel, int edge)
+{
+    if (panel < 0 || panel >= static_cast<int>(g.panels.size())) return false;
+    auto& pn = g.panels[static_cast<std::size_t>(panel)];
+    const auto pts = pn.points;
+    const int n = static_cast<int>(pts.size());
+    if (edge < 0 || edge >= n || n < 3) return false;
+    const glm::vec2 p0 = pts[static_cast<std::size_t>(edge)], p1 = pts[static_cast<std::size_t>((edge + 1) % n)];
+    const glm::vec2 d = p1 - p0;
+    if (glm::length(d) < 1e-5f) return false;
+    const glm::vec2 u = glm::normalize(d);
+    auto mirror = [&](glm::vec2 q) {
+        const glm::vec2 r = q - p0;
+        return p0 + 2.0f * glm::dot(r, u) * u - r;
+    };
+    // Contour : de p1 à p0 par le côté de la pièce, puis le même chemin en miroir, de p0 à p1.
+    std::vector<glm::vec2> out;
+    for (int k = 0; k < n; ++k) out.push_back(pts[static_cast<std::size_t>((edge + 1 + k) % n)]);
+    for (int k = n - 2; k >= 1; --k) out.push_back(mirror(pts[static_cast<std::size_t>((edge + 1 + k) % n)]));
+    // Points du côté miroir qui retombent sur le pli (déjà présents) : retirés.
+    std::vector<glm::vec2> clean;
+    for (const auto& q : out)
+        if (clean.empty() || glm::distance(clean.back(), q) > 1e-5f) clean.push_back(q);
+    if (clean.size() < 3 || std::abs(signedArea(clean)) <= std::abs(signedArea(pts)) * 1.01f) return false;
+    // Coutures posées sur le pli : elles disparaissent (le pli n'est plus un bord).
+    std::erase_if(g.seams, [&](const Seam& s) {
+        auto onFold = [&](const EdgeRef& e, int cnt) {
+            if (e.panel != panel) return false;
+            for (int k = 0; k < cnt; ++k)
+                if ((e.edge + k) % n == edge) return true;
+            return false;
+        };
+        return onFold(s.a, s.countA) || onFold(s.b, s.countB);
+    });
+    replaceOutline(g, panel, clean);
+    if (std::abs(u.x) < 1e-3f) {   // pli vertical : pièce symétrique autour de lui
+        g.panels[static_cast<std::size_t>(panel)].symmetric = true;
+        g.panels[static_cast<std::size_t>(panel)].symAxisX = p0.x;
+    }
+    return true;
+}
+
 std::vector<int> panelsLike(const Garment& g, int panel, SameProperty prop)
 {
     std::vector<int> out;

@@ -61,6 +61,31 @@ int addInnerShape(Garment& g, int panel, float inset);
 /// Le sens d'ouverture est choisi pour agrandir la pièce. Renvoie false si les points ne conviennent pas.
 bool slashAndSpread(Garment& g, int panel, int fromPoint, int hingePoint, float degrees);
 
+/// Arrondit le coin `point` : il est remplacé par un arc de cercle tangent aux deux bords, qui
+/// commence à `tangentLength` (m) du coin sur chaque bord (limité par la longueur des bords).
+/// Renvoie l'index du premier point de l'arc, ou -1.
+int roundCorner(Garment& g, int panel, int point, float tangentLength, int segments = 10);
+/// Longueur de tangente qui donne l'arrondi le plus doux possible au coin `point` (« convertir en point de courbe »).
+float maxCornerTangent(const Garment& g, int panel, int point);
+
+/// Courbe qui contient le bord `edge` : suite de bords qui tournent de moins de `maxTurnDeg` à chaque point.
+/// `first` = premier point, `count` = nombre de bords.
+void curveAround(const Garment& g, int panel, int edge, int& first, int& count, float maxTurnDeg = 35.0f);
+/// Coupe la courbe qui contient `edge` en `parts` morceaux de même longueur : des points sont ajoutés
+/// aux endroits de coupe (la forme ne change pas). `cuts` reçoit les endroits de coupe.
+/// Renvoie false si aucun point n'a été ajouté.
+bool splitCurve(Garment& g, int panel, int edge, int parts, std::vector<glm::vec2>* cuts = nullptr);
+
+/// Pince au point `point` : deux points écartés de `width` le long du contour et une pointe
+/// enfoncée de `depth` vers l'intérieur de la pièce. Renvoie l'index de la pointe, ou -1.
+int addDart(Garment& g, int panel, int point, float depth, float width);
+/// Aligne le point sur son voisin (précédent si `next` est faux) : horizontalement ou verticalement.
+bool alignPoint(Garment& g, int panel, int point, bool horizontal, bool next);
+
+/// Déplie une demi-pièce : la pièce est complétée par son miroir autour de la droite du bord `edge`
+/// (le pli). Si le pli est vertical, la pièce devient symétrique autour de lui.
+bool unfoldPanel(Garment& g, int panel, int edge);
+
 /// Propriété commune pour « sélectionner les pièces semblables ».
 enum class SameProperty { Color, Zone, LinkGroup };
 std::vector<int> panelsLike(const Garment& g, int panel, SameProperty property);

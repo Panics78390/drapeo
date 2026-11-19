@@ -659,6 +659,47 @@ int main()
             CHECK(std::abs(garment::signedArea(sl.panels[0].points)) > 1.0f);
             CHECK(!garment::slashAndSpread(sl, 0, 0, 1, 15.0f));   // points voisins : rien à écarter
         }
+        // Arrondir un coin, couper la courbe en parties égales, pince, déplier une demi-pièce
+        {
+            garment::Garment h;
+            h.panels.push_back({});
+            h.panels[0].points = {{0, 0}, {0.2f, 0}, {0.2f, 0.5f}, {0, 0.5f}};   // demi-pièce, pli sur x = 0
+            const int arc = garment::roundCorner(h, 0, 2, 0.15f, 10);
+            CHECK(arc >= 0 && h.panels[0].points.size() == 14);
+            // Les points de l'arc sont à 15 cm du centre de l'arc (0.05, 0.35)
+            bool onCircle = true;
+            for (int k = 0; k <= 10; ++k)
+                onCircle = onCircle && std::abs(glm::distance(h.panels[0].points[static_cast<std::size_t>(arc + k)], glm::vec2(0.05f, 0.35f)) - 0.15f) < 1e-3f;
+            CHECK(onCircle);
+            int first = 0, count = 0;
+            garment::curveAround(h, 0, arc + 3, first, count);
+            CHECK(first == arc && count == 10);
+            std::vector<glm::vec2> cuts;
+            CHECK(garment::splitCurve(h, 0, arc + 3, 4, &cuts) && cuts.size() == 3 && h.panels[0].points.size() == 16);
+            // Les coupes sont sur l'arc (la forme ne change pas), au quart, à la moitié et aux trois quarts
+            bool cutsOnArc = true;
+            for (const auto& c : cuts) cutsOnArc = cutsOnArc && std::abs(glm::distance(c, glm::vec2(0.05f, 0.35f)) - 0.15f) < 2e-3f;
+            CHECK(cutsOnArc && near(cuts[1], h.panels[0].points[static_cast<std::size_t>(arc + 6)]));
+            // Bord droit : coupé en 3 morceaux égaux
+            garment::Garment r;
+            r.panels.push_back({});
+            r.panels[0].points = {{0, 0}, {0.3f, 0}, {0.3f, 0.5f}, {0, 0.5f}};
+            CHECK(garment::splitCurve(r, 0, 0, 3) && r.panels[0].points.size() == 6 && near(r.panels[0].points[1], {0.1f, 0}));
+            // Pince : la pointe entre dans la pièce
+            const int tip = garment::addDart(r, 0, 1, 0.08f, 0.03f);
+            CHECK(tip >= 0 && near(r.panels[0].points[static_cast<std::size_t>(tip)], {0.1f, 0.08f}));
+            // Déplier autour du pli vertical x = 0 : pièce deux fois plus grande, symétrique
+            const float before = std::abs(garment::signedArea(h.panels[0].points));
+            int fold = -1;
+            for (int k = 0; k < static_cast<int>(h.panels[0].points.size()); ++k) {
+                const auto a = h.panels[0].points[static_cast<std::size_t>(k)];
+                const auto b = h.panels[0].points[(static_cast<std::size_t>(k) + 1) % h.panels[0].points.size()];
+                if (a.x == 0.0f && b.x == 0.0f) fold = k;
+            }
+            CHECK(fold >= 0 && garment::unfoldPanel(h, 0, fold));
+            CHECK(std::abs(std::abs(garment::signedArea(h.panels[0].points)) - 2.0f * before) < 1e-4f);
+            CHECK(h.panels[0].symmetric && h.panels[0].symAxisX == 0.0f);
+        }
         // Simplifier : les points alignés disparaissent, sauf sur une couture
         sq.panels[0].points = {{0, 0}, {0.5f, 0.0005f}, {1, 0}, {1, 0.5f}, {1, 1}, {0, 1}};
         sq.panels.push_back(sq.panels[0]);

@@ -162,6 +162,16 @@ private:
 
     int sewFor_ = -1, sewBase_ = -1, sewKind_ = 0;
     garment::Garment clipboard_;                  // pièces copiées (Ctrl+C)
+    // Fenêtre « Couper » (outil Ajouter un point / couper) et options du point
+    bool splitOpen_ = false;
+    int splitMode_ = 1;          // 0 : au point cliqué, 1 : en parties égales
+    int splitParts_ = 2;
+    garment::EdgeRef splitEdge_;
+    float splitT_ = 0.5f;
+    float dartDepthCm_ = 6.0f, dartWidthCm_ = 2.0f;
+    void drawSplitWindow();
+    bool applySplit(garment::Garment& g) const;
+    bool drawPointMenu();        // options du point sous la souris (true : menu affiché)
     int pasteCount_ = 0;
     bool menuAtPoint_ = false;                    // collage au point du clic droit
     float offsetCm_ = 1.0f, rotateDeg_ = 15.0f;   // réglages du menu des pièces
