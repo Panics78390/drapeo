@@ -115,6 +115,12 @@ Glissez la poche dans le patron pour la déplacer sur sa base ; déplacer la bas
 - La pièce choisie dans la vue patron est mise en évidence dans la vue 3D (teinte et contour jaunes). Un clic sur une
   pièce en 3D la choisit aussi dans le patron ; la glisser la fait tourner autour du corps (la simulation se met en pause).
 
+## Démarrage et ombre de l'avatar
+
+Au lancement, seul l'avatar est chargé (aucune pièce). La vue patron montre l'ombre de l'avatar vu de face, à
+l'échelle réelle ; elle suit l'avatar importé (taille, rotation). Une pièce tracée sur l'ombre est posée à cet
+endroit du corps en 3D. Affichage › « Ombre de l'avatar dans le patron » pour la masquer.
+
 ## Points et arêtes
 
 - Clic sur une arête : elle est choisie (trait orange et longueur) et se glisse d'un bloc, avec les guides d'alignement.

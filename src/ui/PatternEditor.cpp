@@ -226,6 +226,10 @@ void PatternEditor::frameAll(const garment::Garment& g)
         lo = glm::min(lo, backdrop.min);
         hi = glm::max(hi, backdrop.max);
     }
+    if (lo.x > hi.x && silhouette.texture != 0 && silhouette.visible) {   // patron vide : on cadre la silhouette
+        lo = silhouette.min;
+        hi = silhouette.max;
+    }
     if (lo.x > hi.x) {
         lo = {-0.3f, -0.1f};
         hi = {0.9f, 0.8f};
@@ -249,6 +253,20 @@ void PatternEditor::frameParts(const garment::Garment& g, const std::vector<int>
     center_ = (lo + hi) * 0.5f;
     const glm::vec2 ext = glm::max(hi - lo, glm::vec2(0.05f));
     zoom_ = std::clamp(std::min((canvasSize_.x - 80.0f) / ext.x, (canvasSize_.y - 80.0f) / ext.y), 40.0f, 6000.0f);
+}
+
+void PatternEditor::placeNewPanel(garment::Panel& panel) const
+{
+    if (panel.points.empty() || silhouette.texture == 0) return;
+    glm::vec2 lo(1e9f), hi(-1e9f);
+    for (const auto& q : panel.points) {
+        lo = glm::min(lo, q);
+        hi = glm::max(hi, q);
+    }
+    // La silhouette est à l'échelle réelle (pieds à y = 0) : la pièce tracée devant le buste y est posée en 3D.
+    const float scale = std::max(bodyScale, 0.1f);
+    panel.placement.height = lo.y / scale;
+    panel.placement.offset.x = (lo.x + hi.x) * 0.5f - torsoCenterX * scale;
 }
 
 bool PatternEditor::pointChosen(int panel, int point) const
@@ -461,6 +479,13 @@ bool PatternEditor::draw(garment::Garment& g)
     if (zoom_ * 0.01f > 7.0f) gridLines(0.01f, IM_COL32(255, 255, 255, 8));
     gridLines(0.1f, IM_COL32(255, 255, 255, 18));
     gridLines(0.5f, IM_COL32(255, 255, 255, 34));
+    // Silhouette de l'avatar (ombre de face) sous tout le reste
+    if (silhouette.texture != 0 && silhouette.visible) {
+        dl->AddImage(silhouette.texture, toScreen({silhouette.min.x, silhouette.max.y}), toScreen({silhouette.max.x, silhouette.min.y}),
+                     ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, 255));
+        const ImVec2 a = toScreen({0.0f, silhouette.min.y}), b = toScreen({0.0f, silhouette.max.y});
+        dl->AddLine(a, b, IM_COL32(255, 255, 255, 22), 1.0f);   // axe du corps
+    }
     // Calque : image du patron sous les pièces
     if (backdrop.texture != 0 && backdrop.visible) {
         const int alpha = static_cast<int>(std::clamp(backdrop.opacity, 0.0f, 1.0f) * 255.0f);
@@ -609,6 +634,7 @@ bool PatternEditor::draw(garment::Garment& g)
                         panel.name = "Pièce " + std::to_string(g.panels.size() + 1);
                         panel.placement.flat = true;   // nouvelle pièce : posée à plat
                         panel.points = drawing_;
+                        placeNewPanel(panel);
                         g.panels.push_back(panel);
                         selectedPanel = static_cast<int>(g.panels.size()) - 1;
                         drawing_.clear();
@@ -827,6 +853,7 @@ bool PatternEditor::draw(garment::Garment& g)
                 panel.name = "Pièce " + std::to_string(g.panels.size() + 1);
                 panel.placement.flat = true;   // nouvelle pièce : posée à plat
                 panel.points = {lo, {hi.x, lo.y}, hi, {lo.x, hi.y}};
+                placeNewPanel(panel);
                 g.panels.push_back(panel);
                 selectedPanel = static_cast<int>(g.panels.size()) - 1;
                 selectedPoint = -1;
@@ -860,6 +887,7 @@ bool PatternEditor::draw(garment::Garment& g)
             panel.name = "Pièce " + std::to_string(g.panels.size() + 1);
             panel.placement.flat = true;   // nouvelle pièce : posée à plat
             panel.points = drawing_;
+            placeNewPanel(panel);
             g.panels.push_back(panel);
             selectedPanel = static_cast<int>(g.panels.size()) - 1;
             drawing_.clear();

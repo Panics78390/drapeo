@@ -98,6 +98,8 @@ private:
     bool loadAvatar(const std::string& path);
     void loadDefaultMannequin();
     void applyAvatarTransform();
+    void buildSilhouette();                // ombre de l'avatar (vue de face) pour la vue patron
+    unsigned int silhouetteTex_ = 0;
     void frameCamera();
 
     // --- Interface --------------------------------------------------------------

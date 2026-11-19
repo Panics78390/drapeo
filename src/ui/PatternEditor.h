@@ -42,6 +42,14 @@ public:
     int selectedEdge = -1;             // arête choisie (ses deux points sont dans selectedPoints)
     std::vector<int> selection;   // sélection multiple (rectangle, Maj+clic) ; contient selectedPanel
     Backdrop backdrop;
+    /// Silhouette de l'avatar vu de face, sous le patron (coordonnées 2D = mètres du monde, pieds à y = 0).
+    struct Silhouette {
+        ImTextureID texture = 0;
+        glm::vec2 min{0.0f}, max{0.0f};
+        bool visible = true;
+    } silhouette;
+    float bodyScale = 1.0f;     // hauteur de l'avatar / 1,75 m
+    float torsoCenterX = 0.0f;  // abscisse du centre du buste (avatar de 1,75 m)
     bool magnet = true;           // aimant : points et pièces s'accrochent aux points et bords voisins
 
     [[nodiscard]] bool isSelected(int panel) const;
@@ -125,6 +133,8 @@ private:
     bool hovered_ = false;
     bool pointMarquee_ = false;   // Ctrl + rectangle : sélection de points
     [[nodiscard]] bool pointChosen(int panel, int point) const;
+    /// Nouvelle pièce tracée sur la silhouette : placée à cet endroit du corps en 3D.
+    void placeNewPanel(garment::Panel& panel) const;
     /// Déplace les points choisis de `d` (aimant / guides compris par l'appelant).
     void movePoints(garment::Garment& g, glm::vec2 d);
     bool rightPan_ = false;       // glisser commencé au clic droit

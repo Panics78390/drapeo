@@ -357,9 +357,8 @@ int App::run(const AppOptions& options)
         if (!io::rememberedAvatar(startAvatar)) startAvatar = io::avatarNextToExecutable();
         if (!startAvatar.empty()) loadAvatar(startAvatar);
     }
-    setGarment(garment::makeTankTop());
-    setStatus("Bienvenue dans Drapeo. Modifiez le patron à gauche : le vêtement est recousu en 3D.", false);
-    editor_.selectedPanel = 0;
+    setGarment({});   // au lancement : l'avatar seul, aucune pièce
+    setStatus("Bienvenue dans Drapeo. Tracez une pièce sur l'ombre de l'avatar à gauche, ou choisissez un modèle (menu Modèles).", false);
     showAbout_ = options_.showAbout;
     if (!options_.patternPath.empty()) {
         setGarment({});
@@ -632,6 +631,7 @@ void App::resetCloth()
     clothValid_ = false;
     simTime_ = 0.0f;
     solver_.release();
+    solver_.spheres().clear();   // pas de sphère de démonstration : l'avatar seul
     if (garment_.empty()) {
         garmentMesh_ = {};
         renderer_.setClothTopology({}, 0);
@@ -1111,6 +1111,57 @@ bool App::loadAvatar(const std::string& path)
     return true;
 }
 
+void App::buildSilhouette()
+{
+    // Projection de face (x, y) des triangles de l'avatar dans une image : l'ombre du corps sous le patron.
+    if (silhouetteTex_ != 0) {
+        const gl::GLuint t = silhouetteTex_;
+        gl::DeleteTextures(1, &t);
+        silhouetteTex_ = 0;
+    }
+    editor_.silhouette.texture = 0;
+    const auto& pos = avatarPositions_;
+    const auto& idx = avatarSource_.indices;
+    if (pos.empty() || idx.size() < 3) return;
+    glm::vec2 lo(1e9f), hi(-1e9f);
+    for (const auto& p : pos) {
+        lo = glm::min(lo, glm::vec2(p.x, p.y));
+        hi = glm::max(hi, glm::vec2(p.x, p.y));
+    }
+    const float ppm = 400.0f;   // pixels par mètre
+    const int w = std::clamp(static_cast<int>((hi.x - lo.x) * ppm) + 4, 8, 2048);
+    const int h = std::clamp(static_cast<int>((hi.y - lo.y) * ppm) + 4, 8, 2048);
+    const float sx = static_cast<float>(w - 4) / std::max(hi.x - lo.x, 1e-3f), sy = static_cast<float>(h - 4) / std::max(hi.y - lo.y, 1e-3f);
+    std::vector<unsigned char> mask(static_cast<std::size_t>(w) * static_cast<std::size_t>(h), 0);
+    auto toPx = [&](const glm::vec3& p) { return glm::vec2((p.x - lo.x) * sx + 2.0f, (hi.y - p.y) * sy + 2.0f); };
+    for (std::size_t t = 0; t + 2 < idx.size(); t += 3) {
+        if (idx[t] >= pos.size() || idx[t + 1] >= pos.size() || idx[t + 2] >= pos.size()) continue;
+        const glm::vec2 a = toPx(pos[idx[t]]), b = toPx(pos[idx[t + 1]]), c = toPx(pos[idx[t + 2]]);
+        const float area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+        if (std::abs(area) < 1e-6f) continue;
+        const int x0 = std::max(0, static_cast<int>(std::floor(std::min({a.x, b.x, c.x})))), x1 = std::min(w - 1, static_cast<int>(std::ceil(std::max({a.x, b.x, c.x}))));
+        const int y0 = std::max(0, static_cast<int>(std::floor(std::min({a.y, b.y, c.y})))), y1 = std::min(h - 1, static_cast<int>(std::ceil(std::max({a.y, b.y, c.y}))));
+        for (int y = y0; y <= y1; ++y)
+            for (int x = x0; x <= x1; ++x) {
+                const glm::vec2 p(static_cast<float>(x) + 0.5f, static_cast<float>(y) + 0.5f);
+                const float w0 = ((b.x - p.x) * (c.y - p.y) - (b.y - p.y) * (c.x - p.x)) / area;
+                const float w1 = ((c.x - p.x) * (a.y - p.y) - (c.y - p.y) * (a.x - p.x)) / area;
+                if (w0 >= -0.02f && w1 >= -0.02f && w0 + w1 <= 1.02f) mask[static_cast<std::size_t>(y) * w + x] = 1;
+            }
+    }
+    std::vector<unsigned char> rgba(mask.size() * 4);
+    for (std::size_t i = 0; i < mask.size(); ++i) {
+        rgba[i * 4 + 0] = 205;
+        rgba[i * 4 + 1] = 210;
+        rgba[i * 4 + 2] = 222;
+        rgba[i * 4 + 3] = mask[i] ? 44 : 0;
+    }
+    silhouetteTex_ = uploadTexture(w, h, rgba.data());
+    editor_.silhouette.texture = static_cast<ImTextureID>(silhouetteTex_);
+    editor_.silhouette.min = lo - glm::vec2(2.0f / sx, 2.0f / sy);
+    editor_.silhouette.max = hi + glm::vec2(2.0f / sx, 2.0f / sy);
+}
+
 void App::applyAvatarTransform()
 {
     avatarPositions_ = avatarSource_.positions;
@@ -1123,6 +1174,7 @@ void App::applyAvatarTransform()
     avatarBvh_.build(avatarPositions_, avatarSource_.indices);
     if (showAvatar_) renderer_.setAvatarMesh(avatarPositions_, avatarNormals_, avatarSource_.indices);
     else renderer_.clearAvatar();
+    buildSilhouette();
     solver_.setMeshCollider(&avatarBvh_);
     resetCloth();   // le placement des pièces suit la taille de l'avatar
 }
@@ -1909,6 +1961,7 @@ void App::drawMenuBar()
         ImGui::MenuItem("Fil de fer", nullptr, &appearance_.wireframe);
         ImGui::MenuItem("Carte de tension", nullptr, &appearance_.showStrain);
         ImGui::MenuItem("Envers du tissu en bleu", nullptr, &appearance_.showBackSide);
+        ImGui::MenuItem("Ombre de l'avatar dans le patron", nullptr, &editor_.silhouette.visible);
         if (ImGui::MenuItem("Avatar visible", nullptr, &showAvatar_)) applyAvatarTransform();
         ImGui::Separator();
         if (ImGui::MenuItem("Cadrer l'avatar", "F")) frameCamera();
@@ -2054,6 +2107,8 @@ void App::drawPatternPane()
         ImGui::TextDisabled("  %zu pièce(s), %zu couture(s)", garment_.panels.size(), garment_.seams.size());
         ImGui::SetCursorPos({0, h});
     }
+    editor_.bodyScale = avatarHeight_ / 1.75f;
+    editor_.torsoCenterX = bodyAxes_.torsoCenter.x;
     if (editor_.draw(garment_)) commitGarment();
     if (editor_.menuRequested) {
         editor_.menuRequested = false;
