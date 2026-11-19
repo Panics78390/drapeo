@@ -102,6 +102,7 @@ private:
     void inspectorSewOn(int panel);
     void inspectorTaper();
     void inspectorCombine(int panel);
+    void setPanelSymmetric(int panel, bool on);
     void inspectorFabric();
     void inspectorAvatar();
     void inspectorSimulation();

@@ -129,7 +129,7 @@ void label(const char* text)
 }
 
 // --- Icônes dessinées (aucune ressource externe) ---------------------------
-enum class Icon { Select, Polygon, Rectangle, Seam, Magnet, Play, Pause, Step, Reset, Frame };
+enum class Icon { Select, Polygon, Rectangle, Seam, Magnet, Symmetry, Play, Pause, Step, Reset, Frame };
 
 void drawIcon(ImDrawList* dl, Icon icon, ImVec2 c, float r, ImU32 col)
 {
@@ -174,6 +174,15 @@ void drawIcon(ImDrawList* dl, Icon icon, ImVec2 c, float r, ImU32 col)
         dl->AddLine(P(0.5f, 0.05f), P(0.5f, -0.7f), col, t * 2.2f);
         dl->AddLine(P(-0.72f, -0.55f), P(-0.28f, -0.55f), col, t);
         dl->AddLine(P(0.28f, -0.55f), P(0.72f, -0.55f), col, t);
+        break;
+    }
+    case Icon::Symmetry: {   // deux demi-formes en miroir autour d'un axe en pointillés
+        for (int i = 0; i < 4; ++i) {
+            const float y0 = -0.85f + i * 0.45f;
+            dl->AddLine(P(0.0f, y0), P(0.0f, y0 + 0.25f), col, t);
+        }
+        dl->AddTriangle(P(-0.18f, -0.6f), P(-0.18f, 0.6f), P(-0.8f, 0.6f), col, t);
+        dl->AddTriangleFilled(P(0.18f, -0.6f), P(0.18f, 0.6f), P(0.8f, 0.6f), col);
         break;
     }
     case Icon::Play:
@@ -1771,6 +1780,21 @@ void App::drawToolbar()
     ImGui::SameLine(0, 2);
     if (iconButton("magnet", Icon::Magnet, "Aimant (M)\nLes points et les pièces s'accrochent aux points et bords voisins", editor_.magnet, b))
         editor_.magnet = !editor_.magnet;
+    ImGui::SameLine(0, 2);
+    {
+        const int sel = editor_.selectedPanel;
+        const bool has = sel >= 0 && sel < static_cast<int>(garment_.panels.size());
+        const bool on = has && garment_.panels[static_cast<std::size_t>(sel)].symmetric;
+        if (iconButton("sym", Icon::Symmetry,
+                       has ? "Symétrie de la pièce sélectionnée\nUn point déplacé, ajouté ou supprimé l'est aussi de l'autre côté de l'axe"
+                           : "Symétrie\nSélectionnez d'abord une pièce",
+                       on, b) && has) {
+            std::vector<int> targets = editor_.selection;
+            if (targets.empty()) targets.push_back(sel);
+            for (const int p : targets) setPanelSymmetric(p, !on);
+            setStatus(on ? "Symétrie désactivée." : "Symétrie activée : l'axe est au milieu de la pièce (pointillés bleus).", false);
+        }
+    }
 
     toolbarSeparator(b);
     if (iconButton("play", playing_ ? Icon::Pause : Icon::Play, playing_ ? "Pause (Espace)" : "Simuler (Espace)", playing_, b))
@@ -2016,18 +2040,7 @@ void App::inspectorPanel()
 
     {
         bool sym = panel.symmetric;
-        if (ImGui::Checkbox("Symétrie (axe vertical au milieu)", &sym)) {
-            panel.symmetric = sym;
-            if (sym) {
-                float lo = 1e9f, hi = -1e9f;
-                for (const auto& q : panel.points) {
-                    lo = std::min(lo, q.x);
-                    hi = std::max(hi, q.x);
-                }
-                panel.symAxisX = (lo + hi) * 0.5f;
-            }
-            committed_ = garment_;
-        }
+        if (ImGui::Checkbox("Symétrie (axe vertical au milieu)", &sym)) setPanelSymmetric(idx, sym);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Un point déplacé, ajouté (double-clic) ou supprimé l'est aussi de l'autre côté de l'axe.");
     }
@@ -2182,6 +2195,22 @@ void App::inspectorBackdrop()
     ImGui::SameLine();
     if (ImGui::Button("Retirer l'image", ImVec2(hw, 0))) removeBackdrop();
     ImGui::Spacing();
+}
+
+void App::setPanelSymmetric(int idx, bool on)
+{
+    if (idx < 0 || idx >= static_cast<int>(garment_.panels.size())) return;
+    auto& panel = garment_.panels[static_cast<std::size_t>(idx)];
+    panel.symmetric = on;
+    if (on) {
+        float lo = 1e9f, hi = -1e9f;
+        for (const auto& q : panel.points) {
+            lo = std::min(lo, q.x);
+            hi = std::max(hi, q.x);
+        }
+        panel.symAxisX = (lo + hi) * 0.5f;
+    }
+    committed_ = garment_;
 }
 
 void App::inspectorCombine(int idx)
