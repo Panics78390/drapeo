@@ -560,6 +560,41 @@ int main()
         CHECK(garment::symmetricPartner(s, 2) == 4 && garment::symmetricPartner(s, 0) == 1 && garment::symmetricPartner(s, 3) == -1);
     });
 
+    run("Symétrie : l'autre moitié reproduit les modifications", [] {
+        auto has = [](const std::vector<glm::vec2>& pts, glm::vec2 p) {
+            for (const auto& q : pts)
+                if (glm::distance(q, p) < 1e-4f) return true;
+            return false;
+        };
+        garment::Garment g;
+        garment::Panel a;
+        a.points = {{0, 0}, {1, 0}, {1, 0.6f}, {0, 0.6f}};
+        a.symmetric = true;
+        a.symAxisX = 0.5f;
+        garment::Panel b;
+        b.points = {{2, 0}, {3, 0}, {3, 0.6f}, {2, 0.6f}};
+        g.panels = {a, b};
+        g.seams.push_back({{0, 1}, {1, 3}, false, 1, 1});   // bord droit de a
+        // Point de gauche tiré : la droite suit
+        g.panels[0].points[3] = {-0.1f, 0.7f};
+        CHECK(garment::symmetrizePanel(g, 0, true));
+        CHECK(g.panels[0].points.size() == 5 && has(g.panels[0].points, {1.1f, 0.7f}) && has(g.panels[0].points, {-0.1f, 0.7f}));
+        // Point ajouté à gauche : ajouté aussi à droite ; la couture du bas (intact) n'existe pas, celle de droite a changé
+        g.panels[0].points = {{0, 0}, {1, 0}, {1, 0.6f}, {0, 0.6f}};
+        g.seams = {{{0, 0}, {1, 0}, false, 1, 1}};   // bas de a (traverse l'axe)
+        g.insertPoint(0, 3, {-0.05f, 0.3f});
+        CHECK(garment::symmetrizePanel(g, 0, true));
+        CHECK(g.panels[0].points.size() == 6 && has(g.panels[0].points, {1.05f, 0.3f}));
+        // Découpe d'une encoche à gauche : reproduite à droite
+        g.panels[0].points = {{0, 0}, {1, 0}, {1, 0.6f}, {0, 0.6f}};
+        g.panels.push_back({});
+        g.panels[2].points = {{-0.1f, 0.2f}, {0.1f, 0.2f}, {0.1f, 0.3f}, {-0.1f, 0.3f}};
+        std::string error;
+        CHECK(garment::combinePanels(g, 0, 2, true, error));
+        CHECK(garment::symmetrizePanel(g, 0, true));
+        CHECK(std::abs(std::abs(garment::signedArea(g.panels[0].points)) - (0.6f - 2 * 0.01f)) < 1e-4f && has(g.panels[0].points, {0.9f, 0.2f}));
+    });
+
     std::printf("\n%d vérifications, %d échec(s)\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

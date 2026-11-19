@@ -122,6 +122,16 @@ std::vector<std::vector<glm::vec2>> polygonBoolean(const std::vector<glm::vec2>&
 /// Renvoie false (et `error`) si le résultat n'est pas une seule pièce sans trou.
 bool combinePanels(Garment& g, int target, int shape, bool subtract, std::string& error);
 
+/// Remplace le contour d'une pièce en gardant les coutures dont les bords n'ont pas bougé.
+/// `hint` (facultatif) : nouvel index de chaque ancien point qui a bougé (-1 = inconnu).
+void replaceOutline(Garment& g, int panel, std::vector<glm::vec2> points, const std::vector<int>* hint = nullptr);
+
+/// Contour symétrique reconstruit à partir de la moitié gauche (keepLeft) ou droite de la pièce,
+/// par rapport à son axe. Vide si la pièce ne traverse pas l'axe.
+std::vector<glm::vec2> symmetrizedOutline(const Panel& panel, bool keepLeft);
+/// Applique symmetrizedOutline à une pièce symétrique. Renvoie false si rien n'a été fait.
+bool symmetrizePanel(Garment& g, int panel, bool keepLeft);
+
 /// Index du point symétrique de `point` dans une pièce symétrique (-1 s'il n'y en a pas, ou s'il est sur l'axe).
 int symmetricPartner(const Panel& panel, int point);
 

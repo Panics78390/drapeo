@@ -201,6 +201,25 @@ void PatternEditor::movePanels(garment::Garment& g, const std::vector<int>& ids,
     }
 }
 
+void PatternEditor::applySymmetry(garment::Garment& g, int panel, int point)
+{
+    if (panel < 0 || panel >= static_cast<int>(g.panels.size())) return;
+    const auto& pn = g.panels[static_cast<std::size_t>(panel)];
+    if (!pn.symmetric || point < 0 || point >= static_cast<int>(pn.points.size())) return;
+    const glm::vec2 p = pn.points[static_cast<std::size_t>(point)];
+    if (!garment::symmetrizePanel(g, panel, p.x <= pn.symAxisX)) return;
+    // Le point modifié garde la sélection (son index a pu changer).
+    const auto& pts = g.panels[static_cast<std::size_t>(panel)].points;
+    int best = -1;
+    float bd = 1e9f;
+    for (int k = 0; k < static_cast<int>(pts.size()); ++k)
+        if (const float d = glm::distance(pts[static_cast<std::size_t>(k)], p); d < bd) {
+            bd = d;
+            best = k;
+        }
+    if (panel == selectedPanel) selectedPoint = best;
+}
+
 bool PatternEditor::isSelected(int panel) const
 {
     return panel >= 0 && (panel == selectedPanel || std::find(selection.begin(), selection.end(), panel) != selection.end());
@@ -436,23 +455,7 @@ bool PatternEditor::draw(garment::Garment& g)
             g.insertPoint(hoverEdge_.panel, hoverEdge_.edge, np);
             selectedPanel = hoverEdge_.panel;
             selectedPoint = hoverEdge_.edge + 1;
-            // Pièce symétrique : le même point est ajouté sur le bord miroir.
-            auto& pn = g.panels[static_cast<std::size_t>(hoverEdge_.panel)];
-            if (pn.symmetric && std::abs(np.x - pn.symAxisX) > 0.0015f) {
-                const float ax = pn.symAxisX;
-                const glm::vec2 ma(2 * ax - a.x, a.y), mb(2 * ax - b.x, b.y);
-                const int n = static_cast<int>(pn.points.size());
-                for (int e = 0; e < n; ++e) {
-                    const glm::vec2 p0 = pn.points[static_cast<std::size_t>(e)], p1 = pn.points[static_cast<std::size_t>((e + 1) % n)];
-                    if ((glm::distance(p0, mb) < 0.004f && glm::distance(p1, ma) < 0.004f) ||
-                        (glm::distance(p0, ma) < 0.004f && glm::distance(p1, mb) < 0.004f)) {
-                        if (e == hoverEdge_.edge + 1 || e == hoverEdge_.edge) break;   // bord sur l'axe : rien à faire
-                        g.insertPoint(hoverEdge_.panel, e, {2 * ax - np.x, np.y});
-                        if (e < selectedPoint) ++selectedPoint;
-                        break;
-                    }
-                }
-            }
+            applySymmetry(g, selectedPanel, selectedPoint);   // pièce symétrique : reproduit de l'autre côté
             drag_ = Drag::None;
             committed = true;
         }
@@ -520,7 +523,10 @@ bool PatternEditor::draw(garment::Garment& g)
             }
             dragLast_ = mw;
         } else {
-            if (drag_ == Drag::Point && glm::distance(dragStart_, mw) > 1e-4f) committed = true;
+            if (drag_ == Drag::Point && glm::distance(dragStart_, mw) > 1e-4f) {
+                committed = true;
+                applySymmetry(g, selectedPanel, selectedPoint);
+            }
             if (attachMoved_) committed = true;
             snapExcludePanel_ = symPartner_ = -1;
             symOnAxis_ = false;
@@ -601,13 +607,10 @@ bool PatternEditor::draw(garment::Garment& g)
                 committed = true;
             } else if (selectedPanel >= 0 && selectedPoint >= 0 &&
                        g.panels[static_cast<std::size_t>(selectedPanel)].points.size() > 3) {
-                const int partner = garment::symmetricPartner(g.panels[static_cast<std::size_t>(selectedPanel)], selectedPoint);
-                if (partner >= 0 && g.panels[static_cast<std::size_t>(selectedPanel)].points.size() > 4) {
-                    g.removePoint(selectedPanel, std::max(partner, selectedPoint));
-                    g.removePoint(selectedPanel, std::min(partner, selectedPoint));
-                } else {
-                    g.removePoint(selectedPanel, selectedPoint);
-                }
+                const auto& pn = g.panels[static_cast<std::size_t>(selectedPanel)];
+                const bool left = pn.points[static_cast<std::size_t>(selectedPoint)].x <= pn.symAxisX;
+                g.removePoint(selectedPanel, selectedPoint);
+                if (pn.symmetric) garment::symmetrizePanel(g, selectedPanel, left);   // supprimé des deux côtés
                 selectedPoint = -1;
                 committed = true;
             } else if (selectedPanel >= 0 && selectedPanel < static_cast<int>(g.panels.size())) {
@@ -788,6 +791,17 @@ bool PatternEditor::draw(garment::Garment& g)
         char text[32];
         std::snprintf(text, sizeof(text), "%.1f cm", static_cast<double>(glm::distance(drawing_.back(), snap(mw)) * 100.0f));
         dl->AddText({cur.x + 12, cur.y + 8}, kInk, text);
+    }
+    // Pièce symétrique en cours d'édition : aperçu du contour reconstruit en miroir
+    if (drag_ == Drag::Point && selectedPanel >= 0 && selectedPanel < static_cast<int>(g.panels.size()) &&
+        g.panels[static_cast<std::size_t>(selectedPanel)].symmetric && selectedPoint >= 0) {
+        const auto& pn = g.panels[static_cast<std::size_t>(selectedPanel)];
+        if (selectedPoint < static_cast<int>(pn.points.size())) {
+            const auto preview = garment::symmetrizedOutline(pn, pn.points[static_cast<std::size_t>(selectedPoint)].x <= pn.symAxisX);
+            std::vector<ImVec2> ps;
+            for (const auto& q : preview) ps.push_back(toScreen(q));
+            if (ps.size() >= 3) dl->AddPolyline(ps.data(), static_cast<int>(ps.size()), IM_COL32(120, 200, 255, 230), ImDrawFlags_Closed, 2.0f);
+        }
     }
     // Aimant accroché : petit repère sur le point visé
     if (snapped_ && (drag_ == Drag::Point || drag_ == Drag::Panel || drag_ == Drag::Rect || tool == Tool::Polygon)) {

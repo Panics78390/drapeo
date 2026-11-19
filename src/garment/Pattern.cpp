@@ -383,6 +383,179 @@ int symmetricPartner(const Panel& panel, int point)
     return best;
 }
 
+void replaceOutline(Garment& g, int target, std::vector<glm::vec2> pts, const std::vector<int>* hint)
+{
+    if (target < 0 || target >= static_cast<int>(g.panels.size()) || pts.size() < 3) return;
+    const auto old = g.panels[static_cast<std::size_t>(target)].points;
+    // On garde exactement les anciens points (les calculs les déplacent d'un rien).
+    for (auto& q : pts)
+        for (const auto& o : old)
+            if (glm::distance(q, o) < 2e-5f) q = o;
+    bool reversed = false;
+    if ((signedArea(pts) > 0.0f) != (signedArea(old) > 0.0f)) {
+        std::reverse(pts.begin(), pts.end());
+        reversed = true;
+    }
+    // Correspondance anciens points -> nouveaux, pour garder les coutures.
+    const int n = static_cast<int>(old.size()), m = static_cast<int>(pts.size());
+    std::vector<int> newIndex(static_cast<std::size_t>(n), -1);
+    std::vector<char> viaHint(static_cast<std::size_t>(n), 0);
+    for (int k = 0; k < n; ++k) {
+        for (int j = 0; j < m; ++j)
+            if (pts[static_cast<std::size_t>(j)] == old[static_cast<std::size_t>(k)]) {
+                newIndex[static_cast<std::size_t>(k)] = j;
+                break;
+            }
+        if (newIndex[static_cast<std::size_t>(k)] < 0 && hint != nullptr && k < static_cast<int>(hint->size()) &&
+            (*hint)[static_cast<std::size_t>(k)] >= 0) {
+            const int h = (*hint)[static_cast<std::size_t>(k)];
+            newIndex[static_cast<std::size_t>(k)] = reversed ? m - 1 - h : h;
+            viaHint[static_cast<std::size_t>(k)] = 1;
+        }
+    }
+    // Ancien bord e -> (premier nouveau bord, nombre de bords) ; un bord coupé par de nouveaux points
+    // alignés donne plusieurs bords.
+    auto mapEdge = [&](int e, int& count) {
+        const int a = newIndex[static_cast<std::size_t>(e)], b = newIndex[static_cast<std::size_t>((e + 1) % n)];
+        count = 0;
+        if (a < 0 || b < 0) return -1;
+        const int steps = ((b - a) % m + m) % m;
+        if (steps == 0 || steps > m / 2 + 1) return -1;
+        const glm::vec2 p0 = pts[static_cast<std::size_t>(a)], p1 = pts[static_cast<std::size_t>(b)];
+        // Côté reconstruit en miroir : les points ajoutés en face sont acceptés même s'ils ont bougé.
+        const bool mirrored = viaHint[static_cast<std::size_t>(e)] || viaHint[static_cast<std::size_t>((e + 1) % n)];
+        for (int k = 1; k < steps && !(mirrored && steps <= 4); ++k)
+            if (distanceToSegment(pts[static_cast<std::size_t>((a + k) % m)], p0, p1) > 1e-4f) return -1;
+        count = steps;
+        return a;
+    };
+    std::erase_if(g.seams, [&](Seam& s) {
+        for (int side = 0; side < 2; ++side) {
+            EdgeRef& st = side == 0 ? s.a : s.b;
+            if (st.panel != target) continue;
+            int& cnt = side == 0 ? s.countA : s.countB;
+            int c0 = 0;
+            const int first = mapEdge(st.edge, c0);
+            if (first < 0) return true;
+            int total = c0;
+            for (int k = 1; k < cnt; ++k) {
+                int ck = 0;
+                if (mapEdge((st.edge + k) % n, ck) != (first + total) % m) return true;
+                total += ck;
+            }
+            st.edge = first;
+            cnt = total;
+        }
+        return false;
+    });
+    for (auto& a : g.attachments)
+        if (a.patch == target && (a.startEdge >= m || a.count > m)) {   // pièce posée : bords cousus à recalculer
+            a.startEdge = 0;
+            a.count = 0;
+        }
+    g.panels[static_cast<std::size_t>(target)].points = std::move(pts);
+}
+
+std::vector<glm::vec2> symmetrizedOutline(const Panel& panel, bool keepLeft)
+{
+    const auto& pts = panel.points;
+    if (pts.size() < 3) return {};
+    const float ax = panel.symAxisX;
+    float y0 = 1e9f, y1 = -1e9f, x0 = 1e9f, x1 = -1e9f;
+    for (const auto& q : pts) {
+        y0 = std::min(y0, q.y);
+        y1 = std::max(y1, q.y);
+        x0 = std::min(x0, q.x);
+        x1 = std::max(x1, q.x);
+    }
+    const float big = (x1 - x0) + (y1 - y0) + 1.0f;
+    // Moitié gardée : on retire tout ce qui dépasse de l'autre côté de l'axe.
+    const std::vector<glm::vec2> other = keepLeft
+        ? std::vector<glm::vec2>{{ax, y0 - 1}, {ax + big, y0 - 1}, {ax + big, y1 + 1}, {ax, y1 + 1}}
+        : std::vector<glm::vec2>{{ax - big, y0 - 1}, {ax, y0 - 1}, {ax, y1 + 1}, {ax - big, y1 + 1}};
+    auto halves = polygonBoolean(pts, other, true);
+    if (halves.empty()) return {};
+    std::size_t bi = 0;
+    for (std::size_t k = 1; k < halves.size(); ++k)
+        if (std::abs(signedArea(halves[k])) > std::abs(signedArea(halves[bi]))) bi = k;
+    auto half = halves[bi];
+    if (signedArea(half) < 0.0f) std::reverse(half.begin(), half.end());
+    for (auto& q : half)
+        if (std::abs(q.x - ax) < 2e-5f) q.x = ax;
+    for (auto& q : half)   // points d'origine conservés exactement
+        for (const auto& o : pts)
+            if (glm::distance(q, o) < 2e-5f) q = o;
+    // Le bord posé sur l'axe (il doit y en avoir exactement un)
+    const int n = static_cast<int>(half.size());
+    int axisEdge = -1, count = 0;
+    for (int e = 0; e < n; ++e) {
+        const glm::vec2 a = half[static_cast<std::size_t>(e)], b = half[static_cast<std::size_t>((e + 1) % n)];
+        if (std::abs(a.x - ax) < 2e-5f && std::abs(b.x - ax) < 2e-5f && std::abs(a.y - b.y) > 1e-5f) {
+            axisEdge = e;
+            ++count;
+        }
+    }
+    if (count != 1) return {};
+    // Chaîne hors de l'axe : de l'extrémité du bord d'axe jusqu'à son début
+    std::vector<glm::vec2> chain;
+    for (int k = 0; k < n; ++k) chain.push_back(half[static_cast<std::size_t>((axisEdge + 1 + k) % n)]);
+    std::vector<glm::vec2> full = chain;
+    for (int k = static_cast<int>(chain.size()) - 2; k >= 1; --k) {
+        const glm::vec2 q = chain[static_cast<std::size_t>(k)];
+        full.push_back({2.0f * ax - q.x, q.y});
+    }
+    // Points d'axe ajoutés par le découpage et alignés avec leurs voisins : inutiles
+    auto isOld = [&](glm::vec2 q) {
+        for (const auto& o : pts)
+            if (glm::distance(o, q) < 2e-5f) return true;
+        return false;
+    };
+    for (std::size_t k = 0; k < full.size() && full.size() > 3;) {
+        const glm::vec2 a = full[(k + full.size() - 1) % full.size()], q = full[k], b = full[(k + 1) % full.size()];
+        const glm::vec2 u = q - a, v = b - q;
+        if (std::abs(q.x - ax) < 2e-5f && !isOld(q) && std::abs(u.x * v.y - u.y * v.x) < 1e-9f && glm::dot(u, v) > 0.0f)
+            full.erase(full.begin() + static_cast<std::ptrdiff_t>(k));
+        else
+            ++k;
+    }
+    if ((signedArea(full) < 0.0f) != (signedArea(pts) < 0.0f)) std::reverse(full.begin(), full.end());
+    return full;
+}
+
+bool symmetrizePanel(Garment& g, int panel, bool keepLeft)
+{
+    if (panel < 0 || panel >= static_cast<int>(g.panels.size()) || !g.panels[static_cast<std::size_t>(panel)].symmetric) return false;
+    const auto& pn = g.panels[static_cast<std::size_t>(panel)];
+    auto full = symmetrizedOutline(pn, keepLeft);
+    if (full.size() < 3) return false;
+    // Côté reconstruit : chaque ancien point y devient le miroir de son ancien partenaire, pour
+    // que les coutures de ce côté suivent.
+    const auto& old = pn.points;
+    const float ax = pn.symAxisX;
+    std::vector<int> hint(old.size(), -1);
+    for (std::size_t k = 0; k < old.size(); ++k) {
+        const bool slave = keepLeft ? old[k].x > ax + 1e-5f : old[k].x < ax - 1e-5f;
+        if (!slave) continue;
+        const glm::vec2 want(2.0f * ax - old[k].x, old[k].y);
+        int partner = -1;
+        float bd = 0.004f;
+        for (std::size_t j = 0; j < old.size(); ++j)
+            if (const float d = glm::distance(old[j], want); d < bd) {
+                bd = d;
+                partner = static_cast<int>(j);
+            }
+        if (partner < 0) continue;
+        const glm::vec2 mp(2.0f * ax - old[static_cast<std::size_t>(partner)].x, old[static_cast<std::size_t>(partner)].y);
+        for (std::size_t j = 0; j < full.size(); ++j)
+            if (glm::distance(full[j], mp) < 2e-5f) {
+                hint[k] = static_cast<int>(j);
+                break;
+            }
+    }
+    replaceOutline(g, panel, std::move(full), &hint);
+    return true;
+}
+
 bool combinePanels(Garment& g, int target, int shape, bool subtract, std::string& error)
 {
     const int np = static_cast<int>(g.panels.size());
@@ -406,44 +579,7 @@ bool combinePanels(Garment& g, int target, int shape, bool subtract, std::string
                          : "Les deux formes doivent se toucher pour être réunies.";
         return false;
     }
-    auto pts = std::move(result[0]);
-    // On garde exactement les anciens points (le calcul en double les déplace d'un rien).
-    for (auto& q : pts)
-        for (const auto& o : old)
-            if (glm::distance(q, o) < 1e-5f) q = o;
-    if ((signedArea(pts) > 0.0f) != (signedArea(old) > 0.0f)) std::reverse(pts.begin(), pts.end());
-    // Correspondance anciens points -> nouveaux, pour garder les coutures sur les bords intacts.
-    const int n = static_cast<int>(old.size()), m = static_cast<int>(pts.size());
-    std::vector<int> newIndex(static_cast<std::size_t>(n), -1);
-    for (int k = 0; k < n; ++k)
-        for (int j = 0; j < m; ++j)
-            if (pts[static_cast<std::size_t>(j)] == old[static_cast<std::size_t>(k)]) {
-                newIndex[static_cast<std::size_t>(k)] = j;
-                break;
-            }
-    auto mapEdge = [&](int e) {   // bord e intact -> nouvel index, sinon -1
-        const int a = newIndex[static_cast<std::size_t>(e)], b = newIndex[static_cast<std::size_t>((e + 1) % n)];
-        return (a >= 0 && b == (a + 1) % m) ? a : -1;
-    };
-    std::erase_if(g.seams, [&](Seam& s) {
-        for (int side = 0; side < 2; ++side) {
-            EdgeRef& st = side == 0 ? s.a : s.b;
-            if (st.panel != target) continue;
-            const int cnt = side == 0 ? s.countA : s.countB;
-            const int first = mapEdge(st.edge);
-            if (first < 0) return true;
-            for (int k = 1; k < cnt; ++k)
-                if (mapEdge((st.edge + k) % n) != (first + k) % m) return true;
-            st.edge = first;
-        }
-        return false;
-    });
-    for (auto& a : g.attachments)
-        if (a.patch == target) {   // pièce posée : cousue tout le tour sur le nouveau contour
-            a.startEdge = 0;
-            a.count = 0;
-        }
-    g.panels[static_cast<std::size_t>(target)].points = std::move(pts);
+    replaceOutline(g, target, std::move(result[0]));
     g.removePanel(shape);
     return true;
 }

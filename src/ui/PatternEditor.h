@@ -73,6 +73,8 @@ private:
     glm::vec2 dragApplied_{0.0f};           // déplacement déjà appliqué aux pièces glissées
     /// Déplace des pièces dans le patron ; les poches cousues suivent leur base.
     void movePanels(garment::Garment& g, const std::vector<int>& ids, glm::vec2 d);
+    /// Pièce symétrique : reconstruit l'autre moitié à partir du côté du point modifié.
+    void applySymmetry(garment::Garment& g, int panel, int point);
     bool attachMoved_ = false;   // une pose a bougé pendant le glisser : il faudra recoudre
 
     ImVec2 canvasPos_{0, 0}, canvasSize_{1, 1};

@@ -2256,10 +2256,14 @@ void App::inspectorCombine(int idx)
     if (action >= 0) {
         const int target = combineTarget_;
         const std::string name = garment_.panels[static_cast<std::size_t>(target)].name;
+        const glm::vec2 shapeCentre = garment::centroid(self);
         std::string error;
         if (garment::combinePanels(garment_, target, idx, action == 1, error)) {
             editor_.clearSelection();
             editor_.selectedPanel = idx < target ? target - 1 : target;
+            // Pièce symétrique : l'ajout ou la découpe est reproduit de l'autre côté.
+            auto& tp = garment_.panels[static_cast<std::size_t>(editor_.selectedPanel)];
+            if (tp.symmetric) garment::symmetrizePanel(garment_, editor_.selectedPanel, shapeCentre.x <= tp.symAxisX);
             combineFor_ = -1;
             commitGarment();
             setStatus(std::string(action == 1 ? "Forme découpée dans « " : "Forme ajoutée à « ") + name + " ». Ctrl+Z pour annuler.", false);
