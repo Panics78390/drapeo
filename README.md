@@ -13,8 +13,9 @@ Logiciel original de création de vêtements 3D : on dessine des **patrons 2D**,
 ## Fonctions
 
 - **Éditeur de patrons 2D** : outils Sélection (V), Polygone (P), Rectangle (B), Couture (S) ; double-clic sur un bord pour ajouter un point, Maj pour aimanter à la grille de 1 cm, copie miroir, cotes des bords.
-- **Coutures** numérotées et colorées, inversion du sens, alerte quand les deux bords n'ont pas la même longueur.
-- **Placement** de chaque pièce autour du corps (devant, dos, côtés, hauteur, distance).
+- **Coutures** numérotées et colorées, inversion du sens, alerte quand les deux côtés n'ont pas la même longueur. Une couture peut suivre **plusieurs bords** (emmanchure, encolure, entrejambe) : boutons + / − de l'inspecteur, ou Maj + clic sur le bord voisin.
+- **Placement** de chaque pièce autour du corps : **buste, bras gauche / droit, jambe gauche / droite** (devant, dos, côtés, hauteur, distance).
+- **Projets .drapeo** : Fichier → Enregistrer le projet (Ctrl+S) ; on le rouvre par Ctrl+I ou glisser-déposer.
 - **Simulation XPBD** : étirement, flexion, collisions avec l'avatar (BVH), auto-collisions, frottement ; les coutures se resserrent puis la gravité agit.
 - **Tissus** : coton, soie, denim, cuir, réglables (grammage, épaisseur, raideur, amortissement).
 - **Avatar** : mannequin intégré, ou import **FBX / OBJ** (glisser-déposer accepté), taille et rotation réglables.
@@ -63,11 +64,15 @@ ctest --test-dir build-tests --output-on-failure
 
 Menu **Fichier → Importer un patron...** (Ctrl+I) ou glisser-déposer le fichier sur la fenêtre.
 
-- **PDF vectoriel** (patrons vendus en PDF) : les contours fermés deviennent des pièces, à l'échelle réelle. Les petits tracés (crans, texte) et les lignes de couture intérieures sont ignorés.
+- **PDF vectoriel** (patrons vendus en PDF) : les contours fermés deviennent des pièces, à l'échelle réelle. Les petits tracés (crans, texte) et les lignes de couture intérieures sont ignorés. Les pages d'un PDF de plusieurs planches sont posées côte à côte, et chaque pièce prend le nom de son repère (« H3 DEVANT DU BUSTE »).
 - **Image ou PDF scanné** : indiquez la **largeur réelle** de l'image (préremplie si le fichier contient sa résolution), cochez **Détecter les pièces**. L'image reste en calque ; dans le panneau **Image de fond** on règle l'opacité, l'échelle, la position et le seuil, puis on relance la détection.
 - Après l'import : placez chaque pièce (Devant / Dos) et reliez les bords avec l'outil **Couture**.
 
 ![Import d'une image de patron](docs/capture-import-image.png)
+
+Exemple : une combinaison une pièce importée d'un PDF de deux planches, montée avec des coutures sur plusieurs bords (emmanchures, fourche, entrejambes) et des manches et jambes posées sur les bras et les jambes du mannequin.
+
+![Combinaison assemblée](docs/capture-combinaison.png)
 
 ## Importer un avatar (FBX, OBJ)
 

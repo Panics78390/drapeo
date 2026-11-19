@@ -242,6 +242,26 @@ bool PatternEditor::draw(garment::Garment& g)
                 break;
             case Tool::Seam:
                 if (hoverEdge_.panel >= 0) {
+                    // Maj + clic sur un bord voisin d'une couture sélectionnée : il rejoint ce côté.
+                    if (ImGui::GetIO().KeyShift && pendingSeam_.panel < 0 && selectedSeam >= 0 &&
+                        selectedSeam < static_cast<int>(g.seams.size())) {
+                        const auto& sm = g.seams[static_cast<std::size_t>(selectedSeam)];
+                        for (int side = 0; side < 2; ++side) {
+                            const garment::EdgeRef st = side == 0 ? sm.a : sm.b;
+                            const int cnt = side == 0 ? sm.countA : sm.countB;
+                            if (st.panel != hoverEdge_.panel) continue;
+                            const int n = static_cast<int>(g.panels[static_cast<std::size_t>(st.panel)].points.size());
+                            if (hoverEdge_.edge == (st.edge + cnt) % n) {
+                                committed = g.extendSeam(selectedSeam, side, +1);
+                                break;
+                            }
+                            if (hoverEdge_.edge == (st.edge - 1 + n) % n) {
+                                committed = g.extendSeam(selectedSeam, side, +1, true);
+                                break;
+                            }
+                        }
+                        break;
+                    }
                     if (pendingSeam_.panel < 0) {
                         pendingSeam_ = hoverEdge_;
                     } else if (!(pendingSeam_ == hoverEdge_)) {
@@ -371,12 +391,29 @@ bool PatternEditor::draw(garment::Garment& g)
         if (seam.a.panel >= static_cast<int>(g.panels.size()) || seam.b.panel >= static_cast<int>(g.panels.size())) continue;
         const ImU32 col = seamColor(static_cast<int>(s));
         const float w = static_cast<int>(s) == selectedSeam ? 5.0f : 3.5f;
-        const ImVec2 a0 = toScreen(g.edgeStart(seam.a)), a1 = toScreen(g.edgeEnd(seam.a));
-        const ImVec2 b0 = toScreen(g.edgeStart(seam.b)), b1 = toScreen(g.edgeEnd(seam.b));
-        dl->AddLine(a0, a1, col, w);
-        dl->AddLine(b0, b1, col, w);
-        // Liaison en pointillés entre les milieux des deux bords
-        const ImVec2 ma((a0.x + a1.x) * 0.5f, (a0.y + a1.y) * 0.5f), mb((b0.x + b1.x) * 0.5f, (b0.y + b1.y) * 0.5f);
+        // Chaque côté peut couvrir plusieurs bords (courbe) : on les trace tous,
+        // et la pastille se place au milieu (en longueur) de chaque côté.
+        ImVec2 mids[2];
+        for (int side = 0; side < 2; ++side) {
+            const auto edges = g.seamEdges(seam, side);
+            const float total = g.seamLength(seam, side);
+            float run = 0.0f;
+            bool midSet = false;
+            for (const auto& e : edges) {
+                const ImVec2 p0 = toScreen(g.edgeStart(e)), p1 = toScreen(g.edgeEnd(e));
+                dl->AddLine(p0, p1, col, w);
+                const float l = g.edgeLength(e);
+                if (!midSet && run + l >= total * 0.5f) {
+                    const float t = l > 0.0f ? (total * 0.5f - run) / l : 0.5f;
+                    mids[side] = {p0.x + (p1.x - p0.x) * t, p0.y + (p1.y - p0.y) * t};
+                    midSet = true;
+                }
+                run += l;
+            }
+            if (!midSet && !edges.empty()) mids[side] = toScreen(g.edgeStart(edges.front()));
+        }
+        // Liaison en pointillés entre les milieux des deux côtés
+        const ImVec2 ma = mids[0], mb = mids[1];
         const float len = std::hypot(mb.x - ma.x, mb.y - ma.y);
         const int dashes = std::max(1, static_cast<int>(len / 10.0f));
         for (int k = 0; k < dashes; k += 2) {

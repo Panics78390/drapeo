@@ -12,6 +12,7 @@
 #include <imgui_impl_opengl3.h>
 
 #include "app/FileDialog.h"
+#include "io/ProjectFile.h"
 #include "app/LogoData.h"
 #include "geometry/ClothMesh.h"
 #include "geometry/Mannequin.h"
@@ -631,6 +632,19 @@ void App::importPattern(const std::string& path)
 
     // Extension inconnue (.jfif, sans extension...) : on reconnaît le format au contenu.
     std::string bytes;
+    if (ext == "drapeo") {
+        garment::Garment g;
+        if (!io::loadProject(path, g, error)) {
+            setStatus("Ouverture du projet impossible : " + error, true);
+            return;
+        }
+        setGarment(std::move(g));
+        char text[200];
+        std::snprintf(text, sizeof(text), "Projet %s ouvert : %zu pièce(s), %zu couture(s).", name.c_str(), garment_.panels.size(),
+                      garment_.seams.size());
+        setStatus(text, false);
+        return;
+    }
     if (ext != "svg" && ext != "dxf" && ext != "pdf" && !isImageExtension(ext)) {
         if (!io::readFileBytes(path, bytes, error)) {
             setStatus("Import du patron impossible : " + error, true);
@@ -669,7 +683,7 @@ void App::importPattern(const std::string& path)
             return;
         }
         if (!pdf.outlines.empty()) {
-            addImportedPanels(pdf.outlines, true);
+            addImportedPanels(pdf.outlines, true, pdf.names);
             return;
         }
         // PDF scanné : la page est une image, on l'importe comme calque.
@@ -692,7 +706,8 @@ void App::importPattern(const std::string& path)
     addImportedPanels(outlines, true);
 }
 
-void App::addImportedPanels(const std::vector<std::vector<glm::vec2>>& outlines, bool arrange)
+void App::addImportedPanels(const std::vector<std::vector<glm::vec2>>& outlines, bool arrange,
+                            const std::vector<std::string>& names)
 {
     garment::Garment g = garment_;
     // Les pièces d'un fichier vectoriel sont rangées à droite des pièces existantes ;
@@ -719,7 +734,7 @@ void App::addImportedPanels(const std::vector<std::vector<glm::vec2>>& outlines,
         if (panel.points.size() < 3) continue;
         if (arrange)
             for (auto& q : panel.points) q += glm::vec2(offsetX, 0.0f) - lo;
-        panel.name = "Pièce " + std::to_string(g.panels.size() + 1);
+        panel.name = idx < names.size() && !names[idx].empty() ? names[idx] : "Pièce " + std::to_string(g.panels.size() + 1);
         panel.placement.angleDeg = (added % 2 == 0) ? 0.0f : 180.0f;
         g.panels.push_back(std::move(panel));
         ++added;
@@ -806,6 +821,32 @@ void App::removeBackdrop()
     deleteTexture(backdropTex_);
     backdropImage_ = {};
     editor_.backdrop = {};
+}
+
+void App::saveProjectFile()
+{
+    if (garment_.empty()) {
+        setStatus("Rien à enregistrer : le patron est vide.", true);
+        return;
+    }
+    std::string path;
+    if (hasNativeFileDialog()) {
+        path = saveFileDialog("Enregistrer le projet", "Projet Drapeo|*.drapeo", "drapeo");
+        if (path.empty()) return;
+    } else if (pathPopupKind_ == 3 && pathInput_[0] != '\0') {
+        path = pathInput_;
+    } else {
+        pathPopupKind_ = 3;
+        std::snprintf(pathInput_, sizeof(pathInput_), "vetement.drapeo");
+        showPathPopup_ = true;
+        return;
+    }
+    std::string error;
+    if (!io::saveProject(path, garment_, error)) {
+        setStatus("Enregistrement impossible : " + error, true);
+        return;
+    }
+    setStatus("Projet enregistré : " + path, false);
 }
 
 void App::exportGarment()
@@ -938,6 +979,7 @@ void App::handleShortcuts()
     if (ctrl && ImGui::IsKeyPressed(ImGuiKey_O, false)) openAvatarDialog();
     if (ctrl && ImGui::IsKeyPressed(ImGuiKey_I, false)) openPatternDialog();
     if (ctrl && ImGui::IsKeyPressed(ImGuiKey_E, false)) exportGarment();
+    if (ctrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) saveProjectFile();
     if (ctrl && ImGui::IsKeyPressed(ImGuiKey_N, false)) setGarment({});
     if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_Space, false)) playing_ = !playing_;
     if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_R, false)) resetCloth();
@@ -1013,8 +1055,8 @@ void App::openAvatarDialog()
 void App::openPatternDialog()
 {
     if (hasNativeFileDialog()) {
-        importPattern(openFileDialog("Importer un patron",
-                                     "Patrons (PDF, PNG, JPEG, SVG, DXF)|*.pdf;*.png;*.jpg;*.jpeg;*.jfif;*.jpe;*.bmp;*.gif;*.tga;*.svg;*.dxf"));
+        importPattern(openFileDialog("Ouvrir un projet ou importer un patron",
+                                     "Projets et patrons (DRAPEO, PDF, PNG, JPEG, SVG, DXF)|*.drapeo;*.pdf;*.png;*.jpg;*.jpeg;*.jfif;*.jpe;*.bmp;*.gif;*.tga;*.svg;*.dxf"));
     } else {
         pathPopupKind_ = 1;
         pathInput_[0] = '\0';
@@ -1058,7 +1100,8 @@ void App::drawMenuBar()
         if (ImGui::MenuItem("Nouveau vêtement", "Ctrl+N")) setGarment({});
         ImGui::Separator();
         if (ImGui::MenuItem("Importer un avatar (FBX, OBJ)...", "Ctrl+O")) openAvatarDialog();
-        if (ImGui::MenuItem("Importer un patron (SVG, DXF, PDF, image)...", "Ctrl+I")) openPatternDialog();
+        if (ImGui::MenuItem("Ouvrir un projet / importer un patron...", "Ctrl+I")) openPatternDialog();
+        if (ImGui::MenuItem("Enregistrer le projet...", "Ctrl+S", false, !garment_.empty())) saveProjectFile();
         ImGui::Separator();
         if (ImGui::MenuItem("Exporter le vêtement (OBJ)...", "Ctrl+E", false, clothValid_)) exportGarment();
         ImGui::Separator();
@@ -1389,6 +1432,28 @@ void App::inspectorPanel()
     place("Droite", -90.0f);
 
     bool edited = false;
+    label("Zone");
+    int zone = static_cast<int>(panel.placement.zone);
+    if (ImGui::BeginCombo("##zone", garment::bodyZoneName(panel.placement.zone))) {
+        for (int z = 0; z < garment::kBodyZoneCount; ++z)
+            if (ImGui::Selectable(garment::bodyZoneName(static_cast<garment::BodyZone>(z)), z == zone)) {
+                const bool wasTorso = panel.placement.zone == garment::BodyZone::Torso;
+                panel.placement.zone = static_cast<garment::BodyZone>(z);
+                // Valeurs de départ raisonnables quand on passe du buste à un membre (et inversement).
+                if (wasTorso && z != 0) {
+                    const bool arm = z <= 2;
+                    panel.placement.radius = arm ? 0.07f : 0.11f;
+                    panel.placement.height = arm ? 1.0f : 0.05f;
+                } else if (!wasTorso && z == 0) {
+                    panel.placement.radius = 0.24f;
+                    panel.placement.height = 1.0f;
+                }
+                edited = true;
+            }
+        ImGui::EndCombo();
+    }
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+        ImGui::SetTooltip("Partie du corps autour de laquelle la pièce est enroulée\n(manches sur les bras, jambes de pantalon sur les jambes).");
     label("Angle");
     ImGui::SliderFloat("##angle", &panel.placement.angleDeg, -180.0f, 180.0f, "%.0f°");
     edited |= ImGui::IsItemDeactivatedAfterEdit();
@@ -1398,7 +1463,7 @@ void App::inspectorPanel()
     edited |= ImGui::IsItemDeactivatedAfterEdit();
     float rcm = panel.placement.radius * 100.0f;
     label("Distance");
-    if (ImGui::SliderFloat("##rayon", &rcm, 8.0f, 60.0f, "%.0f cm")) panel.placement.radius = rcm / 100.0f;
+    if (ImGui::SliderFloat("##rayon", &rcm, 3.0f, 60.0f, "%.0f cm")) panel.placement.radius = rcm / 100.0f;
     edited |= ImGui::IsItemDeactivatedAfterEdit();
     if (edited) commitGarment();
 
@@ -1472,6 +1537,11 @@ void App::inspectorSeams()
         if (e.panel < 0 || e.panel >= static_cast<int>(garment_.panels.size())) return std::string("?");
         return garment_.panels[static_cast<std::size_t>(e.panel)].name + " b" + std::to_string(e.edge + 1);
     };
+    const auto sideName = [&](const garment::EdgeRef& e, int count) {
+        std::string t = shortName(e);
+        if (count > 1) t += "-" + std::to_string((e.edge + count - 1) % static_cast<int>(garment_.panels[static_cast<std::size_t>(e.panel)].points.size()) + 1);
+        return t;
+    };
     for (std::size_t s = 0; s < garment_.seams.size(); ++s) {
         auto& seam = garment_.seams[s];
         ImGui::PushID(static_cast<int>(s));
@@ -1487,9 +1557,9 @@ void App::inspectorSeams()
         ImGui::Dummy(ImVec2(h * 0.85f, h));
         ImGui::SameLine();
 
-        const float la = garment_.edgeLength(seam.a), lb = garment_.edgeLength(seam.b);
+        const float la = garment_.seamLength(seam, 0), lb = garment_.seamLength(seam, 1);
         char text[160];
-        std::snprintf(text, sizeof(text), "%s  +  %s", shortName(seam.a).c_str(), shortName(seam.b).c_str());
+        std::snprintf(text, sizeof(text), "%s  +  %s", sideName(seam.a, seam.countA).c_str(), sideName(seam.b, seam.countB).c_str());
         const float buttons = 2 * h + ImGui::GetStyle().ItemSpacing.x;
         ImGui::AlignTextToFramePadding();
         const bool selected = editor_.selectedSeam == static_cast<int>(s);
@@ -1509,6 +1579,22 @@ void App::inspectorSeams()
         ImGui::SameLine(0, ImGui::GetStyle().ItemSpacing.x * 0.5f);
         if (ImGui::Button("x", ImVec2(h, h))) removeIndex = static_cast<int>(s);
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("Supprimer la couture");
+        if (selected) {
+            // Une couture peut suivre plusieurs bords (courbe) : + / - ajoute ou retire le bord suivant.
+            for (int side = 0; side < 2; ++side) {
+                ImGui::PushID(side);
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + h);
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextDisabled("Côté %c : %d bord(s)", side == 0 ? 'A' : 'B', side == 0 ? seam.countA : seam.countB);
+                ImGui::SameLine();
+                if (ImGui::SmallButton("-") && garment_.extendSeam(static_cast<int>(s), side, -1)) commitGarment();
+                ImGui::SameLine();
+                if (ImGui::SmallButton("+") && garment_.extendSeam(static_cast<int>(s), side, +1)) commitGarment();
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                    ImGui::SetTooltip("Ajouter le bord suivant à ce côté\n(ou Maj + clic sur un bord voisin dans le patron)");
+                ImGui::PopID();
+            }
+        }
         if (std::abs(la - lb) > 0.01f) {
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + h);
             ImGui::TextColored(ImVec4(0.92f, 0.70f, 0.35f, 1.0f), "Longueurs différentes : %.1f / %.1f cm (embu)",
@@ -1739,7 +1825,8 @@ void App::drawAboutWindow()
     }
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     if (ImGui::BeginPopupModal("Ouvrir un fichier", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        const char* what[] = {"Avatar (.fbx, .obj)", "Patron (.svg, .dxf, .pdf, .png, .jpg)", "Export OBJ"};
+        const char* what[] = {"Avatar (.fbx, .obj)", "Projet .drapeo ou patron (.svg, .dxf, .pdf, .png, .jpg)", "Export OBJ",
+                              "Enregistrer le projet (.drapeo)"};
         ImGui::TextUnformatted(what[pathPopupKind_]);
         ImGui::SetNextItemWidth(420 * uiScale_);
         const bool enter = ImGui::InputText("##chemin", pathInput_, sizeof(pathInput_), ImGuiInputTextFlags_EnterReturnsTrue);
@@ -1748,6 +1835,7 @@ void App::drawAboutWindow()
             ImGui::CloseCurrentPopup();
             if (pathPopupKind_ == 0) loadAvatar(path);
             else if (pathPopupKind_ == 1) importPattern(path);
+            else if (pathPopupKind_ == 3) saveProjectFile();
             else exportGarment();
             pathInput_[0] = '\0';
         }

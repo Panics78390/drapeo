@@ -65,7 +65,9 @@ private:
     void redo();
     void updateClothColors();
     void importPattern(const std::string& path);
-    void addImportedPanels(const std::vector<std::vector<glm::vec2>>& outlines, bool arrange);
+    void addImportedPanels(const std::vector<std::vector<glm::vec2>>& outlines, bool arrange,
+                           const std::vector<std::string>& names = {});
+    void saveProjectFile();
     void beginImageImport(io::RasterImage image, const std::string& name);
     void finishImageImport();
     void updateBackdropRect();
@@ -168,7 +170,7 @@ private:
     std::string pendingDrop_;
     char pathInput_[1024] = "";
     bool showPathPopup_ = false;
-    int pathPopupKind_ = 0;                      // 0 avatar, 1 patron, 2 export
+    int pathPopupKind_ = 0;                      // 0 avatar, 1 patron, 2 export, 3 projet
     bool showAbout_ = false;
     bool showShortcuts_ = false;
 

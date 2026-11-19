@@ -17,6 +17,7 @@
 #include "io/MeshImport.h"
 #include "io/PatternImport.h"
 #include "io/PdfImport.h"
+#include "io/ProjectFile.h"
 #include "io/RasterImage.h"
 #include "garment/GarmentMesher.h"
 #include "geometry/Mannequin.h"
@@ -428,6 +429,53 @@ int main()
 
         const std::string jfif("\xFF\xD8\xFF\xE0\x00\x10JFIF\x00\x01\x02\x01\x01\x2C\x01\x2C\x00\x00\xFF\xDA", 22);
         CHECK(std::abs(io::detectDpi(jfif) - 300.0f) < 0.5f);
+    });
+
+    run("Coutures sur plusieurs bords, zones du corps et projet .drapeo", [] {
+        // Pièce A : carré dont le côté droit est coupé en deux bords ; pièce B : carré simple.
+        garment::Garment g;
+        garment::Panel a, b;
+        a.name = "A";
+        a.points = {{0, 0}, {0.3f, 0}, {0.3f, 0.15f}, {0.3f, 0.3f}, {0, 0.3f}};
+        b.name = "B";
+        b.points = {{0.4f, 0}, {0.7f, 0}, {0.7f, 0.3f}, {0.4f, 0.3f}};
+        b.placement.zone = garment::BodyZone::LeftLeg;
+        b.placement.radius = 0.1f;
+        b.placement.height = 0.3f;
+        g.panels = {a, b};
+        garment::Seam s;
+        s.a = {0, 1};
+        s.countA = 2;   // bords 1 et 2 de A (30 cm)
+        s.b = {1, 3};   // bord gauche de B (30 cm)
+        g.seams.push_back(s);
+        CHECK(std::abs(g.seamLength(s, 0) - 0.3f) < 1e-4f);
+        garment::GarmentMesh m;
+        std::string error;
+        garment::MeshingOptions opt;
+        CHECK(garment::buildGarmentMesh(g, opt, m, error));
+        CHECK(m.seamPairs.size() == 16);   // 15 segments de 2 cm -> 16 paires de sommets
+        // Pièce B posée autour de la jambe gauche (x > 0), A autour du buste.
+        glm::vec3 c(0.0f);
+        int count = 0;
+        for (std::size_t i = 0; i < m.panelOfVertex.size(); ++i)
+            if (m.panelOfVertex[i] == 1) { c += m.mesh.positions[i]; ++count; }
+        c /= static_cast<float>(std::max(count, 1));
+        CHECK(c.x > 0.06f && c.x < 0.14f && c.y > 0.3f && c.y < 0.65f);
+        // Couper un bord de la couture l'agrandit au lieu de la supprimer.
+        g.insertPoint(0, 2, {0.3f, 0.2f});
+        CHECK(g.seams.size() == 1 && g.seams[0].countA == 3 && g.seams[0].a.edge == 1);
+        g.removePoint(0, 3);
+        CHECK(g.seams.size() == 1 && g.seams[0].countA == 2);
+        CHECK(!g.extendSeam(0, 1, -1));   // au moins un bord
+        CHECK(g.extendSeam(0, 0, +1, true) && g.seams[0].a.edge == 0 && g.seams[0].countA == 3);
+        // Aller-retour du projet
+        garment::Garment back;
+        CHECK(io::parseProject(io::writeProject(g), back, error));
+        CHECK(back.panels.size() == 2 && back.seams.size() == 1);
+        CHECK(back.panels[1].placement.zone == garment::BodyZone::LeftLeg && back.panels[0].name == "A");
+        CHECK(back.seams[0].countA == 3 && back.seams[0].b.edge == 3);
+        CHECK(io::pieceCode("H3 DEVANT DU BUSTE") == "H3" && io::pieceCode("J4b PAREMENTURE") == "J4b" &&
+              io::pieceCode("DROIT FIL").empty() && io::pieceCode("x1 sur la pliure").empty());
     });
 
     std::printf("\n%d vérifications, %d échec(s)\n", g_checks, g_failures);

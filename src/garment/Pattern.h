@@ -15,10 +15,16 @@
 
 namespace drapeo::garment {
 
+/// Partie du corps autour de laquelle la pièce est enroulée.
+enum class BodyZone { Torso = 0, LeftArm, RightArm, LeftLeg, RightLeg };
+inline constexpr int kBodyZoneCount = 5;
+const char* bodyZoneName(BodyZone z);
+
 struct Placement {
     float angleDeg = 0.0f;   // 0 = devant, 180 = dos, 90 = côté gauche de l'avatar (+X)
     float height = 1.0f;     // hauteur du bas de la pièce (m), pour un avatar de 1,75 m
     float radius = 0.24f;    // rayon du cylindre d'enroulement (m)
+    BodyZone zone = BodyZone::Torso;   // buste, ou cylindre incliné le long d'un bras / d'une jambe
 };
 
 struct Panel {
@@ -35,9 +41,13 @@ struct EdgeRef {
     bool operator==(const EdgeRef& o) const { return panel == o.panel && edge == o.edge; }
 };
 
+/// Une couture relie deux suites de bords consécutifs (une courbe d'emmanchure,
+/// d'entrejambe... est faite de plusieurs bords) : `a.edge`, `a.edge + 1`, ...
+/// `countA` bords côté A, `countB` côté B.
 struct Seam {
     EdgeRef a, b;
     bool flipped = false;   // inverse le sens d'appariement choisi automatiquement
+    int countA = 1, countB = 1;
 };
 
 struct Garment {
@@ -48,6 +58,12 @@ struct Garment {
     [[nodiscard]] glm::vec2 edgeStart(const EdgeRef& e) const;
     [[nodiscard]] glm::vec2 edgeEnd(const EdgeRef& e) const;
     [[nodiscard]] float edgeLength(const EdgeRef& e) const;
+    /// Bords d'un côté de couture (côté 0 = A, 1 = B), dans l'ordre.
+    [[nodiscard]] std::vector<EdgeRef> seamEdges(const Seam& s, int side) const;
+    [[nodiscard]] float seamLength(const Seam& s, int side) const;
+    /// Ajoute (delta = +1) ou retire (-1) un bord au bout d'un côté de couture
+    /// (au début du côté si atStart).
+    bool extendSeam(int seam, int side, int delta, bool atStart = false);
 
     // Édition qui garde les coutures cohérentes.
     void removePanel(int panel);

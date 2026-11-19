@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <sstream>
+#include <map>
 #include <cstdint>
 #include <cstdlib>
 
@@ -115,8 +117,25 @@ bool isDelimiter(char ch)
 }
 } // namespace
 
-void parsePdfContent(const std::string& s, std::vector<std::vector<glm::vec2>>& closedPaths, std::size_t& pathCount)
+std::string pieceCode(const std::string& t)
 {
+    std::size_t i = 0;
+    while (i < t.size() && i < 2 && std::isupper(static_cast<unsigned char>(t[i]))) ++i;
+    if (i == 0) return {};
+    const std::size_t d = i;
+    while (i < t.size() && i < d + 2 && std::isdigit(static_cast<unsigned char>(t[i]))) ++i;
+    if (i == d) return {};
+    if (i < t.size() && std::islower(static_cast<unsigned char>(t[i]))) ++i;
+    if (i < t.size() && t[i] != ' ' && t[i] != '-' && t[i] != ':') return {};
+    return t.substr(0, i);
+}
+
+void parsePdfContent(const std::string& s, std::vector<std::vector<glm::vec2>>& closedPaths, std::size_t& pathCount,
+                     std::vector<PdfText>* texts)
+{
+    Matrix tm, tlm;          // matrices de texte (BT ... ET)
+    float fontSize = 0.0f;
+    std::string str;         // chaînes lues depuis le dernier opérateur
     std::vector<float> stack;
     std::vector<Matrix> saved;
     Matrix ctm;
@@ -164,9 +183,21 @@ void parsePdfContent(const std::string& s, std::vector<std::vector<glm::vec2>>& 
         if (ch == '(') {   // chaîne littérale (parenthèses imbriquées, échappements)
             int depth = 0;
             for (; i < n; ++i) {
-                if (s[i] == '\\') { ++i; continue; }
-                if (s[i] == '(') ++depth;
+                if (s[i] == '\\') {
+                    if (i + 1 >= n) break;
+                    const char e = s[++i];
+                    if (e >= '0' && e <= '7') {   // \ddd octal
+                        int v = 0, k = 0;
+                        while (k < 3 && i < n && s[i] >= '0' && s[i] <= '7') { v = v * 8 + (s[i] - '0'); ++i; ++k; }
+                        --i;
+                        str += static_cast<char>(v);
+                    } else if (e == 'n') str += '\n';
+                    else if (e != '\r' && e != '\n') str += e;
+                    continue;
+                }
+                if (s[i] == '(') { if (depth++ == 0) continue; }
                 else if (s[i] == ')' && --depth == 0) { ++i; break; }
+                str += s[i];
             }
             stack.clear();
             continue;
@@ -213,11 +244,22 @@ void parsePdfContent(const std::string& s, std::vector<std::vector<glm::vec2>>& 
         else if (tok == "S") paint(false);
         else if (tok == "s" || tok == "f" || tok == "F" || tok == "f*" || tok == "B" || tok == "B*" || tok == "b" || tok == "b*") paint(true);
         else if (tok == "n") path.clear();   // tracé de découpe (clip) : non dessiné
+        else if (tok == "BT") { tm = tlm = Matrix{}; }
+        else if (tok == "Tm" && k >= 6) { tm = tlm = Matrix{arg(0, 6), arg(1, 6), arg(2, 6), arg(3, 6), arg(4, 6), arg(5, 6)}; }
+        else if ((tok == "Td" || tok == "TD") && k >= 2) { tlm.preMultiply(Matrix{1, 0, 0, 1, arg(0, 2), arg(1, 2)}); tm = tlm; }
+        else if (tok == "Tf" && k >= 1) fontSize = arg(0, 1);
+        else if ((tok == "Tj" || tok == "TJ" || tok == "'" || tok == "\"") && texts != nullptr && !str.empty()) {
+            Matrix m = ctm;   // espace texte -> page : tm puis ctm
+            m.preMultiply(tm);
+            const float scale = std::sqrt(std::abs(m.a * m.d - m.b * m.c));
+            texts->push_back({m.apply(0.0f, 0.0f) * kPoint, fontSize * scale * kPoint, str});
+        }
         else if (tok == "BI") {              // image en ligne : sauter jusqu'à EI
             const std::size_t e = s.find("EI", i);
             i = e == std::string::npos ? n : e + 2;
         }
         stack.clear();
+        str.clear();
     }
 }
 
@@ -228,12 +270,79 @@ bool parsePdf(const std::string& bytes, PdfPatternResult& out, std::string& erro
         return false;
     }
     std::vector<std::vector<glm::vec2>> closed;
+    std::vector<PdfText> texts;
+
+    // Pages : chaque flux de contenu est décalé pour poser les planches côte à côte
+    // (sinon les pages d'un PDF multi-pages se superposent).
+    std::map<int, glm::vec2> contentOffset;   // numéro d'objet du flux -> décalage (m)
+    {
+        struct PageInfo { int obj; std::vector<int> contents; float width; };
+        std::map<int, PageInfo> pages;
+        std::size_t p = 0;
+        while ((p = bytes.find(" 0 obj", p)) != std::string::npos) {
+            std::size_t numStart = p;
+            while (numStart > 0 && std::isdigit(static_cast<unsigned char>(bytes[numStart - 1]))) --numStart;
+            const int obj = std::atoi(bytes.c_str() + numStart);
+            const std::size_t end = std::min(bytes.find("endobj", p), p + 6000);
+            const std::string body = bytes.substr(p, end == std::string::npos ? 0 : end - p);
+            p += 6;
+            const std::size_t streamAt = body.find("stream");
+            const std::string head = body.substr(0, streamAt);
+            std::size_t t = head.find("/Type /Page");
+            if (t == std::string::npos) t = head.find("/Type/Page");
+            if (t == std::string::npos) continue;
+            const std::size_t after = head.find("Page", t) + 4;
+            if (after < head.size() && head[after] == 's') continue;   // /Pages
+            PageInfo info{obj, {}, 0.0f};
+            if (const std::size_t c = head.find("/Contents"); c != std::string::npos) {
+                std::size_t q = c + 9;
+                while (q < head.size() && std::isspace(static_cast<unsigned char>(head[q]))) ++q;
+                const bool array = q < head.size() && head[q] == '[';
+                const std::size_t stop = array ? head.find(']', q) : head.find('R', q);
+                std::istringstream refs(head.substr(array ? q + 1 : q, stop == std::string::npos ? 0 : stop + 1 - q - (array ? 1 : 0)));
+                std::string a, b, r;
+                while (refs >> a >> b >> r) info.contents.push_back(std::atoi(a.c_str()));
+            }
+            if (const std::size_t mb = head.find("/MediaBox"); mb != std::string::npos) {
+                float v[4] = {};
+                const char* q = head.c_str() + head.find('[', mb) + 1;
+                for (float& x : v) {
+                    char* e = nullptr;
+                    x = std::strtof(q, &e);
+                    q = e;
+                }
+                info.width = (v[2] - v[0]) * kPoint;
+            }
+            pages[obj] = info;
+        }
+        // Ordre des pages : celui de /Kids, sinon l'ordre des objets.
+        std::vector<int> order;
+        if (const std::size_t k = bytes.find("/Kids"); k != std::string::npos) {
+            const std::size_t open = bytes.find('[', k), close = bytes.find(']', k);
+            std::istringstream refs(bytes.substr(open + 1, close - open - 1));
+            std::string a, b, r;
+            while (refs >> a >> b >> r)
+                if (pages.count(std::atoi(a.c_str()))) order.push_back(std::atoi(a.c_str()));
+        }
+        if (order.size() != pages.size()) {
+            order.clear();
+            for (const auto& [obj, info] : pages) order.push_back(obj);
+        }
+        float x = 0.0f;
+        for (const int obj : order) {
+            const auto& info = pages[obj];
+            for (const int c : info.contents) contentOffset[c] = {x, 0.0f};
+            x += info.width + 0.10f;
+        }
+    }
+
     std::size_t pos = 0;
     long long bestImagePixels = 0;
     while ((pos = bytes.find("stream", pos)) != std::string::npos) {
         // « endstream » contient aussi « stream » : on l'ignore.
         if (pos >= 3 && bytes.compare(pos - 3, 3, "end") == 0) { pos += 6; continue; }
         const std::size_t objStart = bytes.rfind(" obj", pos);
+        const std::size_t streamPos = pos;
         const std::size_t dictStart = objStart == std::string::npos || pos - objStart > 4000 ? (pos > 2000 ? pos - 2000 : 0) : objStart;
         const std::string dict = bytes.substr(dictStart, pos - dictStart);
         std::size_t dataStart = pos + 6;
@@ -319,7 +428,23 @@ bool parsePdf(const std::string& bytes, PdfPatternResult& out, std::string& erro
             dict.find("/ASCIIHexDecode") != std::string::npos)
             supported = false;   // filtres rares, non gérés
         if (!supported) continue;
-        parsePdfContent(content, closed, out.paths);
+        const std::size_t before = closed.size(), textsBefore = texts.size();
+        parsePdfContent(content, closed, out.paths, &texts);
+        // Numéro d'objet du flux : « N 0 obj » juste avant le dictionnaire.
+        if (objStart != std::string::npos && streamPos - objStart < 6000) {
+            std::size_t numStart = objStart;
+            while (numStart > 0 && bytes[numStart - 1] == ' ') --numStart;
+            while (numStart > 0 && std::isdigit(static_cast<unsigned char>(bytes[numStart - 1]))) --numStart;
+            while (numStart > 0 && bytes[numStart - 1] == ' ') --numStart;
+            std::size_t objNumStart = numStart;
+            while (objNumStart > 0 && std::isdigit(static_cast<unsigned char>(bytes[objNumStart - 1]))) --objNumStart;
+            const auto it = contentOffset.find(std::atoi(bytes.c_str() + objNumStart));
+            if (it != contentOffset.end()) {
+                for (std::size_t k = before; k < closed.size(); ++k)
+                    for (auto& q : closed[k]) q += it->second;
+                for (std::size_t k = textsBefore; k < texts.size(); ++k) texts[k].position += it->second;
+            }
+        }
     }
 
     // Nettoyage : simplification, petits tracés (crans, texte), cadre de page, doublons.
@@ -349,7 +474,33 @@ bool parsePdf(const std::string& bytes, PdfPatternResult& out, std::string& erro
         if (p.size() <= 5 && page.x > 0.0f && size.x > 0.97f * page.x && size.y > 0.97f * page.y) continue;   // cadre de page
         out.outlines.push_back(std::move(p));
     }
+    // Cadre d'une planche : un rectangle qui contient plusieurs autres contours.
+    for (std::size_t i = 0; i < out.outlines.size();) {
+        const auto& f = out.outlines[i];
+        int inside = 0;
+        if (f.size() <= 5)
+            for (std::size_t j = 0; j < out.outlines.size(); ++j)
+                if (j != i && garment::pointInPolygon(f, garment::centroid(out.outlines[j]))) ++inside;
+        if (inside >= 3) out.outlines.erase(out.outlines.begin() + static_cast<std::ptrdiff_t>(i));
+        else ++i;
+    }
     keepOutermost(out.outlines);
+
+    // Nom de chaque pièce : le plus grand titre « H3 DEVANT DU BUSTE » posé dedans.
+    out.names.assign(out.outlines.size(), {});
+    std::vector<float> bestSize(out.outlines.size(), 0.0f);
+    for (const auto& t : texts) {
+        const std::string code = pieceCode(t.text);
+        if (code.empty()) continue;
+        for (std::size_t k = 0; k < out.outlines.size(); ++k) {
+            if (t.size <= bestSize[k] || !garment::pointInPolygon(out.outlines[k], t.position)) continue;
+            // Accents dans une police à encodage propre au fichier : on ne garde que le repère.
+            bool plain = t.text.size() <= 48;
+            for (const char c : t.text) plain &= c >= 0x20 && c < 0x7F;
+            out.names[k] = plain ? t.text : code;
+            bestSize[k] = t.size;
+        }
+    }
     if (out.outlines.empty() && out.jpeg.empty() && out.image.width == 0) {
         error = out.paths > 0 ? "Le PDF contient des tracés, mais aucun contour fermé assez grand pour être une pièce."
                               : "Aucun tracé ni image exploitable dans ce PDF.";

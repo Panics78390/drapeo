@@ -26,14 +26,42 @@ PanelFrame frameOf(const Panel& p)
 }
 } // namespace
 
+static void limbAxis(BodyZone zone, glm::vec3& top, glm::vec3& bottom)
+{
+    // Axes des membres du mannequin intégré (avatar de 1,75 m, bras en A).
+    const float sx = (zone == BodyZone::LeftArm || zone == BodyZone::LeftLeg) ? 1.0f : -1.0f;
+    if (zone == BodyZone::LeftArm || zone == BodyZone::RightArm) {
+        top = {sx * 0.175f, 1.40f, 0.0f};
+        bottom = {sx * 0.465f, 0.96f, 0.02f};
+    } else {
+        top = {sx * 0.095f, 0.98f, 0.0f};
+        bottom = {sx * 0.10f, 0.04f, 0.0f};
+    }
+}
+
 glm::vec3 placePoint(const Panel& panel, glm::vec2 p, const MeshingOptions& options)
 {
     const PanelFrame f = frameOf(panel);
-    const float R = std::max(panel.placement.radius * options.bodyScale, 0.05f);
+    const float R = std::max(panel.placement.radius * options.bodyScale, 0.03f);
     const float u = p.x - f.cx;           // abscisse le long du tour du corps
     const float v = p.y - f.minY;         // hauteur dans la pièce
     const float a = glm::radians(panel.placement.angleDeg) + u / R;
-    return options.bodyCenter + glm::vec3(R * std::sin(a), panel.placement.height * options.bodyScale + v, R * std::cos(a));
+    if (panel.placement.zone == BodyZone::Torso)
+        return options.bodyCenter + glm::vec3(R * std::sin(a), panel.placement.height * options.bodyScale + v, R * std::cos(a));
+
+    // Membre : cylindre le long de l'axe incliné ; le bas de la pièce est posé à
+    // l'endroit de l'axe qui est à la hauteur `height`.
+    glm::vec3 top, bottom;
+    limbAxis(panel.placement.zone, top, bottom);
+    top *= options.bodyScale;
+    bottom *= options.bodyScale;
+    const glm::vec3 up = glm::normalize(top - bottom);
+    const float h0 = panel.placement.height * options.bodyScale;
+    const float t = (h0 - bottom.y) / std::max(top.y - bottom.y, 1e-4f);
+    const glm::vec3 base = bottom + (top - bottom) * t;
+    const glm::vec3 front = glm::normalize(glm::vec3(0, 0, 1) - up * up.z);
+    const glm::vec3 side = glm::cross(up, front);
+    return options.bodyCenter + base + up * v + R * (std::sin(a) * side + std::cos(a) * front);
 }
 
 bool buildGarmentMesh(const Garment& garment, const MeshingOptions& options, GarmentMesh& out, std::string& error)
@@ -54,10 +82,30 @@ bool buildGarmentMesh(const Garment& garment, const MeshingOptions& options, Gar
             segments[{static_cast<int>(p), e}] = std::max(1, static_cast<int>(std::lround(len / h)));
         }
     }
+    // Couture : les deux côtés reçoivent le même nombre total de segments, répartis
+    // sur les bords de chaque côté au prorata de leur longueur.
     for (const auto& s : garment.seams) {
-        const int m = std::max(segments[{s.a.panel, s.a.edge}], segments[{s.b.panel, s.b.edge}]);
-        segments[{s.a.panel, s.a.edge}] = m;
-        segments[{s.b.panel, s.b.edge}] = m;
+        const auto A = garment.seamEdges(s, 0), B = garment.seamEdges(s, 1);
+        if (A.empty() || B.empty()) continue;
+        const float len = std::max(garment.seamLength(s, 0), garment.seamLength(s, 1));
+        const int m = std::max({static_cast<int>(std::lround(len / h)), static_cast<int>(A.size()), static_cast<int>(B.size()), 1});
+        for (const auto* chain : {&A, &B}) {
+            float total = 0.0f;
+            for (const auto& e : *chain) total += garment.edgeLength(e);
+            std::vector<int> segs(chain->size(), 1);
+            std::vector<std::pair<float, std::size_t>> rest;
+            int used = static_cast<int>(chain->size());
+            for (std::size_t k = 0; k < chain->size(); ++k) {
+                const float share = total > 0.0f ? garment.edgeLength((*chain)[k]) / total * static_cast<float>(m) : 1.0f;
+                const int extra = std::max(0, static_cast<int>(std::floor(share)) - 1);
+                segs[k] += extra;
+                used += extra;
+                rest.push_back({share - std::floor(share), k});
+            }
+            std::sort(rest.begin(), rest.end(), [](const auto& x, const auto& y) { return x.first > y.first; });
+            for (std::size_t k = 0; used < m; k = (k + 1) % rest.size(), ++used) ++segs[rest[k].second];
+            for (std::size_t k = 0; k < chain->size(); ++k) segments[{(*chain)[k].panel, (*chain)[k].edge}] = segs[k];
+        }
     }
 
     // Sommets (indices globaux) de chaque bord, du début à la fin.
@@ -151,8 +199,14 @@ bool buildGarmentMesh(const Garment& garment, const MeshingOptions& options, Gar
 
     // --- 5. Coutures ----------------------------------------------------------
     for (const auto& s : garment.seams) {
-        const auto& A = edgeVertices[{s.a.panel, s.a.edge}];
-        const auto& B = edgeVertices[{s.b.panel, s.b.edge}];
+        std::vector<uint32_t> A, B;
+        for (int side = 0; side < 2; ++side) {
+            auto& ids = side == 0 ? A : B;
+            for (const auto& e : garment.seamEdges(s, side)) {
+                const auto& ev = edgeVertices[{e.panel, e.edge}];
+                ids.insert(ids.end(), ev.begin() + (ids.empty() ? 0 : 1), ev.end());
+            }
+        }
         if (A.size() != B.size() || A.empty()) continue;
         const std::size_t m = A.size();
         float direct = 0.0f, reversed = 0.0f;

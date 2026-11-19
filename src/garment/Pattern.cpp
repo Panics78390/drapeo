@@ -18,10 +18,101 @@ glm::vec2 Garment::edgeEnd(const EdgeRef& e) const
 
 float Garment::edgeLength(const EdgeRef& e) const { return glm::distance(edgeStart(e), edgeEnd(e)); }
 
+const char* bodyZoneName(BodyZone z)
+{
+    switch (z) {
+    case BodyZone::Torso: return "Buste";
+    case BodyZone::LeftArm: return "Bras gauche";
+    case BodyZone::RightArm: return "Bras droit";
+    case BodyZone::LeftLeg: return "Jambe gauche";
+    case BodyZone::RightLeg: return "Jambe droite";
+    }
+    return "?";
+}
+
+std::vector<EdgeRef> Garment::seamEdges(const Seam& s, int side) const
+{
+    const EdgeRef start = side == 0 ? s.a : s.b;
+    const int count = side == 0 ? s.countA : s.countB;
+    std::vector<EdgeRef> out;
+    if (start.panel < 0 || start.panel >= static_cast<int>(panels.size())) return out;
+    const int n = static_cast<int>(panels[static_cast<std::size_t>(start.panel)].points.size());
+    for (int k = 0; k < std::min(count, n); ++k) out.push_back({start.panel, (start.edge + k) % n});
+    return out;
+}
+
+float Garment::seamLength(const Seam& s, int side) const
+{
+    float len = 0.0f;
+    for (const auto& e : seamEdges(s, side)) len += edgeLength(e);
+    return len;
+}
+
+bool Garment::extendSeam(int seam, int side, int delta, bool atStart)
+{
+    if (seam < 0 || seam >= static_cast<int>(seams.size())) return false;
+    Seam& s = seams[static_cast<std::size_t>(seam)];
+    int& count = side == 0 ? s.countA : s.countB;
+    const EdgeRef start = side == 0 ? s.a : s.b;
+    const int n = static_cast<int>(panels[static_cast<std::size_t>(start.panel)].points.size());
+    if (count + delta < 1 || count + delta >= n) return false;
+    if (delta > 0) {
+        // Le nouveau bord ne doit appartenir à aucune autre couture.
+        const EdgeRef next{start.panel, atStart ? (start.edge - 1 + n) % n : (start.edge + count) % n};
+        for (int t = 0; t < static_cast<int>(seams.size()); ++t)
+            for (int sd = 0; sd < 2; ++sd)
+                for (const auto& e : seamEdges(seams[static_cast<std::size_t>(t)], sd))
+                    if (e == next) return false;
+    }
+    count += delta;
+    if (atStart) (side == 0 ? s.a : s.b).edge = (start.edge - delta + n) % n;
+    return true;
+}
+
 void Garment::removeSeamsOn(const EdgeRef& e)
 {
-    std::erase_if(seams, [&](const Seam& s) { return s.a == e || s.b == e; });
+    std::erase_if(seams, [&](const Seam& s) {
+        for (int side = 0; side < 2; ++side)
+            for (const auto& x : seamEdges(s, side))
+                if (x == e) return true;
+        return false;
+    });
 }
+
+namespace {
+/// Renumérote les bords d'une pièce dont le contour change. `map(e)` donne les
+/// nouveaux bords issus de l'ancien bord e. Une couture dont un côté n'est plus
+/// une suite continue est supprimée.
+template <typename Map>
+void remapSeams(Garment& g, int panel, int oldN, int newN, Map map)
+{
+    std::erase_if(g.seams, [&](Seam& s) {
+        for (int side = 0; side < 2; ++side) {
+            EdgeRef& start = side == 0 ? s.a : s.b;
+            int& count = side == 0 ? s.countA : s.countB;
+            if (start.panel != panel) continue;
+            std::vector<bool> in(static_cast<std::size_t>(newN), false);
+            int total = 0;
+            for (int k = 0; k < std::min(count, oldN); ++k)
+                for (const int e : map((start.edge + k) % oldN))
+                    if (e >= 0 && e < newN && !in[static_cast<std::size_t>(e)]) {
+                        in[static_cast<std::size_t>(e)] = true;
+                        ++total;
+                    }
+            if (total == 0 || total >= newN) return true;
+            int first = -1;
+            for (int e = 0; e < newN; ++e)
+                if (in[static_cast<std::size_t>(e)] && !in[static_cast<std::size_t>((e - 1 + newN) % newN)]) {
+                    if (first >= 0) return true;   // plusieurs morceaux : couture rompue
+                    first = e;
+                }
+            start.edge = first;
+            count = total;
+        }
+        return false;
+    });
+}
+} // namespace
 
 void Garment::removePanel(int panel)
 {
@@ -38,26 +129,25 @@ void Garment::removePoint(int panel, int point)
     auto& pts = panels[static_cast<std::size_t>(panel)].points;
     if (pts.size() <= 3) return;
     const int n = static_cast<int>(pts.size());
-    // Les deux bords qui touchent ce point disparaissent (fusionnés en un seul).
-    removeSeamsOn({panel, (point - 1 + n) % n});
-    removeSeamsOn({panel, point});
-    for (auto& s : seams) {
-        for (EdgeRef* e : {&s.a, &s.b}) {
-            if (e->panel == panel && e->edge > point) --e->edge;
-        }
-    }
+    // Les deux bords qui touchent ce point fusionnent en un seul.
+    remapSeams(*this, panel, n, n - 1, [&](int e) -> std::vector<int> {
+        if (point == 0) return {e == 0 ? n - 2 : e - 1};
+        if (e < point) return {e};
+        return {e - 1};
+    });
     pts.erase(pts.begin() + point);
 }
 
 void Garment::insertPoint(int panel, int edge, glm::vec2 position)
 {
-    removeSeamsOn({panel, edge});
-    for (auto& s : seams) {
-        for (EdgeRef* e : {&s.a, &s.b}) {
-            if (e->panel == panel && e->edge > edge) ++e->edge;
-        }
-    }
     auto& pts = panels[static_cast<std::size_t>(panel)].points;
+    const int n = static_cast<int>(pts.size());
+    // Le bord coupé devient deux bords : une couture qui le contenait les garde tous les deux.
+    remapSeams(*this, panel, n, n + 1, [&](int e) -> std::vector<int> {
+        if (e < edge) return {e};
+        if (e == edge) return {e, e + 1};
+        return {e + 1};
+    });
     pts.insert(pts.begin() + edge + 1, position);
 }
 
