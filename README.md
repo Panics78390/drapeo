@@ -71,6 +71,16 @@ Menu **Fichier → Importer un patron...** (Ctrl+I) ou glisser-déposer le fichi
 
 ![Import d'une image de patron](docs/capture-import-image.png)
 
+## Coudre une poche sur le vêtement
+
+1. Dessinez la poche (outil Rectangle ou Polygone) ou importez-la, puis posez-la sur la pièce voulue dans le patron 2D.
+2. Dans **Propriétés > Coudre sur une pièce**, la pièce située dessous est proposée ; choisissez la façon de coudre :
+   **Poche** (ouverte en haut), **Rabat** (cousu en haut) ou **Tout le tour** (renfort, écusson, bande).
+3. Cliquez **Coudre sur la pièce**. La poche est cousue en 3D sur le tissu et suit sa base.
+
+Glissez la poche dans le patron pour la déplacer sur sa base ; déplacer la base emporte ses poches.
+**Détacher de la pièce** la libère.
+
 ## Importer un avatar (FBX, OBJ)
 
 - menu **Fichier → Importer un avatar (FBX, OBJ)...** (Ctrl+O), ou

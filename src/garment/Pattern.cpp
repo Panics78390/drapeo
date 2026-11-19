@@ -114,6 +114,66 @@ void remapSeams(Garment& g, int panel, int oldN, int newN, Map map)
 }
 } // namespace
 
+int topEdge(const std::vector<glm::vec2>& poly)
+{
+    const int n = static_cast<int>(poly.size());
+    int best = 0;
+    float bestY = -1e9f;
+    for (int pass = 0; pass < 2 && bestY < -1e8f; ++pass)
+        for (int e = 0; e < n; ++e) {
+            const glm::vec2 a = poly[static_cast<std::size_t>(e)], b = poly[static_cast<std::size_t>((e + 1) % n)];
+            if (pass == 0 && std::abs(b.x - a.x) < std::abs(b.y - a.y)) continue;   // bord trop vertical
+            const float y = (a.y + b.y) * 0.5f;
+            if (y > bestY) {
+                bestY = y;
+                best = e;
+            }
+        }
+    return best;
+}
+
+void Garment::setAttachKind(Attachment& a, AttachKind kind) const
+{
+    if (a.patch < 0 || a.patch >= static_cast<int>(panels.size())) return;
+    const auto& pts = panels[static_cast<std::size_t>(a.patch)].points;
+    const int n = static_cast<int>(pts.size());
+    const int top = topEdge(pts);
+    switch (kind) {
+    case AttachKind::Pocket: a.startEdge = (top + 1) % n; a.count = n - 1; break;
+    case AttachKind::Flap: a.startEdge = top; a.count = 1; break;
+    case AttachKind::AllRound: a.startEdge = 0; a.count = 0; break;
+    }
+}
+
+AttachKind Garment::attachKind(const Attachment& a) const
+{
+    if (a.count <= 0) return AttachKind::AllRound;
+    return a.count == 1 ? AttachKind::Flap : AttachKind::Pocket;
+}
+
+int Garment::attachPatch(int patch, int base, glm::vec2 at, AttachKind kind)
+{
+    const int n = static_cast<int>(panels.size());
+    if (patch < 0 || base < 0 || patch >= n || base >= n || patch == base) return -1;
+    if (attachmentOf(base) >= 0) return -1;   // pas de poche sur une poche
+    // Une pièce de base ne peut pas devenir elle-même une poche.
+    for (const auto& a : attachments)
+        if (a.base == patch) return -1;
+    // Les coutures ordinaires de la poche sont remplacées par la pose.
+    std::erase_if(seams, [&](const Seam& s) { return s.a.panel == patch || s.b.panel == patch; });
+    Attachment a;
+    a.patch = patch;
+    a.base = base;
+    a.at = at;
+    setAttachKind(a, kind);
+    if (const int old = attachmentOf(patch); old >= 0) {
+        attachments[static_cast<std::size_t>(old)] = a;
+        return old;
+    }
+    attachments.push_back(a);
+    return static_cast<int>(attachments.size()) - 1;
+}
+
 int Garment::attachmentOf(int panel) const
 {
     for (std::size_t i = 0; i < attachments.size(); ++i)

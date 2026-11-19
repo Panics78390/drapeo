@@ -65,6 +65,9 @@ struct Attachment {
     int startEdge = 0, count = 0;
 };
 
+/// Façon de coudre une pièce posée.
+enum class AttachKind { Pocket, Flap, AllRound };   // poche ouverte en haut, rabat cousu en haut, tout le tour
+
 struct Garment {
     std::vector<Panel> panels;
     std::vector<Seam> seams;
@@ -91,7 +94,16 @@ struct Garment {
     [[nodiscard]] int attachmentOf(int panel) const;
     /// Bords cousus d'une pièce posée, dans l'ordre.
     [[nodiscard]] std::vector<int> attachedEdges(const Attachment& a) const;
+    /// Coud `patch` sur `base` au point `at` (coordonnées de base). Remplace une pose existante ;
+    /// renvoie l'index de la pose, ou -1 si les pièces ne conviennent pas.
+    int attachPatch(int patch, int base, glm::vec2 at, AttachKind kind);
+    /// Change les bords cousus d'une pose selon `kind`.
+    void setAttachKind(Attachment& a, AttachKind kind) const;
+    [[nodiscard]] AttachKind attachKind(const Attachment& a) const;
 };
+
+/// Bord du haut d'un contour (le plus haut parmi les bords plutôt horizontaux).
+int topEdge(const std::vector<glm::vec2>& poly);
 
 // --- Géométrie 2D utilitaire -------------------------------------------------
 float signedArea(const std::vector<glm::vec2>& poly);

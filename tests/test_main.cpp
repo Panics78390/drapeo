@@ -478,6 +478,31 @@ int main()
               io::pieceCode("DROIT FIL").empty() && io::pieceCode("x1 sur la pliure").empty());
     });
 
+    run("Poche cousue sur une pièce", [] {
+        garment::Garment g;
+        garment::Panel base;
+        base.name = "Devant";
+        base.points = {{0, 0}, {0.4f, 0}, {0.4f, 0.6f}, {0, 0.6f}};
+        garment::Panel poche;
+        poche.name = "Poche";
+        poche.points = {{0.1f, 0.2f}, {0.25f, 0.2f}, {0.25f, 0.36f}, {0.1f, 0.36f}};   // bord du haut : 2
+        g.panels = {base, poche};
+        g.seams.push_back({{0, 0}, {1, 0}, false, 1, 1});
+        CHECK(garment::topEdge(g.panels[1].points) == 2);
+        const int ai = g.attachPatch(1, 0, {0.175f, 0.28f}, garment::AttachKind::Pocket);
+        CHECK(ai == 0 && g.attachmentOf(1) == 0 && g.seams.empty());
+        CHECK(g.attachedEdges(g.attachments[0]).size() == 3);   // tout sauf le haut
+        CHECK(g.attachKind(g.attachments[0]) == garment::AttachKind::Pocket);
+        g.setAttachKind(g.attachments[0], garment::AttachKind::Flap);
+        CHECK(g.attachedEdges(g.attachments[0]) == std::vector<int>{2});
+        CHECK(g.attachPatch(0, 1, {0, 0}, garment::AttachKind::AllRound) < 0);   // une base ne devient pas une poche
+        garment::GarmentMesh m;
+        std::string error;
+        garment::MeshingOptions opt;
+        CHECK(garment::buildGarmentMesh(g, opt, m, error));
+        CHECK(!m.seamPairs.empty());
+    });
+
     std::printf("\n%d vérifications, %d échec(s)\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

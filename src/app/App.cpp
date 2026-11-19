@@ -28,6 +28,10 @@
 namespace drapeo::app {
 
 namespace {
+const char* const kAttachKinds[] = {"Poche (ouverte en haut)", "Rabat (cousu en haut)", "Tout le tour (renfort, écusson, bande)"};
+}
+
+namespace {
 constexpr float kFrameDt = 1.0f / 60.0f;   // pas fixe : simulation déterministe
 constexpr float kPi = 3.14159265f;
 
@@ -1940,10 +1944,20 @@ void App::inspectorPanel()
         auto& at = garment_.attachments[static_cast<std::size_t>(ai)];
         ImGui::TextWrapped("Posée sur « %s » (%zu bord(s) cousu(s)) : elle suit cette pièce.",
                            garment_.panels[static_cast<std::size_t>(at.base)].name.c_str(), garment_.attachedEdges(at).size());
+        label("Couture");
+        int kind = static_cast<int>(garment_.attachKind(at));
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::Combo("##posekind", &kind, kAttachKinds, IM_ARRAYSIZE(kAttachKinds))) {
+            garment_.setAttachKind(at, static_cast<garment::AttachKind>(kind));
+            commitGarment();
+        }
         label("Position");
         float pos[2] = {at.at.x * 100.0f, at.at.y * 100.0f};
         if (ImGui::DragFloat2("##poseat", pos, 0.2f, -500.0f, 500.0f, "%.1f cm")) at.at = glm::vec2(pos[0], pos[1]) / 100.0f;
         if (ImGui::IsItemDeactivatedAfterEdit()) commitGarment();
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped("Astuce : glissez la pièce dans le patron pour la déplacer sur sa base.");
+        ImGui::PopStyleColor();
         if (ImGui::Button("Détacher de la pièce", ImVec2(-1, 0))) {
             garment_.attachments.erase(garment_.attachments.begin() + ai);
             commitGarment();
@@ -1951,6 +1965,7 @@ void App::inspectorPanel()
         ImGui::PopID();
         return;
     }
+    inspectorSewOn(idx);
     const float bw = (ImGui::GetContentRegionAvail().x - 3 * ImGui::GetStyle().ItemSpacing.x) / 4.0f;
     auto place = [&](const char* text, float angle) {
         const bool on = std::abs(panel.placement.angleDeg - angle) < 0.5f;
@@ -2066,6 +2081,73 @@ void App::inspectorBackdrop()
     ImGui::SameLine();
     if (ImGui::Button("Retirer l'image", ImVec2(hw, 0))) removeBackdrop();
     ImGui::Spacing();
+}
+
+void App::inspectorSewOn(int idx)
+{
+    // Coudre cette pièce sur une autre : poche plaquée, rabat, renfort, écusson, bande.
+    const int n = static_cast<int>(garment_.panels.size());
+    bool isBase = false;
+    for (const auto& a : garment_.attachments) isBase = isBase || a.base == idx;
+    if (isBase || n < 2) return;
+    auto usable = [&](int p) { return p != idx && p >= 0 && p < n && garment_.attachmentOf(p) < 0; };
+    const auto& self = garment_.panels[static_cast<std::size_t>(idx)].points;
+    glm::vec2 lo(1e9f), hi(-1e9f);
+    for (const auto& q : self) {
+        lo = glm::min(lo, q);
+        hi = glm::max(hi, q);
+    }
+    const glm::vec2 centre = (lo + hi) * 0.5f;
+    if (sewFor_ != idx) {   // nouvelle pièce choisie : base proposée = pièce située sous elle dans le patron
+        sewFor_ = idx;
+        sewBase_ = -1;
+        for (int p = 0; p < n && sewBase_ < 0; ++p)
+            if (usable(p) && garment::pointInPolygon(garment_.panels[static_cast<std::size_t>(p)].points, centre)) sewBase_ = p;
+    }
+    if (!usable(sewBase_)) sewBase_ = -1;
+
+    ImGui::SeparatorText("Coudre sur une pièce (poche, renfort...)");
+    label("Sur");
+    ImGui::SetNextItemWidth(-1);
+    const char* preview = sewBase_ >= 0 ? garment_.panels[static_cast<std::size_t>(sewBase_)].name.c_str() : "choisir la pièce...";
+    if (ImGui::BeginCombo("##sewbase", preview)) {
+        for (int p = 0; p < n; ++p) {
+            if (!usable(p)) continue;
+            ImGui::PushID(p);
+            if (ImGui::Selectable(garment_.panels[static_cast<std::size_t>(p)].name.c_str(), p == sewBase_)) sewBase_ = p;
+            ImGui::PopID();
+        }
+        ImGui::EndCombo();
+    }
+    label("Couture");
+    ImGui::SetNextItemWidth(-1);
+    ImGui::Combo("##sewkind", &sewKind_, kAttachKinds, IM_ARRAYSIZE(kAttachKinds));
+    ImGui::BeginDisabled(sewBase_ < 0);
+    if (ImGui::Button("Coudre sur la pièce", ImVec2(-1, 0))) {
+        const auto& base = garment_.panels[static_cast<std::size_t>(sewBase_)].points;
+        glm::vec2 at = centre;
+        if (!garment::pointInPolygon(base, at)) {
+            // La pièce n'est pas posée sur sa base dans le patron : on la centre dessus.
+            at = garment::centroid(base);
+            for (auto& q : garment_.panels[static_cast<std::size_t>(idx)].points) q += at - centre;
+        }
+        const std::string baseName = garment_.panels[static_cast<std::size_t>(sewBase_)].name;
+        // Même couleur que la base : on fonce un peu la poche pour la distinguer.
+        auto& col = garment_.panels[static_cast<std::size_t>(idx)].color;
+        const glm::vec3 baseCol = garment_.panels[static_cast<std::size_t>(sewBase_)].color;
+        if (glm::distance(col, baseCol) < 0.1f) col = baseCol * 0.72f;
+        if (garment_.attachPatch(idx, sewBase_, at, static_cast<garment::AttachKind>(sewKind_)) >= 0) {
+            commitGarment();
+            setStatus("« " + garment_.panels[static_cast<std::size_t>(idx)].name + " » cousue sur « " + baseName +
+                          " ». Glissez-la dans le patron pour la placer.", false);
+        }
+    }
+    ImGui::EndDisabled();
+    if (sewBase_ < 0) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped("Posez la pièce sur une autre dans le patron, ou choisissez-la ci-dessus.");
+        ImGui::PopStyleColor();
+    }
 }
 
 void App::inspectorSeams()

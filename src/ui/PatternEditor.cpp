@@ -103,6 +103,38 @@ garment::EdgeRef PatternEditor::pickEdge(const garment::Garment& g, ImVec2 mouse
     return best;
 }
 
+void PatternEditor::movePanels(garment::Garment& g, const std::vector<int>& ids, glm::vec2 d)
+{
+    if (d == glm::vec2(0.0f)) return;
+    const int n = static_cast<int>(g.panels.size());
+    auto moving = [&](int p) { return std::find(ids.begin(), ids.end(), p) != ids.end(); };
+    auto bboxCenter = [&](int p) {
+        glm::vec2 lo(1e9f), hi(-1e9f);
+        for (const auto& q : g.panels[static_cast<std::size_t>(p)].points) {
+            lo = glm::min(lo, q);
+            hi = glm::max(hi, q);
+        }
+        return (lo + hi) * 0.5f;
+    };
+    std::vector<int> followers;   // poches posées sur une base déplacée, dessinées sur elle
+    for (auto& a : g.attachments) {
+        if (a.patch < 0 || a.base < 0 || a.patch >= n || a.base >= n) continue;
+        const bool baseMoves = moving(a.base), patchMoves = moving(a.patch);
+        if (baseMoves) {
+            a.at += d;   // la poche reste au même endroit de sa base
+            if (!patchMoves && glm::distance(bboxCenter(a.patch), a.at - d) < 0.01f) followers.push_back(a.patch);
+        } else if (patchMoves) {
+            a.at += d;   // la poche glisse sur sa base
+            attachMoved_ = true;
+        }
+    }
+    for (const int p : ids)
+        if (p >= 0 && p < n)
+            for (auto& q : g.panels[static_cast<std::size_t>(p)].points) q += d;
+    for (const int p : followers)
+        for (auto& q : g.panels[static_cast<std::size_t>(p)].points) q += d;
+}
+
 bool PatternEditor::isSelected(int panel) const
 {
     return panel >= 0 && (panel == selectedPanel || std::find(selection.begin(), selection.end(), panel) != selection.end());
@@ -342,12 +374,11 @@ bool PatternEditor::draw(garment::Garment& g)
         if (!ImGui::IsMouseDown(ImGuiMouseButton_Middle) && !ImGui::IsMouseDown(ImGuiMouseButton_Right)) drag_ = Drag::None;
     } else if (drag_ == Drag::Panel && selection.size() > 1) {
         if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-            const glm::vec2 d = mw - dragLast_;
-            for (const int p : selection)
-                if (p >= 0 && p < static_cast<int>(g.panels.size()))
-                    for (auto& q : g.panels[static_cast<std::size_t>(p)].points) q += d;
+            movePanels(g, selection, mw - dragLast_);
             dragLast_ = mw;
         } else {
+            if (attachMoved_) committed = true;
+            attachMoved_ = false;
             drag_ = Drag::None;
         }
     } else if (drag_ == Drag::Marquee) {
@@ -382,13 +413,15 @@ bool PatternEditor::draw(garment::Garment& g)
                 if (drag_ == Drag::Point && selectedPoint >= 0 && selectedPoint < static_cast<int>(pts.size())) {
                     pts[static_cast<std::size_t>(selectedPoint)] = snap(mw);
                 } else if (drag_ == Drag::Panel) {
-                    const glm::vec2 d = mw - dragLast_;
-                    for (auto& q : pts) q += d;   // déplacer la pièce ne change pas le vêtement 3D
+                    // Déplacer une pièce ne change pas le vêtement 3D, sauf si une poche glisse sur sa base.
+                    movePanels(g, {selectedPanel}, mw - dragLast_);
                 }
             }
             dragLast_ = mw;
         } else {
             if (drag_ == Drag::Point && glm::distance(dragStart_, mw) > 1e-4f) committed = true;
+            if (attachMoved_) committed = true;
+            attachMoved_ = false;
             drag_ = Drag::None;
         }
     } else if (drag_ == Drag::Backdrop) {

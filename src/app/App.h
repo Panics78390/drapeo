@@ -99,6 +99,7 @@ private:
     void inspectorBackdrop();
     void inspectorPanel();
     void inspectorSeams();
+    void inspectorSewOn(int panel);
     void inspectorFabric();
     void inspectorAvatar();
     void inspectorSimulation();
@@ -137,6 +138,7 @@ private:
     int frameCount_ = 0;
     float simTime_ = 0.0f;
 
+    int sewFor_ = -1, sewBase_ = -1, sewKind_ = 0;   // « Coudre sur une pièce » de l'inspecteur
     std::vector<glm::vec3> displayPositions_;   // positions affichées (pièces posées décollées)
     // Buffers réutilisés à chaque image
     std::vector<glm::vec3> normals_;

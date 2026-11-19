@@ -61,6 +61,9 @@ private:
     int pickPoint(const garment::Garment& g, int panel, ImVec2 mouse) const;
     int pickPanel(const garment::Garment& g, glm::vec2 w) const;
     glm::vec2 snap(glm::vec2 w) const;
+    /// Déplace des pièces dans le patron ; les poches cousues suivent leur base.
+    void movePanels(garment::Garment& g, const std::vector<int>& ids, glm::vec2 d);
+    bool attachMoved_ = false;   // une pose a bougé pendant le glisser : il faudra recoudre
 
     ImVec2 canvasPos_{0, 0}, canvasSize_{1, 1};
     glm::vec2 center_{0.3f, 0.35f};   // point du monde au centre de la vue (m)
