@@ -287,7 +287,8 @@ void deleteTexture(unsigned int& t)
 
 bool isImageExtension(const std::string& ext)
 {
-    return ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "bmp" || ext == "tga" || ext == "gif" || ext == "psd";
+    return ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "jpe" || ext == "jfif" || ext == "bmp" || ext == "tga" ||
+           ext == "gif" || ext == "psd";
 }
 
 const char* kSpacingNames[] = {"Grossier (3 cm)", "Normal (2 cm)", "Fin (1,5 cm)", "Très fin (1 cm)"};
@@ -338,8 +339,8 @@ int App::run(const AppOptions& options)
             const std::string path = pendingDrop_;
             pendingDrop_.clear();
             const std::string ext = lowerExtension(path);
-            if (ext == "svg" || ext == "dxf" || ext == "pdf" || isImageExtension(ext)) importPattern(path);
-            else loadAvatar(path);
+            if (ext == "fbx" || ext == "obj") loadAvatar(path);
+            else importPattern(path);
         }
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
@@ -623,10 +624,34 @@ void App::updateClothColors()
 void App::importPattern(const std::string& path)
 {
     if (path.empty()) return;
-    const std::string ext = lowerExtension(path);
+    std::string ext = lowerExtension(path);
     std::string error;
     const auto slash = path.find_last_of("/\\");
     const std::string name = slash == std::string::npos ? path : path.substr(slash + 1);
+
+    // Extension inconnue (.jfif, sans extension...) : on reconnaît le format au contenu.
+    std::string bytes;
+    if (ext != "svg" && ext != "dxf" && ext != "pdf" && !isImageExtension(ext)) {
+        if (!io::readFileBytes(path, bytes, error)) {
+            setStatus("Import du patron impossible : " + error, true);
+            return;
+        }
+        if (bytes.compare(0, 5, "%PDF-") == 0) ext = "pdf";
+        else if (bytes.find("<svg") != std::string::npos && bytes.find("<svg") < 4096) ext = "svg";
+        else {
+            io::RasterImage img;
+            if (io::decodeRasterImage(bytes, img, error)) {
+                beginImageImport(std::move(img), name);
+                return;
+            }
+            const bool webp = bytes.size() > 12 && bytes.compare(8, 4, "WEBP") == 0;
+            const bool heic = bytes.size() > 12 && bytes.compare(4, 4, "ftyp") == 0;
+            setStatus(webp || heic ? "Format WebP / HEIC non pris en charge : ouvrez l'image (Photos, Paint) et enregistrez-la en PNG ou JPEG."
+                                   : "Format non reconnu. Formats acceptés : PDF, PNG, JPEG, BMP, SVG, DXF.",
+                      true);
+            return;
+        }
+    }
 
     if (isImageExtension(ext)) {
         io::RasterImage img;
@@ -638,9 +663,8 @@ void App::importPattern(const std::string& path)
         return;
     }
     if (ext == "pdf") {
-        std::string bytes;
         io::PdfPatternResult pdf;
-        if (!io::readFileBytes(path, bytes, error) || !io::parsePdf(bytes, pdf, error)) {
+        if ((bytes.empty() && !io::readFileBytes(path, bytes, error)) || !io::parsePdf(bytes, pdf, error)) {
             setStatus("Import du PDF impossible : " + error, true);
             return;
         }
@@ -659,7 +683,9 @@ void App::importPattern(const std::string& path)
         return;
     }
     std::vector<std::vector<glm::vec2>> outlines;
-    if (!io::importPatternFile(path, outlines, error)) {
+    const bool ok = bytes.empty() ? io::importPatternFile(path, outlines, error)
+                                  : (ext == "svg" ? io::parseSvg(bytes, outlines, error) : io::parseDxf(bytes, outlines, error));
+    if (!ok) {
         setStatus("Import du patron impossible : " + error, true);
         return;
     }
@@ -988,7 +1014,7 @@ void App::openPatternDialog()
 {
     if (hasNativeFileDialog()) {
         importPattern(openFileDialog("Importer un patron",
-                                     "Patrons (SVG, DXF, PDF, PNG, JPEG)|*.svg;*.dxf;*.pdf;*.png;*.jpg;*.jpeg;*.bmp;*.tga;*.gif"));
+                                     "Patrons (PDF, PNG, JPEG, SVG, DXF)|*.pdf;*.png;*.jpg;*.jpeg;*.jfif;*.jpe;*.bmp;*.gif;*.tga;*.svg;*.dxf"));
     } else {
         pathPopupKind_ = 1;
         pathInput_[0] = '\0';
