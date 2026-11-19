@@ -33,7 +33,7 @@ Logiciel original de création de vêtements 3D : on dessine des **patrons 2D**,
 
 [**Télécharger drapeo-mcp.exe**](https://github.com/Panics78390/drapeo/raw/main/windows/drapeo-mcp.exe) et le placer **dans le même dossier que drapeo.exe**.
 
-Le plus simple : double-cliquer sur [`installer-mcp-claude.bat`](windows/installer-mcp-claude.bat) (avec `installer-mcp-claude.ps1` et `drapeo-mcp.exe` dans le même dossier), puis redémarrer Claude Desktop. À la main : dans Claude Desktop, Paramètres → Développeur → Modifier la configuration, puis ajouter dans `claude_desktop_config.json` (adapter les chemins) :
+Dans Claude Desktop : Paramètres → Développeur → Modifier la configuration, puis ajouter dans `claude_desktop_config.json` (adapter les chemins) :
 
 ```json
 {
