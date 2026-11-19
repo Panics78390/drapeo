@@ -11,18 +11,19 @@ namespace drapeo::garment {
 
 namespace {
 struct PanelFrame {
-    float cx = 0.0f, minY = 0.0f;
+    float cx = 0.0f, minY = 0.0f, maxY = 0.0f;
 };
 
 PanelFrame frameOf(const Panel& p)
 {
-    float lo = 1e9f, hi = -1e9f, minY = 1e9f;
+    float lo = 1e9f, hi = -1e9f, minY = 1e9f, maxY = -1e9f;
     for (const auto& q : p.points) {
         lo = std::min(lo, q.x);
         hi = std::max(hi, q.x);
         minY = std::min(minY, q.y);
+        maxY = std::max(maxY, q.y);
     }
-    return {(lo + hi) * 0.5f, minY};
+    return {(lo + hi) * 0.5f, minY, maxY};
 }
 } // namespace
 
@@ -53,9 +54,8 @@ ZoneFrame zoneFrame(BodyZone zone, const MeshingOptions& options)
     return f;
 }
 
-glm::vec3 placePoint(const Panel& panel, glm::vec2 p, const MeshingOptions& options)
+static glm::vec3 wrapPoint(const Panel& panel, const PanelFrame& f, glm::vec2 p, const MeshingOptions& options)
 {
-    const PanelFrame f = frameOf(panel);
     const float R = std::max(panel.placement.radius * options.bodyScale, 0.03f);
     const float u = p.x - f.cx;           // abscisse le long du tour du corps
     const float v = p.y - f.minY;         // hauteur dans la pièce
@@ -76,6 +76,34 @@ glm::vec3 placePoint(const Panel& panel, glm::vec2 p, const MeshingOptions& opti
     const glm::vec3 front = glm::normalize(glm::vec3(0, 0, 1) - up * up.z);
     const glm::vec3 side = glm::cross(up, front);
     return options.bodyCenter + base + up * v + R * (std::sin(a) * side + std::cos(a) * front);
+}
+
+glm::vec3 panelPivot(const Panel& panel, const MeshingOptions& options)
+{
+    const PanelFrame f = frameOf(panel);
+    return wrapPoint(panel, f, {f.cx, (f.minY + f.maxY) * 0.5f}, options);
+}
+
+glm::vec3 placePoint(const Panel& panel, glm::vec2 p, const MeshingOptions& options)
+{
+    const PanelFrame f = frameOf(panel);
+    const glm::vec3 w = wrapPoint(panel, f, p, options);
+    const auto& pl = panel.placement;
+    const bool identity = std::abs(pl.rotation.w) > 0.999999f;
+    if (identity) return w + pl.offset;
+    const glm::vec3 pivot = wrapPoint(panel, f, {f.cx, (f.minY + f.maxY) * 0.5f}, options);
+    return pivot + glm::normalize(pl.rotation) * (w - pivot) + pl.offset;
+}
+
+std::vector<std::array<uint32_t, 2>> enabledSeamPairs(const Garment& garment, const GarmentMesh& mesh)
+{
+    std::vector<std::array<uint32_t, 2>> out;
+    for (std::size_t k = 0; k < mesh.allSeamPairs.size(); ++k) {
+        const int s = mesh.seamOfPair[k];
+        if (s >= 0 && s < static_cast<int>(garment.seams.size()) && garment.seams[static_cast<std::size_t>(s)].enabled)
+            out.push_back(mesh.allSeamPairs[k]);
+    }
+    return out;
 }
 
 bool buildGarmentMesh(const Garment& garment, const MeshingOptions& options, GarmentMesh& out, std::string& error)
@@ -212,7 +240,8 @@ bool buildGarmentMesh(const Garment& garment, const MeshingOptions& options, Gar
     }
 
     // --- 5. Coutures ----------------------------------------------------------
-    for (const auto& s : garment.seams) {
+    for (std::size_t si = 0; si < garment.seams.size(); ++si) {
+        const auto& s = garment.seams[si];
         std::vector<uint32_t> A, B;
         for (int side = 0; side < 2; ++side) {
             auto& ids = side == 0 ? A : B;
@@ -232,7 +261,10 @@ bool buildGarmentMesh(const Garment& garment, const MeshingOptions& options, Gar
         if (s.flipped) reverse = !reverse;
         for (std::size_t k = 0; k < m; ++k) {
             const uint32_t a = A[k], b = B[reverse ? m - 1 - k : k];
-            if (a != b) out.seamPairs.push_back({a, b});
+            if (a == b) continue;
+            out.allSeamPairs.push_back({a, b});
+            out.seamOfPair.push_back(static_cast<int>(si));
+            if (s.enabled) out.seamPairs.push_back({a, b});
         }
     }
 

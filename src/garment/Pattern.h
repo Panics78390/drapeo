@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 namespace drapeo::garment {
 
@@ -25,6 +26,10 @@ struct Placement {
     float height = 1.0f;     // hauteur du bas de la pièce (m), pour un avatar de 1,75 m
     float radius = 0.24f;    // rayon du cylindre d'enroulement (m)
     BodyZone zone = BodyZone::Torso;   // buste, ou cylindre incliné le long d'un bras / d'une jambe
+    // Réglage libre en 3D (gizmo) appliqué après l'enroulement : rotation autour
+    // du centre de la pièce, puis translation (m).
+    glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};
+    glm::vec3 offset{0.0f};
 };
 
 struct Panel {
@@ -48,6 +53,7 @@ struct Seam {
     EdgeRef a, b;
     bool flipped = false;   // inverse le sens d'appariement choisi automatiquement
     int countA = 1, countB = 1;
+    bool enabled = true;    // une couture désactivée reste dessinée mais n'est pas cousue
 };
 
 struct Garment {

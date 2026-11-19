@@ -20,14 +20,16 @@ std::string writeProject(const garment::Garment& g)
         o << "piece\n";
         o << "nom " << p.name << "\n";
         o << "couleur " << p.color.r << ' ' << p.color.g << ' ' << p.color.b << "\n";
-        o << "placement " << static_cast<int>(p.placement.zone) << ' ' << p.placement.angleDeg << ' '
-          << p.placement.height << ' ' << p.placement.radius << "\n";
+        const auto& pl = p.placement;
+        o << "placement " << static_cast<int>(pl.zone) << ' ' << pl.angleDeg << ' ' << pl.height << ' ' << pl.radius << ' '
+          << pl.offset.x << ' ' << pl.offset.y << ' ' << pl.offset.z << ' ' << pl.rotation.w << ' ' << pl.rotation.x << ' '
+          << pl.rotation.y << ' ' << pl.rotation.z << "\n";
         o << "points " << p.points.size() << "\n";
         for (const auto& q : p.points) o << q.x << ' ' << q.y << "\n";
     }
     for (const auto& s : g.seams)
         o << "couture " << s.a.panel << ' ' << s.a.edge << ' ' << s.countA << ' ' << s.b.panel << ' ' << s.b.edge << ' '
-          << s.countB << ' ' << (s.flipped ? 1 : 0) << "\n";
+          << s.countB << ' ' << (s.flipped ? 1 : 0) << ' ' << (s.enabled ? 1 : 0) << "\n";
     return o.str();
 }
 
@@ -57,6 +59,11 @@ bool parseProject(const std::string& text, garment::Garment& out, std::string& e
             int zone = 0;
             ls >> zone >> pl.angleDeg >> pl.height >> pl.radius;
             if (zone < 0 || zone >= garment::kBodyZoneCount) zone = 0;
+            glm::vec3 off;
+            glm::quat rot;
+            if (ls >> off.x >> off.y >> off.z) pl.offset = off;
+            if (ls >> rot.w >> rot.x >> rot.y >> rot.z && glm::length(glm::vec4(rot.x, rot.y, rot.z, rot.w)) > 0.5f)
+                pl.rotation = glm::normalize(rot);
             pl.zone = static_cast<garment::BodyZone>(zone);
         } else if (key == "points" && !g.panels.empty()) {
             std::size_t n = 0;
@@ -73,6 +80,8 @@ bool parseProject(const std::string& text, garment::Garment& out, std::string& e
             int flipped = 0;
             ls >> s.a.panel >> s.a.edge >> s.countA >> s.b.panel >> s.b.edge >> s.countB >> flipped;
             s.flipped = flipped != 0;
+            int enabled = 1;
+            if (ls >> enabled) s.enabled = enabled != 0;
             g.seams.push_back(s);
         }
     }

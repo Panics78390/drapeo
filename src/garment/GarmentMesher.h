@@ -24,7 +24,9 @@ namespace drapeo::garment {
 struct GarmentMesh {
     geometry::ClothMesh mesh;                       // positions 3D placées, uvs = coordonnées 2D du patron
     std::vector<int> panelOfVertex;
-    std::vector<std::array<uint32_t, 2>> seamPairs; // sommets à réunir
+    std::vector<std::array<uint32_t, 2>> seamPairs; // sommets à réunir (coutures actives)
+    std::vector<std::array<uint32_t, 2>> allSeamPairs; // toutes les coutures, actives ou non
+    std::vector<int> seamOfPair;                    // couture de chaque paire de allSeamPairs
     std::vector<std::vector<glm::vec2>> panelPoints2D; // pour l'export
 };
 
@@ -47,5 +49,11 @@ ZoneFrame zoneFrame(BodyZone zone, const MeshingOptions& options);
 
 /// Position 3D d'un point 2D d'une pièce selon son placement.
 glm::vec3 placePoint(const Panel& panel, glm::vec2 p, const MeshingOptions& options);
+
+/// Centre de rotation d'une pièce (centre de son contour enroulé, sans le décalage libre).
+glm::vec3 panelPivot(const Panel& panel, const MeshingOptions& options);
+
+/// Paires des coutures actives seulement.
+std::vector<std::array<uint32_t, 2>> enabledSeamPairs(const Garment& garment, const GarmentMesh& mesh);
 
 } // namespace drapeo::garment

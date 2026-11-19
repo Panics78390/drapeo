@@ -333,6 +333,7 @@ int App::run(const AppOptions& options)
         setGarment({});
         importPattern(options_.patternPath);
         if (options_.acceptImport && pendingImage_.width > 0) finishImageImport();
+        if (options_.startPaused) playing_ = false;
     }
 
     while (!glfwWindowShouldClose(window_)) {
@@ -1062,10 +1063,49 @@ void App::handleViewportInput()
         return best;
     };
 
+    // Survol : poignées du gizmo, puis lignes de couture.
+    updateGizmoFrame();
+    const glm::vec2 mouse(m.x, m.y);
+    const bool busy = gizmoActive_ != Gizmo::None || dragPanel_ >= 0 || orbiting_ || panning_ || solver_.grabbedParticle() >= 0;
+    if (!busy) {
+        gizmoHover_ = inside ? gizmoHitTest(mouse) : Gizmo::None;
+        hoverSeam3D_ = -1;
+        if (inside && gizmoHover_ == Gizmo::None) {
+            // Une couture n'est cliquable que si elle passe devant le tissu sous la souris
+            // (ou avec Alt, qui donne la priorité aux coutures).
+            float seamDepth = 0.0f;
+            const int s = seamHitTest3D(mouse, &seamDepth);
+            if (s >= 0) {
+                float clothDepth = 1e9f;
+                const int p = clothValid_ && !io.KeyAlt ? pickParticle(clothDepth) : -1;
+                if (p < 0 || seamDepth < clothDepth - 0.015f) hoverSeam3D_ = s;
+            }
+        }
+    }
+
     if (inside) {
-        // En pause : clic gauche sur une pièce = la déplacer autour du corps.
         bool pickedPanel = false;
-        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !playing_ && clothValid_ && !io.KeyShift) {
+        // 1. Poignée du gizmo
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && gizmoVisible() && gizmoHover_ != Gizmo::None) {
+            gizmoActive_ = gizmoHover_;
+            gizmoMoved_ = false;
+            gizmoLastHit_ = glm::vec3(0.0f);
+            const glm::vec2 c = projectToScreen(gizmoCenter_);
+            gizmoLastAngle_ = std::atan2(mouse.y - c.y, mouse.x - c.x);
+            if (gizmoActive_ == Gizmo::Slide) {
+                dragPanel_ = editor_.selectedPanel;
+                dragMoved_ = false;
+                dragLastHit_ = gizmoCenter_;
+            }
+            pickedPanel = true;
+        }
+        // 2. Ligne de couture : activer / désactiver
+        if (!pickedPanel && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && hoverSeam3D_ >= 0 && !io.KeyShift) {
+            toggleSeam(hoverSeam3D_);
+            pickedPanel = true;
+        }
+        // 3. En pause : clic gauche sur une pièce = la sélectionner et la glisser autour du corps.
+        if (!pickedPanel && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !playing_ && clothValid_ && !io.KeyShift) {
             float depth = 0.0f;
             const int p = pickParticle(depth);
             if (p >= 0 && static_cast<std::size_t>(p) < garmentMesh_.panelOfVertex.size()) {
@@ -1104,21 +1144,19 @@ void App::handleViewportInput()
             }
         } else {
             // Fin du déplacement : nouvel état du patron (annulable), maillage refait, toujours en pause.
-            if (dragMoved_ && dragPanel_ < static_cast<int>(garment_.panels.size())) {
-                undoStack_.push_back(committed_);
-                redoStack_.clear();
-                committed_ = garment_;
-                resetCloth();
-                playing_ = false;
-                const auto& pl = garment_.panels[static_cast<std::size_t>(dragPanel_)].placement;
-                char text[200];
-                std::snprintf(text, sizeof(text), "%s : angle %.0f°, hauteur %.0f cm. Espace pour simuler.",
-                              garment_.panels[static_cast<std::size_t>(dragPanel_)].name.c_str(), static_cast<double>(pl.angleDeg),
-                              static_cast<double>(pl.height * 100.0f));
-                setStatus(text, false);
-            }
+            if (dragMoved_) finishPanelEdit(dragPanel_);
             dragPanel_ = -1;
             dragMoved_ = false;
+            if (gizmoActive_ == Gizmo::Slide) gizmoActive_ = Gizmo::None;
+        }
+    }
+    if (gizmoActive_ != Gizmo::None && gizmoActive_ != Gizmo::Slide) {
+        if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && clothValid_) {
+            if (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f) dragGizmo(mouse, {io.MouseDelta.x, io.MouseDelta.y});
+        } else {
+            if (gizmoMoved_) finishPanelEdit(editor_.selectedPanel);
+            gizmoActive_ = Gizmo::None;
+            gizmoMoved_ = false;
         }
     }
 
@@ -1135,6 +1173,308 @@ void App::handleViewportInput()
             solver_.release();
         }
     }
+}
+
+// =============================================================================
+//  Gizmo 3D et coutures dans la vue 3D
+// =============================================================================
+namespace {
+const glm::vec3 kAxes[3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+const ImU32 kAxisColors[3] = {IM_COL32(232, 76, 76, 255), IM_COL32(126, 200, 60, 255), IM_COL32(70, 132, 236, 255)};
+ImU32 brighten(ImU32 c) { return (c & 0xFF000000) | ((c & 0x00FEFEFE) >> 1) | 0x00808080; }
+} // namespace
+
+glm::vec2 App::projectToScreen(const glm::vec3& p, bool* inFront) const
+{
+    const float aspect = viewSize_.x / viewSize_.y;
+    const glm::vec4 c = camera_.projection(aspect) * camera_.view() * glm::vec4(p, 1.0f);
+    if (inFront) *inFront = c.w > 1e-4f;
+    const float w = std::abs(c.w) > 1e-6f ? c.w : 1e-6f;
+    return {viewPos_.x + (c.x / w * 0.5f + 0.5f) * viewSize_.x, viewPos_.y + (0.5f - c.y / w * 0.5f) * viewSize_.y};
+}
+
+bool App::gizmoVisible() const
+{
+    return !playing_ && clothValid_ && editor_.selectedPanel >= 0 && editor_.selectedPanel < static_cast<int>(garment_.panels.size());
+}
+
+void App::updateGizmoFrame()
+{
+    if (!gizmoVisible()) return;
+    // Centre : barycentre actuel des particules de la pièce.
+    glm::vec3 c(0.0f);
+    int n = 0;
+    const auto& pos = solver_.positions();
+    for (std::size_t i = 0; i < garmentMesh_.panelOfVertex.size() && i < pos.size(); ++i)
+        if (garmentMesh_.panelOfVertex[i] == editor_.selectedPanel) {
+            c += pos[i];
+            ++n;
+        }
+    if (n == 0) return;
+    gizmoCenter_ = c / static_cast<float>(n);
+    // Taille constante à l'écran (~85 px).
+    const float dist = std::max(glm::distance(camera_.position(), gizmoCenter_), 0.05f);
+    const float worldPerPixel = 2.0f * dist * std::tan(glm::radians(camera_.fovY) * 0.5f) / std::max(viewSize_.y, 1.0f);
+    gizmoLength_ = 85.0f * uiScale_ * worldPerPixel;
+}
+
+App::Gizmo App::gizmoHitTest(glm::vec2 m) const
+{
+    if (!gizmoVisible()) return Gizmo::None;
+    const glm::vec2 c = projectToScreen(gizmoCenter_);
+    const float L = gizmoLength_;
+    const auto segDist = [](glm::vec2 p, glm::vec2 a, glm::vec2 b) {
+        const glm::vec2 ab = b - a;
+        const float t = glm::clamp(glm::dot(p - a, ab) / std::max(glm::dot(ab, ab), 1e-6f), 0.0f, 1.0f);
+        return glm::distance(p, a + ab * t);
+    };
+    const float tol = 7.0f * uiScale_;
+    // 1. Disque central : glisser autour du corps.
+    if (glm::distance(m, c) < 13.0f * uiScale_) return Gizmo::Slide;
+    // 2. Petits carrés : déplacement dans un plan.
+    for (int k = 0; k < 3; ++k) {
+        const glm::vec3 a = kAxes[(k + 1) % 3], b = kAxes[(k + 2) % 3];
+        const glm::vec3 q0 = gizmoCenter_ + (a + b) * (0.30f * L), q1 = q0 + a * (0.16f * L), q2 = q1 + b * (0.16f * L), q3 = q0 + b * (0.16f * L);
+        const glm::vec2 s[4] = {projectToScreen(q0), projectToScreen(q1), projectToScreen(q2), projectToScreen(q3)};
+        const std::vector<glm::vec2> poly(s, s + 4);
+        if (garment::pointInPolygon(poly, m)) return static_cast<Gizmo>(static_cast<int>(Gizmo::PlaneYZ) + k);
+    }
+    // 3. Flèches : déplacement sur un axe.
+    for (int k = 0; k < 3; ++k) {
+        const glm::vec2 tip = projectToScreen(gizmoCenter_ + kAxes[k] * L);
+        if (glm::distance(m, c) > 15.0f * uiScale_ && segDist(m, c, tip) < tol) return static_cast<Gizmo>(static_cast<int>(Gizmo::MoveX) + k);
+    }
+    // 4. Anneaux : rotation autour d'un axe.
+    for (int k = 0; k < 3; ++k) {
+        const glm::vec3 a = kAxes[(k + 1) % 3], b = kAxes[(k + 2) % 3];
+        glm::vec2 prev = projectToScreen(gizmoCenter_ + a * (1.25f * L));
+        for (int i = 1; i <= 48; ++i) {
+            const float t = static_cast<float>(i) / 48.0f * 2.0f * kPi;
+            const glm::vec2 cur = projectToScreen(gizmoCenter_ + (a * std::cos(t) + b * std::sin(t)) * (1.25f * L));
+            if (segDist(m, prev, cur) < tol * 0.8f) return static_cast<Gizmo>(static_cast<int>(Gizmo::RotX) + k);
+            prev = cur;
+        }
+    }
+    return Gizmo::None;
+}
+
+void App::refreshPanelParticles(int panel)
+{
+    if (panel < 0 || panel >= static_cast<int>(garment_.panels.size())) return;
+    const garment::MeshingOptions mo = meshingOptions();
+    const auto& p = garment_.panels[static_cast<std::size_t>(panel)];
+    for (std::size_t i = 0; i < garmentMesh_.panelOfVertex.size() && i < solver_.positions().size(); ++i)
+        if (garmentMesh_.panelOfVertex[i] == panel)
+            solver_.setParticlePosition(static_cast<uint32_t>(i), garment::placePoint(p, garmentMesh_.mesh.uvs[i], mo));
+}
+
+void App::finishPanelEdit(int panel)
+{
+    if (panel < 0 || panel >= static_cast<int>(garment_.panels.size())) return;
+    undoStack_.push_back(committed_);
+    redoStack_.clear();
+    committed_ = garment_;
+    resetCloth();
+    playing_ = false;   // on reste en pause pour continuer la mise en place
+    const auto& pl = garment_.panels[static_cast<std::size_t>(panel)].placement;
+    char text[220];
+    const float turn = glm::degrees(2.0f * std::acos(std::clamp(std::abs(pl.rotation.w), 0.0f, 1.0f)));
+    std::snprintf(text, sizeof(text), "%s : angle %.0f°, hauteur %.0f cm, décalage %.0f / %.0f / %.0f cm, rotation %.0f°. Espace pour simuler.",
+                  garment_.panels[static_cast<std::size_t>(panel)].name.c_str(), static_cast<double>(pl.angleDeg),
+                  static_cast<double>(pl.height * 100.0f), static_cast<double>(pl.offset.x * 100.0f),
+                  static_cast<double>(pl.offset.y * 100.0f), static_cast<double>(pl.offset.z * 100.0f), static_cast<double>(turn));
+    setStatus(text, false);
+}
+
+void App::dragGizmo(glm::vec2 m, glm::vec2 delta)
+{
+    const int idx = editor_.selectedPanel;
+    if (idx < 0 || idx >= static_cast<int>(garment_.panels.size())) return;
+    auto& pl = garment_.panels[static_cast<std::size_t>(idx)].placement;
+    const float L = gizmoLength_;
+    const glm::vec2 c = projectToScreen(gizmoCenter_);
+    const int g = static_cast<int>(gizmoActive_);
+    if (gizmoActive_ >= Gizmo::MoveX && gizmoActive_ <= Gizmo::MoveZ) {
+        const glm::vec3 axis = kAxes[g - static_cast<int>(Gizmo::MoveX)];
+        const glm::vec2 s = projectToScreen(gizmoCenter_ + axis * L) - c;   // pixels pour L mètres
+        const float len2 = glm::dot(s, s);
+        if (len2 < 4.0f) return;
+        const float d = glm::dot(delta, s) / len2 * L;
+        pl.offset += axis * d;
+        gizmoCenter_ += axis * d;
+    } else if (gizmoActive_ >= Gizmo::PlaneYZ && gizmoActive_ <= Gizmo::PlaneXY) {
+        const glm::vec3 n = kAxes[g - static_cast<int>(Gizmo::PlaneYZ)];
+        const float aspect = viewSize_.x / viewSize_.y;
+        glm::vec3 o, d;
+        camera_.ray(2.0f * (m.x - viewPos_.x) / viewSize_.x - 1.0f, 1.0f - 2.0f * (m.y - viewPos_.y) / viewSize_.y, aspect, o, d);
+        const float den = glm::dot(d, n);
+        if (std::abs(den) < 1e-3f) return;
+        const glm::vec3 hit = o + d * (glm::dot(gizmoCenter_ - o, n) / den);
+        if (gizmoMoved_ || glm::length(gizmoLastHit_) > 0.0f) {
+            const glm::vec3 step = hit - gizmoLastHit_;
+            pl.offset += step;
+            gizmoCenter_ += step;
+        }
+        gizmoLastHit_ = hit;
+    } else if (gizmoActive_ >= Gizmo::RotX && gizmoActive_ <= Gizmo::RotZ) {
+        const glm::vec3 axis = kAxes[g - static_cast<int>(Gizmo::RotX)];
+        const float a = std::atan2(m.y - c.y, m.x - c.x);
+        float da = a - gizmoLastAngle_;
+        while (da > kPi) da -= 2 * kPi;
+        while (da < -kPi) da += 2 * kPi;
+        gizmoLastAngle_ = a;
+        // Écran : y vers le bas -> un angle croissant tourne dans le sens horaire.
+        const float facing = glm::dot(axis, camera_.position() - gizmoCenter_) >= 0.0f ? 1.0f : -1.0f;
+        pl.rotation = glm::normalize(glm::angleAxis(-da * facing, axis) * pl.rotation);
+    }
+    refreshPanelParticles(idx);
+    gizmoMoved_ = true;
+}
+
+void App::drawGizmo()
+{
+    if (!gizmoVisible()) return;
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    dl->PushClipRect({viewPos_.x, viewPos_.y}, {viewPos_.x + viewSize_.x, viewPos_.y + viewSize_.y}, true);
+    const glm::vec2 c = projectToScreen(gizmoCenter_);
+    const float L = gizmoLength_;
+    const auto hl = [&](Gizmo g) { return gizmoHover_ == g || gizmoActive_ == g; };
+    const auto iv = [](glm::vec2 v) { return ImVec2(v.x, v.y); };
+    // Anneaux de rotation
+    for (int k = 0; k < 3; ++k) {
+        const Gizmo g = static_cast<Gizmo>(static_cast<int>(Gizmo::RotX) + k);
+        const glm::vec3 a = kAxes[(k + 1) % 3], b = kAxes[(k + 2) % 3];
+        std::vector<ImVec2> ring;
+        for (int i = 0; i < 64; ++i) {
+            const float t = static_cast<float>(i) / 64.0f * 2.0f * kPi;
+            ring.push_back(iv(projectToScreen(gizmoCenter_ + (a * std::cos(t) + b * std::sin(t)) * (1.25f * L))));
+        }
+        const ImU32 col = hl(g) ? brighten(kAxisColors[k]) : ((kAxisColors[k] & 0x00FFFFFF) | 0xB0000000);
+        dl->AddPolyline(ring.data(), static_cast<int>(ring.size()), col, ImDrawFlags_Closed, hl(g) ? 3.5f : 2.0f);
+    }
+    // Carrés de plan
+    for (int k = 0; k < 3; ++k) {
+        const Gizmo g = static_cast<Gizmo>(static_cast<int>(Gizmo::PlaneYZ) + k);
+        const glm::vec3 a = kAxes[(k + 1) % 3], b = kAxes[(k + 2) % 3];
+        const glm::vec3 q0 = gizmoCenter_ + (a + b) * (0.30f * L), q1 = q0 + a * (0.16f * L), q2 = q1 + b * (0.16f * L), q3 = q0 + b * (0.16f * L);
+        const ImU32 col = hl(g) ? brighten(kAxisColors[k]) : ((kAxisColors[k] & 0x00FFFFFF) | 0xC0000000);
+        dl->AddQuadFilled(iv(projectToScreen(q0)), iv(projectToScreen(q1)), iv(projectToScreen(q2)), iv(projectToScreen(q3)), col);
+    }
+    // Flèches
+    for (int k = 0; k < 3; ++k) {
+        const Gizmo g = static_cast<Gizmo>(static_cast<int>(Gizmo::MoveX) + k);
+        const glm::vec2 tip = projectToScreen(gizmoCenter_ + kAxes[k] * L);
+        const ImU32 col = hl(g) ? brighten(kAxisColors[k]) : kAxisColors[k];
+        const glm::vec2 dir = tip - c;
+        const float len = glm::length(dir);
+        if (len < 4.0f) continue;
+        const glm::vec2 u = dir / len, nrm(-u.y, u.x);
+        const float head = 13.0f * uiScale_;
+        dl->AddLine(iv(c + u * (14.0f * uiScale_)), iv(tip - u * head), col, hl(g) ? 4.0f : 2.6f);
+        dl->AddTriangleFilled(iv(tip), iv(tip - u * head + nrm * (head * 0.42f)), iv(tip - u * head - nrm * (head * 0.42f)), col);
+    }
+    // Disque central : glisser la pièce autour du corps
+    const float r = 11.0f * uiScale_;
+    dl->AddCircle(iv(c), r, hl(Gizmo::Slide) ? IM_COL32(255, 255, 255, 255) : IM_COL32(235, 235, 235, 210), 32, hl(Gizmo::Slide) ? 3.0f : 2.0f);
+    dl->AddCircleFilled(iv(c), 3.0f * uiScale_, kAccentU32);
+    // Bulle d'aide
+    const char* tip = nullptr;
+    switch (gizmoHover_ == Gizmo::None ? gizmoActive_ : gizmoHover_) {
+    case Gizmo::Slide: tip = "Glisser autour du corps"; break;
+    case Gizmo::MoveX: case Gizmo::MoveY: case Gizmo::MoveZ: tip = "Déplacer sur l'axe"; break;
+    case Gizmo::PlaneYZ: case Gizmo::PlaneXZ: case Gizmo::PlaneXY: tip = "Déplacer dans le plan"; break;
+    case Gizmo::RotX: case Gizmo::RotY: case Gizmo::RotZ: tip = "Tourner la pièce"; break;
+    default: break;
+    }
+    if (tip) {
+        const ImVec2 mp = ImGui::GetIO().MousePos;
+        const ImVec2 ts = ImGui::CalcTextSize(tip);
+        dl->AddRectFilled({mp.x + 14, mp.y + 12}, {mp.x + 22 + ts.x, mp.y + 16 + ts.y + 4}, IM_COL32(15, 16, 18, 225), 4.0f);
+        dl->AddText({mp.x + 18, mp.y + 14}, IM_COL32(235, 235, 235, 255), tip);
+    }
+    dl->PopClipRect();
+}
+
+int App::seamHitTest3D(glm::vec2 m, float* depth) const
+{
+    if (!showSeams3D_ || !clothValid_) return -1;
+    const auto& pos = solver_.positions();
+    float best = 4.5f * uiScale_;
+    int hit = -1;
+    for (std::size_t k = 0; k < garmentMesh_.allSeamPairs.size(); ++k) {
+        const auto& pr = garmentMesh_.allSeamPairs[k];
+        if (pr[0] >= pos.size() || pr[1] >= pos.size()) continue;
+        if (glm::distance(pos[pr[0]], pos[pr[1]]) < 0.008f) continue;   // déjà cousue
+        bool f0 = false, f1 = false;
+        const glm::vec2 a = projectToScreen(pos[pr[0]], &f0), b = projectToScreen(pos[pr[1]], &f1);
+        if (!f0 || !f1) continue;
+        const glm::vec2 ab = b - a;
+        const float t = glm::clamp(glm::dot(m - a, ab) / std::max(glm::dot(ab, ab), 1e-6f), 0.0f, 1.0f);
+        const float d = glm::distance(m, a + ab * t);
+        if (d < best) {
+            best = d;
+            hit = garmentMesh_.seamOfPair[k];
+            if (depth) *depth = glm::distance(camera_.position(), glm::mix(pos[pr[0]], pos[pr[1]], t));
+        }
+    }
+    return hit;
+}
+
+void App::drawSeams3D()
+{
+    if (!showSeams3D_ || !clothValid_) return;
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    dl->PushClipRect({viewPos_.x, viewPos_.y}, {viewPos_.x + viewSize_.x, viewPos_.y + viewSize_.y}, true);
+    const auto& pos = solver_.positions();
+    for (std::size_t k = 0; k < garmentMesh_.allSeamPairs.size(); ++k) {
+        const auto& pr = garmentMesh_.allSeamPairs[k];
+        const int s = garmentMesh_.seamOfPair[k];
+        if (pr[0] >= pos.size() || pr[1] >= pos.size() || s < 0 || s >= static_cast<int>(garment_.seams.size())) continue;
+        const bool enabled = garment_.seams[static_cast<std::size_t>(s)].enabled;
+        if (glm::distance(pos[pr[0]], pos[pr[1]]) < 0.008f) continue;   // déjà cousue : rien à montrer
+        bool f0 = false, f1 = false;
+        const glm::vec2 a = projectToScreen(pos[pr[0]], &f0), b = projectToScreen(pos[pr[1]], &f1);
+        if (!f0 || !f1) continue;
+        const bool hover = s == hoverSeam3D_;
+        ImU32 col = enabled ? ui::PatternEditor::seamColor(s) : IM_COL32(150, 150, 150, 255);
+        col = (col & 0x00FFFFFF) | (hover ? 0xFF000000 : (enabled ? 0xB0000000 : 0x70000000));
+        if (enabled) {
+            dl->AddLine({a.x, a.y}, {b.x, b.y}, col, hover ? 2.6f : 1.3f);
+        } else {   // désactivée : pointillés gris
+            const int dashes = std::max(2, static_cast<int>(glm::distance(a, b) / 6.0f));
+            for (int i = 0; i < dashes; i += 2) {
+                const glm::vec2 p0 = a + (b - a) * (static_cast<float>(i) / dashes), p1 = a + (b - a) * (static_cast<float>(i + 1) / dashes);
+                dl->AddLine({p0.x, p0.y}, {p1.x, p1.y}, col, hover ? 2.6f : 1.3f);
+            }
+        }
+    }
+    if (hoverSeam3D_ >= 0 && hoverSeam3D_ < static_cast<int>(garment_.seams.size()) && gizmoHover_ == Gizmo::None && gizmoActive_ == Gizmo::None) {
+        const auto& sm = garment_.seams[static_cast<std::size_t>(hoverSeam3D_)];
+        char tip[200];
+        std::snprintf(tip, sizeof(tip), "Couture %d : %s + %s\nClic : %s", hoverSeam3D_ + 1, garment_.panels[static_cast<std::size_t>(sm.a.panel)].name.c_str(),
+                      garment_.panels[static_cast<std::size_t>(sm.b.panel)].name.c_str(), sm.enabled ? "désactiver" : "activer");
+        const ImVec2 mp = ImGui::GetIO().MousePos;
+        const ImVec2 ts = ImGui::CalcTextSize(tip);
+        dl->AddRectFilled({mp.x + 14, mp.y + 12}, {mp.x + 22 + ts.x, mp.y + 16 + ts.y + 4}, IM_COL32(15, 16, 18, 225), 4.0f);
+        dl->AddText({mp.x + 18, mp.y + 14}, IM_COL32(235, 235, 235, 255), tip);
+    }
+    dl->PopClipRect();
+}
+
+void App::toggleSeam(int seam)
+{
+    if (seam < 0 || seam >= static_cast<int>(garment_.seams.size())) return;
+    undoStack_.push_back(committed_);
+    redoStack_.clear();
+    auto& sm = garment_.seams[static_cast<std::size_t>(seam)];
+    sm.enabled = !sm.enabled;
+    committed_ = garment_;
+    // Pas besoin de remailler : on change seulement les paires cousues par le solveur.
+    garmentMesh_.seamPairs = garment::enabledSeamPairs(garment_, garmentMesh_);
+    solver_.setSeams(garmentMesh_.seamPairs, sewingSeconds_);
+    char text[160];
+    std::snprintf(text, sizeof(text), "Couture %d %s.", seam + 1, sm.enabled ? "activée" : "désactivée (elle ne sera pas cousue)");
+    setStatus(text, false);
 }
 
 void App::openAvatarDialog()
@@ -1415,7 +1755,7 @@ void App::drawViewportOverlay()
     if (clothValid_ && solver_.seamCount() > 0 && solver_.seamProgress() < 1.0f) {
         std::snprintf(text, sizeof(text), "Couture en cours  %.0f %%", static_cast<double>(solver_.seamProgress() * 100.0f));
         const ImVec2 ts = ImGui::CalcTextSize(text);
-        const ImVec2 c(o.x + viewSize_.x * 0.5f, o.y + pad * 2.2f);
+        const ImVec2 c(o.x + viewSize_.x * 0.5f, o.y + pad * 4.2f);
         dl->AddRectFilled({c.x - ts.x * 0.5f - 12, c.y - 6}, {c.x + ts.x * 0.5f + 12, c.y + ts.y + 6}, IM_COL32(18, 19, 21, 210), 12.0f);
         dl->AddText({c.x - ts.x * 0.5f, c.y}, kAccentU32, text);
     }
@@ -1424,15 +1764,17 @@ void App::drawViewportOverlay()
         const ImVec2 ts = ImGui::CalcTextSize(msg);
         dl->AddText({o.x + (viewSize_.x - ts.x) * 0.5f, o.y + viewSize_.y * 0.5f}, ImGui::GetColorU32(kTextDim), msg);
     }
-    const char* help = playing_ ? "Clic gauche : tourner    Maj / clic milieu : déplacer    Molette : zoom    Clic droit : saisir le tissu"
-                                : "En pause : glisser une pièce pour la placer autour du corps    Clic gauche ailleurs : tourner    Molette : zoom";
+    drawSeams3D();
+    drawGizmo();
+    const char* help = playing_ ? "Clic gauche : tourner    Maj / clic milieu : déplacer    Molette : zoom    Clic droit : saisir le tissu    Espace : pause"
+                                : "En pause : clic sur une pièce = gizmo (déplacer, tourner)    Alt + clic sur une couture : activer / désactiver    Ailleurs : tourner la vue";
     const ImVec2 hs = ImGui::CalcTextSize(help);
     if (hs.x < viewSize_.x - 2 * pad)
         dl->AddText({o.x + pad, o.y + viewSize_.y - hs.y - pad * 0.7f}, IM_COL32(150, 154, 162, 170), help);
 
     // Boutons de vues prédéfinies, en haut à droite.
     const float bw = 54 * uiScale_;
-    ImGui::SetNextWindowPos({o.x + viewSize_.x - 4 * bw - pad - 18 * uiScale_, o.y + pad * 0.5f});
+    ImGui::SetNextWindowPos({o.x + viewSize_.x - 5.5f * bw - pad - 30 * uiScale_, o.y + pad * 0.5f});
     ImGui::SetNextWindowBgAlpha(0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4, 4));
     ImGui::Begin("##vues", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
@@ -1450,6 +1792,12 @@ void App::drawViewportOverlay()
     viewButton("Dos", kPi);
     viewButton("Profil", kPi * 0.5f);
     if (ImGui::Button("3/4", ImVec2(bw, 0))) frameCamera();
+    ImGui::SameLine(0, 10);
+    if (showSeams3D_) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.87f, 0.63f, 0.29f, 0.45f));
+    if (ImGui::Button("Coutures", ImVec2(bw * 1.5f, 0))) showSeams3D_ = !showSeams3D_;
+    if (showSeams3D_) ImGui::PopStyleColor();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+        ImGui::SetTooltip("Afficher les coutures dans la vue 3D.\nCliquer une couture l'active ou la désactive.");
     ImGui::PopStyleColor();
     ImGui::End();
     ImGui::PopStyleVar();
@@ -1564,6 +1912,15 @@ void App::inspectorPanel()
     edited |= ImGui::IsItemDeactivatedAfterEdit();
     if (edited) commitGarment();
 
+    if (std::abs(panel.placement.rotation.w) < 0.99999f || glm::length(panel.placement.offset) > 1e-4f) {
+        ImGui::TextDisabled("Réglée en 3D : décalage %.0f / %.0f / %.0f cm", static_cast<double>(panel.placement.offset.x * 100.0f),
+                            static_cast<double>(panel.placement.offset.y * 100.0f), static_cast<double>(panel.placement.offset.z * 100.0f));
+        if (ImGui::Button("Annuler le réglage 3D (décalage et rotation)", ImVec2(-1, 0))) {
+            panel.placement.offset = glm::vec3(0.0f);
+            panel.placement.rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+            commitGarment();
+        }
+    }
     ImGui::Spacing();
     const float hw = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
     if (ImGui::Button("Copie miroir", ImVec2(hw, 0))) {
@@ -1677,6 +2034,9 @@ void App::inspectorSeams()
         if (ImGui::Button("x", ImVec2(h, h))) removeIndex = static_cast<int>(s);
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("Supprimer la couture");
         if (selected) {
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + h);
+            bool on = seam.enabled;
+            if (ImGui::Checkbox("Couture active (cousue à la simulation)", &on)) toggleSeam(static_cast<int>(s));
             // Une couture peut suivre plusieurs bords (courbe) : + / - ajoute ou retire le bord suivant.
             for (int side = 0; side < 2; ++side) {
                 ImGui::PushID(side);

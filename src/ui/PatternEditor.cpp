@@ -389,7 +389,7 @@ bool PatternEditor::draw(garment::Garment& g)
     for (std::size_t s = 0; s < g.seams.size(); ++s) {
         const auto& seam = g.seams[s];
         if (seam.a.panel >= static_cast<int>(g.panels.size()) || seam.b.panel >= static_cast<int>(g.panels.size())) continue;
-        const ImU32 col = seamColor(static_cast<int>(s));
+        const ImU32 col = seam.enabled ? seamColor(static_cast<int>(s)) : IM_COL32(125, 125, 130, 200);
         const float w = static_cast<int>(s) == selectedSeam ? 5.0f : 3.5f;
         // Chaque côté peut couvrir plusieurs bords (courbe) : on les trace tous,
         // et la pastille se place au milieu (en longueur) de chaque côté.

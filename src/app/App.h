@@ -43,6 +43,7 @@ struct AppOptions {
     bool showAbout = false;       // ouvre la fenêtre « À propos » au démarrage
     std::string patternPath;      // patron à importer au démarrage (.svg, .dxf, .pdf, image)
     bool acceptImport = false;    // valide directement la fenêtre d'import d'image
+    bool startPaused = false;     // démarre simulation en pause (mise en place, captures)
     std::string avatarPath;       // avatar à charger au démarrage (.fbx / .obj)
 };
 
@@ -188,6 +189,30 @@ private:
     glm::vec3 dragLastHit_{0.0f};
     [[nodiscard]] garment::MeshingOptions meshingOptions() const;
     void dragPanelTo(const glm::vec3& rayOrigin, const glm::vec3& rayDir);
+    void refreshPanelParticles(int panel);
+    void finishPanelEdit(int panel);
+
+    // Gizmo 3D de la pièce sélectionnée (simulation en pause)
+    enum class Gizmo { None, Slide, MoveX, MoveY, MoveZ, PlaneYZ, PlaneXZ, PlaneXY, RotX, RotY, RotZ };
+    Gizmo gizmoHover_ = Gizmo::None, gizmoActive_ = Gizmo::None;
+    glm::vec3 gizmoCenter_{0.0f};
+    float gizmoLength_ = 0.1f;
+    glm::vec3 gizmoLastHit_{0.0f};
+    float gizmoLastAngle_ = 0.0f;
+    bool gizmoMoved_ = false;
+    [[nodiscard]] bool gizmoVisible() const;
+    void updateGizmoFrame();
+    [[nodiscard]] glm::vec2 projectToScreen(const glm::vec3& p, bool* inFront = nullptr) const;
+    [[nodiscard]] Gizmo gizmoHitTest(glm::vec2 mouse) const;
+    void dragGizmo(glm::vec2 mouse, glm::vec2 delta);
+    void drawGizmo();
+
+    // Coutures dessinées dans la vue 3D (clic : activer / désactiver)
+    bool showSeams3D_ = true;
+    int hoverSeam3D_ = -1;
+    [[nodiscard]] int seamHitTest3D(glm::vec2 mouse, float* depth = nullptr) const;
+    void drawSeams3D();
+    void toggleSeam(int seam);
 
     friend void dropCallback(GLFWwindow*, int, const char**);
 };

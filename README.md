@@ -14,7 +14,8 @@ Logiciel original de création de vêtements 3D : on dessine des **patrons 2D**,
 
 - **Éditeur de patrons 2D** : outils Sélection (V), Polygone (P), Rectangle (B), Couture (S) ; double-clic sur un bord pour ajouter un point, Maj pour aimanter à la grille de 1 cm, copie miroir, cotes des bords.
 - **Coutures** numérotées et colorées, inversion du sens, alerte quand les deux côtés n'ont pas la même longueur. Une couture peut suivre **plusieurs bords** (emmanchure, encolure, entrejambe) : boutons + / − de l'inspecteur, ou Maj + clic sur le bord voisin.
-- **Placement** de chaque pièce autour du corps : **buste, bras gauche / droit, jambe gauche / droite** (devant, dos, côtés, hauteur, distance). Simulation en pause, on **glisse les pièces directement dans la vue 3D** autour du corps.
+- **Placement** de chaque pièce autour du corps : **buste, bras gauche / droit, jambe gauche / droite** (devant, dos, côtés, hauteur, distance). Simulation en pause, un clic sur une pièce dans la vue 3D affiche un **gizmo** : flèches X / Y / Z, carrés de plan, anneaux de rotation, et disque central pour glisser la pièce autour du corps.
+- **Futures coutures visibles en 3D** (bouton « Coutures ») : un clic (Alt + clic si elle passe derrière le tissu) **active ou désactive** une couture ; une couture désactivée n'est pas cousue.
 - **Projets .drapeo** : Fichier → Enregistrer le projet (Ctrl+S) ; on le rouvre par Ctrl+I ou glisser-déposer.
 - **Simulation XPBD** : étirement, flexion, collisions avec l'avatar (BVH), auto-collisions, frottement ; les coutures se resserrent puis la gravité agit.
 - **Tissus** : coton, soie, denim, cuir, réglables (grammage, épaisseur, raideur, amortissement).

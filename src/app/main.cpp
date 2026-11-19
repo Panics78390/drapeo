@@ -19,6 +19,8 @@ int main(int argc, char** argv)
             options.screenshotPath = argv[++i];
         } else if (arg == "--accept-import") {
             options.acceptImport = true;
+        } else if (arg == "--paused") {
+            options.startPaused = true;
         } else if (arg == "--about") {
             options.showAbout = true;
         } else if (arg == "--size" && i + 1 < argc) {
