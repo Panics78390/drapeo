@@ -404,16 +404,19 @@ int App::run(const AppOptions& options)
             solver_.computeStrain(strain_);
             // Pièces posées (poches, bandes, écussons) : légèrement décollées à l'affichage
             // pour qu'elles ne se mélangent pas avec le tissu sur lequel elles sont cousues.
-            if (!garment_.attachments.empty()) {
-                std::vector<char> isPatch(garment_.panels.size(), 0);
+            // Épaisseur d'affichage d'une pièce : le tissu est dessiné décalé vers son endroit.
+            const bool anyRenderThick = std::any_of(garment_.panels.begin(), garment_.panels.end(),
+                                                    [](const garment::Panel& p) { return p.thickRender > 0.0f; });
+            if (!garment_.attachments.empty() || anyRenderThick) {
+                std::vector<float> lift(garment_.panels.size(), 0.0f);
+                for (std::size_t p = 0; p < garment_.panels.size(); ++p) lift[p] = garment_.panels[p].thickRender;
                 for (const auto& a : garment_.attachments)
-                    if (a.patch >= 0 && a.patch < static_cast<int>(isPatch.size())) isPatch[static_cast<std::size_t>(a.patch)] = 1;
+                    if (a.patch >= 0 && a.patch < static_cast<int>(lift.size())) lift[static_cast<std::size_t>(a.patch)] += 0.004f;
                 const auto& pos = solver_.positions();
                 displayPositions_.assign(pos.begin(), pos.end());
                 for (std::size_t i = 0; i < displayPositions_.size() && i < garmentMesh_.panelOfVertex.size() && i < normals_.size(); ++i) {
                     const int pv = garmentMesh_.panelOfVertex[i];
-                    if (pv >= 0 && pv < static_cast<int>(isPatch.size()) && isPatch[static_cast<std::size_t>(pv)])
-                        displayPositions_[i] += normals_[i] * 0.004f;
+                    if (pv >= 0 && pv < static_cast<int>(lift.size())) displayPositions_[i] += normals_[i] * lift[static_cast<std::size_t>(pv)];
                 }
                 renderer_.updateCloth(displayPositions_, normals_, strain_);
             } else {
@@ -648,6 +651,26 @@ void App::resetCloth()
     }
     garmentMesh_ = std::move(gm);
     solver_.build(garmentMesh_.mesh, material_);
+    // Rétrécissement trame / chaîne : longueurs de repos raccourcies (ou allongées) selon le droit fil.
+    {
+        const auto& pov = garmentMesh_.panelOfVertex;
+        const auto& uv = garmentMesh_.mesh.uvs;
+        const int np = static_cast<int>(garment_.panels.size());
+        bool any = false;
+        for (const auto& p : garment_.panels) any = any || p.shrinkWeft != 1.0f || p.shrinkWarp != 1.0f;
+        if (any && uv.size() == pov.size())
+            solver_.scaleRestLengths([&](uint32_t a, uint32_t b) {
+                if (a >= pov.size() || b >= pov.size() || pov[a] != pov[b] || pov[a] < 0 || pov[a] >= np) return 1.0f;
+                const auto& pn = garment_.panels[static_cast<std::size_t>(pov[a])];
+                const glm::vec2 d = uv[b] - uv[a];
+                const float len = glm::length(d);
+                if (len < 1e-7f) return 1.0f;
+                const float g = glm::radians(pn.grainDeg);
+                const glm::vec2 warp(std::cos(g), std::sin(g)), weft(-warp.y, warp.x);
+                const glm::vec2 s(glm::dot(d, warp) * pn.shrinkWarp, glm::dot(d, weft) * pn.shrinkWeft);
+                return glm::length(s) / len;
+            });
+    }
     solver_.spheres().clear();
     solver_.setMeshCollider(&avatarBvh_);
     solver_.setSeams(garmentMesh_.seamPairs, sewingSeconds_);
@@ -2239,6 +2262,24 @@ void App::apply3DState()
         anyStiff = anyStiff || stiffness[i] > 1.0f;
     }
     solver_.setStiffnessScale(anyStiff ? std::move(stiffness) : std::vector<float>{});
+    // Propriétés de simulation des pièces : épaisseur de contact, couche, pression
+    {
+        std::vector<float> extra(n, 0.0f), pressure(n, 0.0f);
+        std::vector<int> layer(n, 0);
+        bool anyExtra = false, anyLayer = false, anyPressure = false;
+        for (uint32_t i = 0; i < n; ++i) {
+            const garment::Panel* p = panelOf(i);
+            if (p == nullptr) continue;
+            extra[i] = p->thickCollision;
+            layer[i] = p->layer;
+            pressure[i] = p->pressure;
+            anyExtra = anyExtra || extra[i] > 0.0f;
+            anyLayer = anyLayer || layer[i] != 0;
+            anyPressure = anyPressure || pressure[i] != 0.0f;
+        }
+        solver_.setParticleProperties(anyExtra ? std::move(extra) : std::vector<float>{}, anyLayer ? std::move(layer) : std::vector<int>{},
+                                      anyPressure ? std::move(pressure) : std::vector<float>{});
+    }
     // Pièces masquées : simulées mais pas dessinées.
     std::vector<uint32_t> shown;
     const auto& idx = garmentMesh_.mesh.indices;
@@ -3540,6 +3581,82 @@ void App::inspectorSimulation()
     const auto& st = solver_.stats();
     ImGui::TextDisabled("%zu étirement   %zu flexion   %zu contacts", st.stretchConstraints, st.bendConstraints,
                         st.selfCollisionPairs);
+    ImGui::Spacing();
+    inspectorPanelSimulation();
+}
+
+void App::inspectorPanelSimulation()
+{
+    // Propriétés de simulation des pièces sélectionnées (toutes reçoivent la valeur modifiée)
+    std::vector<int> t;
+    for (const int p : editor_.targets())
+        if (p >= 0 && p < static_cast<int>(garment_.panels.size())) t.push_back(p);
+    ImGui::SeparatorText(t.size() > 1 ? "Propriétés de simulation des pièces" : "Propriétés de simulation de la pièce");
+    if (t.empty()) {
+        ImGui::TextDisabled("Sélectionnez une pièce dans le patron.");
+        ImGui::Spacing();
+        return;
+    }
+    auto& pn = garment_.panels[static_cast<std::size_t>(t.front())];
+    bool remesh = false, state = false;
+    auto applyAll = [&](auto&& set) {
+        for (const int p : t) set(garment_.panels[static_cast<std::size_t>(p)]);
+    };
+    auto after = [&](bool needsRemesh) {
+        if (ImGui::IsItemDeactivatedAfterEdit()) (needsRemesh ? remesh : state) = true;
+    };
+
+    label("Espacement");
+    float mm = pn.particleDistance > 0.0f ? pn.particleDistance * 1000.0f : spacing_ * 1000.0f;
+    if (ImGui::DragFloat("##pdist", &mm, 0.1f, 5.0f, 100.0f, "%.1f mm")) applyAll([&](garment::Panel& p) { p.particleDistance = mm / 1000.0f; });
+    after(true);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Espacement des particules de cette pièce (plus petit = plus fin et plus lent).\nClic droit : revenir à celui du vêtement.");
+    if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+        applyAll([](garment::Panel& p) { p.particleDistance = 0.0f; });
+        remesh = true;
+    }
+
+    label("Couche");
+    int layer = pn.layer;
+    if (ImGui::InputInt("##couche", &layer)) {
+        layer = std::clamp(layer, -10, 10);
+        applyAll([&](garment::Panel& p) { p.layer = layer; });
+        remesh = true;
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("0 = normal. Une couche plus haute est posée par-dessus et passe au-dessus dans les contacts.");
+
+    label("Retrait trame");
+    float weft = pn.shrinkWeft * 100.0f;
+    if (ImGui::DragFloat("##trame", &weft, 0.1f, 50.0f, 150.0f, "%.2f %%")) applyAll([&](garment::Panel& p) { p.shrinkWeft = weft / 100.0f; });
+    after(true);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Rétrécissement en trame (en travers du droit fil). 100 %% = taille du patron, moins = la pièce rétrécit.");
+    label("Retrait chaîne");
+    float warp = pn.shrinkWarp * 100.0f;
+    if (ImGui::DragFloat("##chaine", &warp, 0.1f, 50.0f, 150.0f, "%.2f %%")) applyAll([&](garment::Panel& p) { p.shrinkWarp = warp / 100.0f; });
+    after(true);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Rétrécissement en chaîne (le long du droit fil). 100 %% = taille du patron.");
+
+    label("Ép. contact");
+    float tc = pn.thickCollision * 1000.0f;
+    if (ImGui::DragFloat("##epcontact", &tc, 0.1f, 0.0f, 50.0f, "%.1f mm")) applyAll([&](garment::Panel& p) { p.thickCollision = tc / 1000.0f; });
+    after(false);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Épaisseur ajoutée pour les collisions (corps, sol et autres tissus).");
+    label("Ép. affichage");
+    float tr = pn.thickRender * 1000.0f;
+    if (ImGui::DragFloat("##epaff", &tr, 0.1f, 0.0f, 50.0f, "%.1f mm")) applyAll([&](garment::Panel& p) { p.thickRender = tr / 1000.0f; });
+    after(false);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Épaisseur ajoutée seulement à l'affichage : le tissu est dessiné décalé vers son endroit.");
+
+    label("Pression");
+    float pr = pn.pressure;
+    if (ImGui::DragFloat("##pression", &pr, 0.5f, -200.0f, 200.0f, "%.1f Pa")) applyAll([&](garment::Panel& p) { p.pressure = pr; });
+    after(false);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Pousse la pièce vers son endroit, comme de l'air dans un volume fermé (sac, coussin, doudoune).\nNégatif : vers l'envers.");
+
+    if (remesh) commitGarment();
+    else if (state) commitState();
     ImGui::Spacing();
 }
 

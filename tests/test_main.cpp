@@ -119,6 +119,74 @@ int main()
         CHECK(std::abs(solver.positions()[0].y - expected) < 0.02f);
     });
 
+    run("Propriétés de simulation des pièces : espacement, rétrécissement, pression, épaisseur, projet", [] {
+        garment::Garment g;
+        g.panels.push_back({});
+        g.panels[0].name = "A";
+        g.panels[0].points = {{0, 0}, {0.3f, 0}, {0.3f, 0.3f}, {0, 0.3f}};
+        g.panels[0].placement.flat = true;
+        garment::GarmentMesh coarse, fine;
+        std::string error;
+        CHECK(garment::buildGarmentMesh(g, {}, coarse, error));
+        g.panels[0].particleDistance = 0.01f;   // 1 cm au lieu de 2 cm
+        CHECK(garment::buildGarmentMesh(g, {}, fine, error));
+        CHECK(fine.mesh.vertexCount() > 3 * coarse.mesh.vertexCount());
+        // Projet : les propriétés sont gardées
+        g.panels[0].layer = 2;
+        g.panels[0].shrinkWeft = 0.95f;
+        g.panels[0].shrinkWarp = 0.9f;
+        g.panels[0].thickCollision = 0.0025f;
+        g.panels[0].thickRender = 0.001f;
+        g.panels[0].pressure = 12.5f;
+        garment::Garment back;
+        CHECK(io::parseProject(io::writeProject(g), back, error));
+        const auto& b = back.panels[0];
+        CHECK(std::abs(b.particleDistance - 0.01f) < 1e-6f && b.layer == 2 && std::abs(b.shrinkWeft - 0.95f) < 1e-6f &&
+              std::abs(b.shrinkWarp - 0.9f) < 1e-6f && std::abs(b.thickCollision - 0.0025f) < 1e-7f &&
+              std::abs(b.thickRender - 0.001f) < 1e-7f && std::abs(b.pressure - 12.5f) < 1e-5f);
+
+        // Rétrécissement : un tissu dont les longueurs de repos sont réduites à 90 % se contracte
+        auto mesh = geometry::makeRectangle(0.4f, 0.4f, 10, 10, {0, 1, 0});
+        simulation::XpbdSolver solver;
+        solver.build(mesh, simulation::fabricPresets()[0]);
+        solver.spheres().clear();
+        solver.settings().groundEnabled = false;
+        solver.settings().gravity = glm::vec3(0.0f);
+        solver.scaleRestLengths([](uint32_t, uint32_t) { return 0.9f; });
+        for (int f = 0; f < 60; ++f) solver.step(1.0f / 60.0f);
+        const float width = glm::distance(solver.positions()[0], solver.positions()[10]);
+        std::printf("    largeur après rétrécissement : %.3f m (0,40 au départ)\n", width);
+        CHECK(width < 0.375f && width > 0.25f && allFinite(solver.positions()));
+
+        // Pression : sans gravité, le tissu part du côté de sa face avant
+        simulation::XpbdSolver ps;
+        ps.build(mesh, simulation::fabricPresets()[0]);
+        ps.spheres().clear();
+        ps.settings().groundEnabled = false;
+        ps.settings().gravity = glm::vec3(0.0f);
+        glm::vec3 nrm = glm::cross(mesh.positions[mesh.indices[1]] - mesh.positions[mesh.indices[0]],
+                                   mesh.positions[mesh.indices[2]] - mesh.positions[mesh.indices[0]]);
+        nrm = glm::normalize(nrm);
+        const glm::vec3 start = ps.positions()[60];
+        ps.setParticleProperties({}, {}, std::vector<float>(mesh.vertexCount(), 5.0f));
+        for (int f = 0; f < 30; ++f) ps.step(1.0f / 60.0f);
+        CHECK(glm::dot(ps.positions()[60] - start, nrm) > 0.01f);
+
+        // Épaisseur de contact : le tissu reste plus loin de la sphère
+        auto drop = [&](float extra) {
+            simulation::XpbdSolver s2;
+            auto m2 = geometry::makeRectangle(0.6f, 0.6f, 16, 16, {0, 1.0f, 0});
+            s2.build(m2, simulation::fabricPresets()[0]);
+            s2.spheres() = {{{0.0f, 0.6f, 0.0f}, 0.3f}};
+            s2.setParticleProperties(std::vector<float>(m2.vertexCount(), extra), {}, {});
+            for (int f = 0; f < 90; ++f) s2.step(1.0f / 60.0f);
+            float minDist = 1e9f;
+            for (const auto& q : s2.positions()) minDist = std::min(minDist, glm::distance(q, glm::vec3(0, 0.6f, 0)));
+            return minDist;
+        };
+        CHECK(drop(0.02f) > drop(0.0f) + 0.015f);
+    });
+
     run("Tissu sur sphère : aucune pénétration, pas de NaN, étirement faible", [] {
         auto mesh = geometry::makeRectangle(1.5f, 1.5f, 40, 40, {0, 1.4f, 0});
         simulation::XpbdSolver solver;

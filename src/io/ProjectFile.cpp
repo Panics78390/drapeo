@@ -28,6 +28,10 @@ std::string writeProject(const garment::Garment& g, const ProjectAvatar* avatar)
         if (!p.active3D || p.hidden3D || p.frozen || p.stiffness != 1.0f)   // etat3d <active> <masquée> <figée> <raideur>
             o << "etat3d " << (p.active3D ? 1 : 0) << ' ' << (p.hidden3D ? 1 : 0) << ' ' << (p.frozen ? 1 : 0) << ' ' << p.stiffness << "\n";
         if (p.placement.flat) o << "plate\n";
+        if (p.particleDistance != 0.0f || p.layer != 0 || p.shrinkWeft != 1.0f || p.shrinkWarp != 1.0f || p.thickCollision != 0.0f ||
+            p.thickRender != 0.0f || p.pressure != 0.0f)   // simu <espacement> <couche> <trame> <chaîne> <ép. contact> <ép. affichage> <pression>
+            o << "simu " << p.particleDistance << ' ' << p.layer << ' ' << p.shrinkWeft << ' ' << p.shrinkWarp << ' ' << p.thickCollision << ' '
+              << p.thickRender << ' ' << p.pressure << "\n";
         if (p.linkGroup > 0) o << "lien " << p.linkGroup << ' ' << (p.linkMirror ? 1 : 0) << ' ' << p.linkAngle << "\n";
         const auto& pl = p.placement;
         o << "placement " << static_cast<int>(pl.zone) << ' ' << pl.angleDeg << ' ' << pl.height << ' ' << pl.radius << ' '
@@ -83,6 +87,16 @@ bool parseProject(const std::string& text, garment::Garment& out, std::string& e
             pn.hidden3D = hidden != 0;
             pn.frozen = frozen != 0;
             if (!(pn.stiffness > 0.0f)) pn.stiffness = 1.0f;
+        } else if (key == "simu" && !g.panels.empty()) {
+            auto& pn = g.panels.back();
+            ls >> pn.particleDistance >> pn.layer >> pn.shrinkWeft >> pn.shrinkWarp >> pn.thickCollision >> pn.thickRender >> pn.pressure;
+            pn.particleDistance = std::clamp(pn.particleDistance, 0.0f, 0.2f);
+            pn.layer = std::clamp(pn.layer, -10, 10);
+            pn.shrinkWeft = std::clamp(pn.shrinkWeft, 0.5f, 1.5f);
+            pn.shrinkWarp = std::clamp(pn.shrinkWarp, 0.5f, 1.5f);
+            pn.thickCollision = std::clamp(pn.thickCollision, 0.0f, 0.05f);
+            pn.thickRender = std::clamp(pn.thickRender, 0.0f, 0.05f);
+            pn.pressure = std::clamp(pn.pressure, -1000.0f, 1000.0f);
         } else if (key == "plate" && !g.panels.empty()) {
             g.panels.back().placement.flat = true;
         } else if (key == "lien" && !g.panels.empty()) {

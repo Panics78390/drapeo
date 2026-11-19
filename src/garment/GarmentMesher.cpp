@@ -56,7 +56,7 @@ ZoneFrame zoneFrame(BodyZone zone, const MeshingOptions& options)
 
 static glm::vec3 wrapPoint(const Panel& panel, const PanelFrame& f, glm::vec2 p, const MeshingOptions& options)
 {
-    const float R = std::max(panel.placement.radius * options.bodyScale, 0.03f);
+    const float R = std::max((panel.placement.radius + 0.012f * static_cast<float>(panel.layer)) * options.bodyScale, 0.03f);   // couche : posée par-dessus
     const float u = p.x - f.cx;           // abscisse le long du tour du corps
     const float v = p.y - f.minY;         // hauteur dans la pièce
     const bool flat = panel.placement.flat;
@@ -205,7 +205,12 @@ bool buildGarmentMesh(const Garment& garment, const MeshingOptions& options, Gar
         out.panelPoints2D = std::move(pts);
         return true;
     }
-    const float h = std::max(options.spacing, 0.005f);
+    const float h0 = std::max(options.spacing, 0.005f);
+    // Espacement des particules d'une pièce : le sien s'il est donné, sinon celui du vêtement.
+    auto spacingOf = [&](std::size_t p) {
+        const float d = garment.panels[p].particleDistance;
+        return d > 0.0f ? std::max(d, 0.004f) : h0;
+    };
 
     // --- 1. Nombre de segments par bord (égalisé sur les coutures) ----------
     std::map<std::pair<int, int>, int> segments;
@@ -217,7 +222,7 @@ bool buildGarmentMesh(const Garment& garment, const MeshingOptions& options, Gar
         }
         for (int e = 0; e < n; ++e) {
             const float len = garment.edgeLength({static_cast<int>(p), e});
-            segments[{static_cast<int>(p), e}] = std::max(1, static_cast<int>(std::lround(len / h)));
+            segments[{static_cast<int>(p), e}] = std::max(1, static_cast<int>(std::lround(len / spacingOf(p))));
         }
     }
     // Couture : les deux côtés reçoivent le même nombre total de segments, répartis
@@ -226,6 +231,7 @@ bool buildGarmentMesh(const Garment& garment, const MeshingOptions& options, Gar
         const auto A = garment.seamEdges(s, 0), B = garment.seamEdges(s, 1);
         if (A.empty() || B.empty()) continue;
         const float len = std::max(garment.seamLength(s, 0), garment.seamLength(s, 1));
+        const float h = std::min(spacingOf(static_cast<std::size_t>(A.front().panel)), spacingOf(static_cast<std::size_t>(B.front().panel)));
         const int m = std::max({static_cast<int>(std::lround(len / h)), static_cast<int>(A.size()), static_cast<int>(B.size()), 1});
         for (const auto* chain : {&A, &B}) {
             float total = 0.0f;
@@ -253,6 +259,7 @@ bool buildGarmentMesh(const Garment& garment, const MeshingOptions& options, Gar
     for (std::size_t pi = 0; pi < garment.panels.size(); ++pi) {
         const Panel& panel = garment.panels[pi];
         const int n = static_cast<int>(panel.points.size());
+        const float h = spacingOf(pi);
         std::vector<CDT::V2d<double>> verts;
         std::vector<CDT::Edge> cons;
         std::vector<glm::vec2> local;

@@ -31,6 +31,9 @@ void XpbdSolver::build(const geometry::ClothMesh& mesh, const FabricMaterial& ma
 {
     const std::size_t n = mesh.vertexCount();
     stiffness_.clear();
+    extraThickness_.clear();
+    layer_.clear();
+    pressure_.clear();
     x_ = mesh.positions;
     rest_ = mesh.positions;
     prev_ = mesh.positions;
@@ -73,6 +76,34 @@ void XpbdSolver::build(const geometry::ClothMesh& mesh, const FabricMaterial& ma
     stats_.particles = n;
     stats_.stretchConstraints = stretch_.size();
     stats_.bendConstraints = bend_.size();
+}
+
+void XpbdSolver::setParticleProperties(std::vector<float> extraThickness, std::vector<int> layer, std::vector<float> pressure)
+{
+    const std::size_t n = x_.size();
+    extraThickness_ = extraThickness.size() == n ? std::move(extraThickness) : std::vector<float>{};
+    layer_ = layer.size() == n ? std::move(layer) : std::vector<int>{};
+    pressure_ = pressure.size() == n ? std::move(pressure) : std::vector<float>{};
+    float extra = 0.0f;
+    for (const float e : extraThickness_) extra = std::max(extra, e);
+    // Grille des contacts assez large pour la plus grande épaisseur ajoutée.
+    hash_ = SpatialHash(2.0f * (selfDistance_ + extra), x_.size());
+}
+
+void XpbdSolver::computePressureForces()
+{
+    // Force de pression : p × aire × normale du triangle (face avant), répartie sur ses 3 sommets.
+    pressureForce_.assign(x_.size(), glm::vec3(0.0f));
+    for (std::size_t t = 0; t + 2 < indices_.size(); t += 3) {
+        const uint32_t a = indices_[t], b = indices_[t + 1], c = indices_[t + 2];
+        const float p = (pressure_[a] + pressure_[b] + pressure_[c]) / 3.0f;
+        if (p == 0.0f) continue;
+        const glm::vec3 areaNormal = 0.5f * glm::cross(x_[b] - x_[a], x_[c] - x_[a]);   // |.| = aire
+        const glm::vec3 f = areaNormal * (p / 3.0f);
+        pressureForce_[a] += f;
+        pressureForce_[b] += f;
+        pressureForce_[c] += f;
+    }
 }
 
 void XpbdSolver::setSeams(const std::vector<std::array<uint32_t, 2>>& pairs, float closeSeconds)
@@ -161,11 +192,14 @@ void XpbdSolver::step(float frameDt)
     const glm::vec3 gravity = sewing ? glm::vec3(0.0f) : settings_.gravity;
 
     for (int s = 0; s < substeps; ++s) {
+        const bool pressure = !pressure_.empty() && !sewing;
+        if (pressure) computePressureForces();
         // 1. Prédiction (Euler symplectique)
         for (std::size_t i = 0; i < n; ++i) {
             prev_[i] = x_[i];
             if (invMass_[i] == 0.0f) continue;
             v_[i] += gravity * dt;
+            if (pressure) v_[i] += pressureForce_[i] * (invMass_[i] * dt);
             x_[i] += v_[i] * dt;
         }
 
@@ -246,17 +280,20 @@ void XpbdSolver::solveSeams()
 
 void XpbdSolver::solveObstacles()
 {
-    const float thickness = material_.thickness;
     const float mu = material_.friction;
     // Rayon de recherche sur le corps : l'épaisseur + le déplacement maximal
     // d'un sous-pas (vitesse limitée), donc une particule qui vient de
     // pénétrer est toujours retrouvée.
-    const float searchRadius = thickness + settings_.maxStepRatio * restSpacing_ + 0.002f;
+    const float baseThickness = material_.thickness;
+    float maxExtra = 0.0f;
+    for (const float e : extraThickness_) maxExtra = std::max(maxExtra, e);
+    const float searchRadius = baseThickness + maxExtra + settings_.maxStepRatio * restSpacing_ + 0.002f;
     meshContacts_ = 0;
     for (std::size_t i = 0; i < x_.size(); ++i) {
         contactNormal_[i] = glm::vec3(0.0f);
         if (invMass_[i] == 0.0f) continue;
         glm::vec3& p = x_[i];
+        const float thickness = baseThickness + (extraThickness_.empty() ? 0.0f : extraThickness_[i]);
 
         for (const auto& sphere : spheres_) {
             const glm::vec3 d = p - sphere.center;
@@ -303,19 +340,28 @@ void XpbdSolver::solveSelfCollisions()
     // Contact particule–particule : la grille est reconstruite à chaque
     // sous-pas (O(n)) et on n'interroge que les 27 cellules voisines.
     hash_.build(x_);
-    const float d0 = selfDistance_;
-    const float d0Sq = d0 * d0;
+    float maxExtra = 0.0f;
+    for (const float e : extraThickness_) maxExtra = std::max(maxExtra, e);
+    const float dMax = selfDistance_ + maxExtra;
     std::vector<uint32_t> candidates;
     candidates.reserve(64);
 
     for (uint32_t i = 0; i < x_.size(); ++i) {
         candidates.clear();
-        hash_.query(x_[i], d0, candidates);
+        hash_.query(x_[i], dMax, candidates);
 
         for (const uint32_t j : candidates) {
             if (j <= i) continue;                       // chaque paire une seule fois
-            const float w = invMass_[i] + invMass_[j];
+            // Couches : la particule de la couche la plus haute est poussée dehors en priorité.
+            float wi = invMass_[i], wj = invMass_[j];
+            if (!layer_.empty() && layer_[i] != layer_[j]) {
+                if (layer_[i] < layer_[j]) wi *= 0.1f;
+                else wj *= 0.1f;
+            }
+            const float w = wi + wj;
             if (w == 0.0f) continue;
+            const float d0 = selfDistance_ + (extraThickness_.empty() ? 0.0f : 0.5f * (extraThickness_[i] + extraThickness_[j]));
+            const float d0Sq = d0 * d0;
             const glm::vec3 d = x_[i] - x_[j];
             const float distSq = glm::dot(d, d);
             if (distSq >= d0Sq || distSq < kEpsilon * kEpsilon) continue;
@@ -328,8 +374,8 @@ void XpbdSolver::solveSelfCollisions()
             const float dist = std::sqrt(distSq);
             const glm::vec3 nrm = d / dist;
             const float corr = (d0 - dist) / w;
-            x_[i] += nrm * (corr * invMass_[i]);
-            x_[j] -= nrm * (corr * invMass_[j]);
+            x_[i] += nrm * (corr * wi);
+            x_[j] -= nrm * (corr * wj);
             ++stats_.selfCollisionPairs;
         }
     }

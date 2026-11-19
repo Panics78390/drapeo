@@ -86,6 +86,16 @@ public:
     void setPinned(uint32_t particle, bool pinned);
     /// Raideur par particule (1 = matériau normal, > 1 = renforcé). Vide = partout 1.
     void setStiffnessScale(std::vector<float> scale) { stiffness_ = std::move(scale); }
+    /// Propriétés par particule (vides = aucune) : épaisseur ajoutée aux contacts (m), couche
+    /// (la plus haute est poussée dehors en priorité), pression (Pa, vers la face avant des triangles).
+    void setParticleProperties(std::vector<float> extraThickness, std::vector<int> layer, std::vector<float> pressure);
+    /// Multiplie les longueurs de repos (étirement et flexion) par f(a, b) : rétrécissement des pièces.
+    template <typename F>
+    void scaleRestLengths(F&& f)
+    {
+        for (auto* list : {&stretch_, &bend_})
+            for (auto& c : *list) c.rest *= f(c.a, c.b);
+    }
     [[nodiscard]] bool isPinned(uint32_t particle) const { return pinned_[particle] != 0; }
     /// Saisie à la souris : la particule devient cinématique et suit `target`.
     void grab(uint32_t particle);
@@ -122,6 +132,11 @@ private:
     std::vector<float>     invMass_;
     std::vector<uint8_t>   pinned_;
     std::vector<float>     stiffness_;      // raideur par particule (pièces renforcées)
+    std::vector<float>     extraThickness_; // épaisseur de contact ajoutée par particule
+    std::vector<int>       layer_;          // couche de la pièce de chaque particule
+    std::vector<float>     pressure_;       // pression par particule (Pa)
+    std::vector<glm::vec3> pressureForce_;
+    void computePressureForces();
     std::vector<float>     massPerParticle_;
     std::vector<glm::vec3> contactNormal_;
     std::vector<glm::vec3> velocityDelta_;  // tampons de smoothVelocities

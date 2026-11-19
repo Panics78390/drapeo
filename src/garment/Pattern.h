@@ -51,6 +51,14 @@ struct Panel {
     int linkGroup = 0;
     bool linkMirror = false;
     float linkAngle = 0.0f;   // degrés
+    // Propriétés de simulation de la pièce (onglet Simulation)
+    float particleDistance = 0.0f;   // espacement des particules (m) ; 0 = celui du vêtement
+    int layer = 0;                   // couche : > 0 posée par-dessus, prioritaire dans les contacts
+    float shrinkWeft = 1.0f;         // rétrécissement trame (perpendiculaire au droit fil), 1 = 100 %
+    float shrinkWarp = 1.0f;         // rétrécissement chaîne (le long du droit fil)
+    float thickCollision = 0.0f;     // épaisseur ajoutée pour les contacts (m)
+    float thickRender = 0.0f;        // épaisseur ajoutée à l'affichage (m)
+    float pressure = 0.0f;           // pression (Pa) qui pousse la pièce vers son endroit (volume gonflé)
 };
 
 /// Un bord = le segment entre points[edge] et points[(edge + 1) % n] de la pièce.

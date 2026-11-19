@@ -89,6 +89,7 @@ private:
         FrameSelection, ExportSelection
     };
     void drawPieceMenu();
+    void inspectorPanelSimulation();
     void pieceAction(PieceAction action);
     void pasteClipboard(bool mirror, bool atMenuPoint);
     void commitState();      // modification sans remaillage (état 3D des pièces)
