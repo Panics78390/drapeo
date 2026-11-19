@@ -38,6 +38,8 @@ struct Panel {
     glm::vec3 color{0.85f, 0.83f, 0.78f};
     Placement placement;
     float grainDeg = 90.0f;   // droit fil dans le patron (degrés, 90 = vertical)
+    bool symmetric = false;   // édition symétrique autour d'un axe vertical
+    float symAxisX = 0.0f;    // abscisse de l'axe de symétrie (m)
 };
 
 /// Un bord = le segment entre points[edge] et points[(edge + 1) % n] de la pièce.
@@ -109,6 +111,19 @@ enum class TaperAnchor { Center, Left, Right };
 /// Resserre (amount < 0) ou élargit (amount > 0) une pièce en largeur, progressivement selon
 /// `mode` (Bottom : surtout en bas, Middle : surtout à mi-hauteur...). Les poches posées dessus suivent.
 void taperPanel(Garment& g, int panel, float amount, TaperMode mode, TaperAnchor anchor);
+
+/// Réunion (subtract = false) ou différence de deux contours simples. Renvoie les contours
+/// obtenus (vide si rien ne reste) ; `touching` = false si les contours ne se touchent pas.
+std::vector<std::vector<glm::vec2>> polygonBoolean(const std::vector<glm::vec2>& a, const std::vector<glm::vec2>& b,
+                                                   bool subtract, bool* touching = nullptr);
+
+/// Ajoute (union) ou découpe (différence) la forme de la pièce `shape` dans la pièce `target`,
+/// puis supprime `shape`. Les coutures de `target` dont les bords sont intacts sont gardées.
+/// Renvoie false (et `error`) si le résultat n'est pas une seule pièce sans trou.
+bool combinePanels(Garment& g, int target, int shape, bool subtract, std::string& error);
+
+/// Index du point symétrique de `point` dans une pièce symétrique (-1 s'il n'y en a pas, ou s'il est sur l'axe).
+int symmetricPartner(const Panel& panel, int point);
 
 /// Segment du droit fil d'une pièce (à travers son centre, aux deux tiers de sa longueur).
 void grainLine(const Panel& panel, glm::vec2& a, glm::vec2& b);

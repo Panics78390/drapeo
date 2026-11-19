@@ -71,6 +71,17 @@ Menu **Fichier → Importer un patron...** (Ctrl+I) ou glisser-déposer le fichi
 
 ![Import d'une image de patron](docs/capture-import-image.png)
 
+## Aimant, symétrie, ajouter ou découper une forme
+
+- **Aimant** (bouton en U de la barre d'outils, touche **M**) : un point tiré, un point de polygone ou un coin de
+  rectangle s'accroche au point ou au bord le plus proche d'une autre pièce ; une pièce glissée accroche ses
+  points à ceux des pièces voisines. Un cercle rose montre l'accroche. Maj garde la grille de 1 cm.
+- **Symétrie** (Propriétés > Symétrie) : la pièce reçoit un axe vertical en son milieu (pointillés bleus) ;
+  un point déplacé, ajouté (double-clic sur un bord) ou supprimé l'est aussi de l'autre côté.
+- **Ajouter ou découper** : tracez une forme (polygone, rectangle) qui chevauche le bord d'une pièce, puis
+  **Ajouter à la pièce** (réunion) ou **Découper dans la pièce** (encoche, échancrure). Les coutures des bords
+  restés intacts sont gardées. Une découpe qui ferait un trou au milieu est refusée.
+
 ## Cintrer
 
 Dans **Propriétés > Cintrer**, on resserre ou on élargit la pièce sélectionnée (ou toutes les pièces sélectionnées

@@ -23,6 +23,7 @@ std::string writeProject(const garment::Garment& g, const ProjectAvatar* avatar)
         o << "nom " << p.name << "\n";
         o << "couleur " << p.color.r << ' ' << p.color.g << ' ' << p.color.b << "\n";
         o << "droitfil " << p.grainDeg << "\n";
+        if (p.symmetric) o << "symetrie " << p.symAxisX << "\n";
         const auto& pl = p.placement;
         o << "placement " << static_cast<int>(pl.zone) << ' ' << pl.angleDeg << ' ' << pl.height << ' ' << pl.radius << ' '
           << pl.offset.x << ' ' << pl.offset.y << ' ' << pl.offset.z << ' ' << pl.rotation.w << ' ' << pl.rotation.x << ' '
@@ -66,6 +67,9 @@ bool parseProject(const std::string& text, garment::Garment& out, std::string& e
         } else if (key == "couleur" && !g.panels.empty()) {
             auto& c = g.panels.back().color;
             ls >> c.r >> c.g >> c.b;
+        } else if (key == "symetrie" && !g.panels.empty()) {
+            g.panels.back().symmetric = true;
+            ls >> g.panels.back().symAxisX;
         } else if (key == "droitfil" && !g.panels.empty()) {
             ls >> g.panels.back().grainDeg;
         } else if (key == "placement" && !g.panels.empty()) {

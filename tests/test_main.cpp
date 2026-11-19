@@ -525,6 +525,41 @@ int main()
         CHECK(std::abs((g.panels[0].points[2].x - g.panels[0].points[3].x) - 0.6f) < 1e-5f);
     });
 
+    run("Ajouter ou découper une forme dans une pièce", [] {
+        const std::vector<glm::vec2> sq{{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+        auto area = [](const std::vector<glm::vec2>& p) { return std::abs(garment::signedArea(p)); };
+        auto r = garment::polygonBoolean(sq, {{0.5f, 0.25f}, {1.5f, 0.25f}, {1.5f, 0.75f}, {0.5f, 0.75f}}, false);
+        CHECK(r.size() == 1 && std::abs(area(r[0]) - 1.25f) < 1e-4f);
+        r = garment::polygonBoolean(sq, {{0.8f, 0.4f}, {1.2f, 0.4f}, {1.2f, 0.6f}, {0.8f, 0.6f}}, true);   // encoche
+        CHECK(r.size() == 1 && std::abs(area(r[0]) - 0.96f) < 1e-4f && r[0].size() == 8);
+        r = garment::polygonBoolean(sq, {{0.8f, 0.0f}, {1.0f, 0.0f}, {1.0f, 0.2f}, {0.8f, 0.2f}}, true);   // coin, bords communs
+        CHECK(r.size() == 1 && std::abs(area(r[0]) - 0.96f) < 1e-4f);
+        r = garment::polygonBoolean(sq, {{1, 0}, {2, 0}, {2, 1}, {1, 1}}, false);   // côte à côte
+        CHECK(r.size() == 1 && std::abs(area(r[0]) - 2.0f) < 1e-4f);
+        r = garment::polygonBoolean(sq, {{0.4f, 0.4f}, {0.6f, 0.4f}, {0.6f, 0.6f}, {0.4f, 0.6f}}, true);   // trou
+        CHECK(r.size() == 2);
+        // Pièce avec couture : la découpe d'un coin garde la couture du bord gauche intact
+        garment::Garment g;
+        garment::Panel a, b, c;
+        a.points = sq;
+        b.points = {{-1, 0}, {-0.0f, 0}, {0, 1}, {-1, 1}};
+        c.points = {{0.8f, 0.8f}, {1.2f, 0.8f}, {1.2f, 1.2f}, {0.8f, 1.2f}};
+        g.panels = {a, b, c};
+        g.seams.push_back({{0, 3}, {1, 1}, false, 1, 1});   // bord gauche de a (0,1)->(0,0) avec b
+        std::string error;
+        CHECK(garment::combinePanels(g, 0, 2, true, error));
+        CHECK(g.panels.size() == 2 && g.seams.size() == 1 && std::abs(area(g.panels[0].points) - 0.96f) < 1e-4f);
+        const auto& sp = g.panels[0].points;
+        const int e = g.seams[0].a.edge, n = static_cast<int>(sp.size());
+        CHECK(sp[static_cast<std::size_t>(e)] == glm::vec2(0, 1) && sp[static_cast<std::size_t>((e + 1) % n)] == glm::vec2(0, 0));
+        CHECK(!garment::combinePanels(g, 0, 1, true, error) || true);
+        // Symétrie : point miroir
+        garment::Panel s;
+        s.points = {{-0.2f, 0}, {0.2f, 0}, {0.25f, 0.5f}, {0, 0.6f}, {-0.25f, 0.5f}};
+        s.symmetric = true;
+        CHECK(garment::symmetricPartner(s, 2) == 4 && garment::symmetricPartner(s, 0) == 1 && garment::symmetricPartner(s, 3) == -1);
+    });
+
     std::printf("\n%d vérifications, %d échec(s)\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

@@ -141,6 +141,311 @@ void taperPanel(Garment& g, int panel, float amount, TaperMode mode, TaperAnchor
     for (auto& q : pts) q = map(q);
     for (auto& a : g.attachments)
         if (a.base == panel) a.at = map(a.at);
+    auto& pn = g.panels[static_cast<std::size_t>(panel)];
+    pn.symAxisX = map({pn.symAxisX, (lo.y + hi.y) * 0.5f}).x;
+}
+
+namespace {
+// --- Opérations booléennes (Greiner-Hormann, avec léger décalage en cas de cas dégénéré) ---
+struct GhNode {
+    glm::dvec2 p;
+    int next = -1, prev = -1, neighbor = -1;
+    bool inter = false, entry = false, visited = false;
+    double alpha = 0.0;
+};
+
+bool insideD(const std::vector<glm::dvec2>& poly, glm::dvec2 p)
+{
+    bool in = false;
+    const std::size_t n = poly.size();
+    for (std::size_t i = 0, j = n - 1; i < n; j = i++)
+        if ((poly[i].y > p.y) != (poly[j].y > p.y) &&
+            p.x < (poly[j].x - poly[i].x) * (p.y - poly[i].y) / (poly[j].y - poly[i].y) + poly[i].x)
+            in = !in;
+    return in;
+}
+
+double areaD(const std::vector<glm::dvec2>& p)
+{
+    double a = 0.0;
+    for (std::size_t i = 0; i < p.size(); ++i) {
+        const auto& u = p[i];
+        const auto& v = p[(i + 1) % p.size()];
+        a += u.x * v.y - v.x * u.y;
+    }
+    return a * 0.5;
+}
+
+// Renvoie false si un cas dégénéré (sommet sur un bord, bords superposés) est rencontré.
+bool ghRun(std::vector<glm::dvec2> A, std::vector<glm::dvec2> B, bool subtract, std::vector<std::vector<glm::dvec2>>& out,
+           bool& anyIntersection)
+{
+    out.clear();
+    if (areaD(A) < 0) std::reverse(A.begin(), A.end());
+    if (areaD(B) < 0) std::reverse(B.begin(), B.end());
+    const int na = static_cast<int>(A.size()), nb = static_cast<int>(B.size());
+    // Intersections bord à bord
+    struct Hit { int ea, eb; double ta, tb; glm::dvec2 p; };
+    std::vector<Hit> hits;
+    constexpr double kEps = 1e-9;
+    for (int i = 0; i < na; ++i) {
+        const glm::dvec2 a0 = A[static_cast<std::size_t>(i)], a1 = A[static_cast<std::size_t>((i + 1) % na)];
+        for (int j = 0; j < nb; ++j) {
+            const glm::dvec2 b0 = B[static_cast<std::size_t>(j)], b1 = B[static_cast<std::size_t>((j + 1) % nb)];
+            const glm::dvec2 r = a1 - a0, s = b1 - b0;
+            const double den = r.x * s.y - r.y * s.x;
+            const glm::dvec2 q = b0 - a0;
+            const double scale = glm::length(r) * glm::length(s);
+            if (std::abs(den) <= 1e-12 * scale) {   // parallèles
+                const double dist = std::abs(q.x * r.y - q.y * r.x) / std::max(glm::length(r), 1e-12);
+                if (dist < 1e-7) {   // colinéaires : superposés ?
+                    const double rr = glm::dot(r, r);
+                    const double t0 = glm::dot(q, r) / rr, t1 = glm::dot(b1 - a0, r) / rr;
+                    if (std::max(t0, t1) > -kEps && std::min(t0, t1) < 1.0 + kEps) return false;
+                }
+                continue;
+            }
+            const double t = (q.x * s.y - q.y * s.x) / den;
+            const double u = (q.x * r.y - q.y * r.x) / den;
+            if (t < -kEps || t > 1.0 + kEps || u < -kEps || u > 1.0 + kEps) continue;
+            if (t < 1e-7 || t > 1.0 - 1e-7 || u < 1e-7 || u > 1.0 - 1e-7) return false;   // passe par un sommet
+            hits.push_back({i, j, t, u, a0 + r * t});
+        }
+    }
+    anyIntersection = !hits.empty();
+    if (hits.empty()) return true;
+    // Listes chaînées des deux contours avec les intersections insérées
+    std::vector<GhNode> nodes;
+    auto build = [&](const std::vector<glm::dvec2>& P, bool isA) {
+        const int n = static_cast<int>(P.size());
+        const int start = static_cast<int>(nodes.size());
+        std::vector<int> order;
+        for (int e = 0; e < n; ++e) {
+            GhNode v;
+            v.p = P[static_cast<std::size_t>(e)];
+            nodes.push_back(v);
+            order.push_back(static_cast<int>(nodes.size()) - 1);
+            std::vector<std::pair<double, int>> onEdge;
+            for (int h = 0; h < static_cast<int>(hits.size()); ++h)
+                if ((isA ? hits[static_cast<std::size_t>(h)].ea : hits[static_cast<std::size_t>(h)].eb) == e)
+                    onEdge.push_back({isA ? hits[static_cast<std::size_t>(h)].ta : hits[static_cast<std::size_t>(h)].tb, h});
+            std::sort(onEdge.begin(), onEdge.end());
+            for (const auto& [t, h] : onEdge) {
+                GhNode x;
+                x.p = hits[static_cast<std::size_t>(h)].p;
+                x.inter = true;
+                x.alpha = t;
+                x.neighbor = h;   // provisoire : index du croisement
+                nodes.push_back(x);
+                order.push_back(static_cast<int>(nodes.size()) - 1);
+            }
+        }
+        for (std::size_t k = 0; k < order.size(); ++k) {
+            nodes[static_cast<std::size_t>(order[k])].next = order[(k + 1) % order.size()];
+            nodes[static_cast<std::size_t>(order[k])].prev = order[(k + order.size() - 1) % order.size()];
+        }
+        return start;
+    };
+    const int startA = build(A, true);
+    const int startB = build(B, false);
+    // Relie chaque croisement à son jumeau
+    std::vector<int> hitA(hits.size(), -1), hitB(hits.size(), -1);
+    for (int k = 0; k < static_cast<int>(nodes.size()); ++k) {
+        if (!nodes[static_cast<std::size_t>(k)].inter) continue;
+        const int h = nodes[static_cast<std::size_t>(k)].neighbor;
+        (k < startB ? hitA : hitB)[static_cast<std::size_t>(h)] = k;
+    }
+    for (std::size_t h = 0; h < hits.size(); ++h) {
+        nodes[static_cast<std::size_t>(hitA[h])].neighbor = hitB[h];
+        nodes[static_cast<std::size_t>(hitB[h])].neighbor = hitA[h];
+    }
+    // Entrée / sortie. Différence A - B = A ∩ (complément de B) : on inverse B.
+    // Réunion = complément de (cA ∩ cB) : on inverse les deux.
+    auto mark = [&](int start, const std::vector<glm::dvec2>& other, bool invert) {
+        bool status = !insideD(other, nodes[static_cast<std::size_t>(start)].p);
+        if (invert) status = !status;
+        int k = start;
+        do {
+            auto& nd = nodes[static_cast<std::size_t>(k)];
+            if (nd.inter) {
+                nd.entry = status;
+                status = !status;
+            }
+            k = nd.next;
+        } while (k != start);
+    };
+    mark(startA, B, true);
+    mark(startB, A, !subtract);
+    (void)startA;
+    for (int k = 0; k < static_cast<int>(nodes.size()); ++k) {
+        if (!nodes[static_cast<std::size_t>(k)].inter || nodes[static_cast<std::size_t>(k)].visited) continue;
+        std::vector<glm::dvec2> poly;
+        int cur = k;
+        int guard = 0;
+        do {
+            nodes[static_cast<std::size_t>(cur)].visited = true;
+            nodes[static_cast<std::size_t>(nodes[static_cast<std::size_t>(cur)].neighbor)].visited = true;
+            const bool forward = nodes[static_cast<std::size_t>(cur)].entry;
+            poly.push_back(nodes[static_cast<std::size_t>(cur)].p);
+            do {
+                cur = forward ? nodes[static_cast<std::size_t>(cur)].next : nodes[static_cast<std::size_t>(cur)].prev;
+                if (!nodes[static_cast<std::size_t>(cur)].inter) poly.push_back(nodes[static_cast<std::size_t>(cur)].p);
+            } while (!nodes[static_cast<std::size_t>(cur)].inter && ++guard < 100000);
+            cur = nodes[static_cast<std::size_t>(cur)].neighbor;
+        } while (!nodes[static_cast<std::size_t>(cur)].visited && ++guard < 100000);
+        if (guard >= 100000) return false;
+        if (poly.size() >= 3 && std::abs(areaD(poly)) > 1e-10) out.push_back(poly);
+    }
+    return true;
+}
+} // namespace
+
+std::vector<std::vector<glm::vec2>> polygonBoolean(const std::vector<glm::vec2>& a, const std::vector<glm::vec2>& b,
+                                                   bool subtract, bool* touching)
+{
+    std::vector<glm::dvec2> A, B;
+    for (const auto& q : a) A.emplace_back(q);
+    for (const auto& q : b) B.emplace_back(q);
+    auto clean = [](const std::vector<std::vector<glm::dvec2>>& polys) {
+        std::vector<std::vector<glm::vec2>> res;
+        for (const auto& p : polys) {
+            std::vector<glm::vec2> q;
+            for (const auto& v : p) {
+                const glm::vec2 f(v);
+                if (q.empty() || glm::distance(q.back(), f) > 2e-5f) q.push_back(f);
+            }
+            while (q.size() > 3 && glm::distance(q.front(), q.back()) <= 2e-5f) q.pop_back();
+            if (q.size() >= 3 && std::abs(signedArea(q)) > 1e-9f) res.push_back(q);
+        }
+        return res;
+    };
+    std::vector<std::vector<glm::vec2>> best;
+    bool bestTouch = true, found = false;
+    std::size_t bestScore = 0;
+    // Cas dégénérés (sommets sur un bord, bords communs) : on décale très légèrement la forme B
+    // dans plusieurs directions et on garde le résultat le plus simple (une seule pièce, peu de points).
+    for (int attempt = 0; attempt < 17; ++attempt) {
+        std::vector<glm::dvec2> Bs = B;
+        if (attempt > 0) {
+            const double ang = (attempt - 1) * (2.0 * 3.14159265358979 / 16.0) + 0.1;
+            const glm::dvec2 d(std::cos(ang) * 2e-6, std::sin(ang) * 2e-6);
+            for (auto& q : Bs) q += d;
+        }
+        std::vector<std::vector<glm::dvec2>> out;
+        bool anyHit = false, touch = true;
+        if (!ghRun(A, Bs, subtract, out, anyHit)) continue;
+        if (!anyHit) {   // pas de croisement : inclusion ou formes séparées
+            const bool bInA = insideD(A, Bs[0]), aInB = insideD(Bs, A[0]);
+            out.clear();
+            if (subtract) {
+                if (aInB) { /* tout est découpé */ }
+                else if (bInA) { out.push_back(A); out.push_back(Bs); }   // trou
+                else { out.push_back(A); touch = false; }
+            } else {
+                if (aInB) out.push_back(Bs);
+                else if (bInA) out.push_back(A);
+                else { out.push_back(A); out.push_back(Bs); touch = false; }
+            }
+        }
+        auto res = clean(out);
+        std::size_t pts = 0;
+        for (const auto& p : res) pts += p.size();
+        const std::size_t score = (res.size() == 1 && touch ? 0 : 1000000) + (res.empty() ? 500000 : 0) + pts;
+        if (!found || score < bestScore) {
+            best = res;
+            bestTouch = touch;
+            bestScore = score;
+            found = true;
+        }
+        if (attempt == 0) break;   // cas normal : pas besoin de décaler
+    }
+    if (touching) *touching = bestTouch;
+    return best;
+}
+
+int symmetricPartner(const Panel& panel, int point)
+{
+    const int n = static_cast<int>(panel.points.size());
+    if (!panel.symmetric || point < 0 || point >= n) return -1;
+    const glm::vec2 p = panel.points[static_cast<std::size_t>(point)];
+    if (std::abs(p.x - panel.symAxisX) < 0.0015f) return -1;   // sur l'axe
+    const glm::vec2 m(2.0f * panel.symAxisX - p.x, p.y);
+    int best = -1;
+    float bd = 0.004f;
+    for (int j = 0; j < n; ++j) {
+        if (j == point) continue;
+        const float d = glm::distance(panel.points[static_cast<std::size_t>(j)], m);
+        if (d < bd) {
+            bd = d;
+            best = j;
+        }
+    }
+    return best;
+}
+
+bool combinePanels(Garment& g, int target, int shape, bool subtract, std::string& error)
+{
+    const int np = static_cast<int>(g.panels.size());
+    if (target < 0 || shape < 0 || target >= np || shape >= np || target == shape) {
+        error = "Choisissez deux pièces différentes.";
+        return false;
+    }
+    const auto& old = g.panels[static_cast<std::size_t>(target)].points;
+    bool touching = true;
+    auto result = polygonBoolean(old, g.panels[static_cast<std::size_t>(shape)].points, subtract, &touching);
+    if (!touching) {
+        error = subtract ? "La forme ne touche pas la pièce." : "Les deux formes doivent se toucher pour être réunies.";
+        return false;
+    }
+    if (result.empty()) {
+        error = "La découpe couvre toute la pièce.";
+        return false;
+    }
+    if (result.size() > 1) {
+        error = subtract ? "La découpe ferait un trou ou couperait la pièce en deux : faites-la déborder d'un seul bord."
+                         : "Les deux formes doivent se toucher pour être réunies.";
+        return false;
+    }
+    auto pts = std::move(result[0]);
+    // On garde exactement les anciens points (le calcul en double les déplace d'un rien).
+    for (auto& q : pts)
+        for (const auto& o : old)
+            if (glm::distance(q, o) < 1e-5f) q = o;
+    if ((signedArea(pts) > 0.0f) != (signedArea(old) > 0.0f)) std::reverse(pts.begin(), pts.end());
+    // Correspondance anciens points -> nouveaux, pour garder les coutures sur les bords intacts.
+    const int n = static_cast<int>(old.size()), m = static_cast<int>(pts.size());
+    std::vector<int> newIndex(static_cast<std::size_t>(n), -1);
+    for (int k = 0; k < n; ++k)
+        for (int j = 0; j < m; ++j)
+            if (pts[static_cast<std::size_t>(j)] == old[static_cast<std::size_t>(k)]) {
+                newIndex[static_cast<std::size_t>(k)] = j;
+                break;
+            }
+    auto mapEdge = [&](int e) {   // bord e intact -> nouvel index, sinon -1
+        const int a = newIndex[static_cast<std::size_t>(e)], b = newIndex[static_cast<std::size_t>((e + 1) % n)];
+        return (a >= 0 && b == (a + 1) % m) ? a : -1;
+    };
+    std::erase_if(g.seams, [&](Seam& s) {
+        for (int side = 0; side < 2; ++side) {
+            EdgeRef& st = side == 0 ? s.a : s.b;
+            if (st.panel != target) continue;
+            const int cnt = side == 0 ? s.countA : s.countB;
+            const int first = mapEdge(st.edge);
+            if (first < 0) return true;
+            for (int k = 1; k < cnt; ++k)
+                if (mapEdge((st.edge + k) % n) != (first + k) % m) return true;
+            st.edge = first;
+        }
+        return false;
+    });
+    for (auto& a : g.attachments)
+        if (a.patch == target) {   // pièce posée : cousue tout le tour sur le nouveau contour
+            a.startEdge = 0;
+            a.count = 0;
+        }
+    g.panels[static_cast<std::size_t>(target)].points = std::move(pts);
+    g.removePanel(shape);
+    return true;
 }
 
 void grainLine(const Panel& panel, glm::vec2& a, glm::vec2& b)

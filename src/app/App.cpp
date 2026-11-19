@@ -129,7 +129,7 @@ void label(const char* text)
 }
 
 // --- Icônes dessinées (aucune ressource externe) ---------------------------
-enum class Icon { Select, Polygon, Rectangle, Seam, Play, Pause, Step, Reset, Frame };
+enum class Icon { Select, Polygon, Rectangle, Seam, Magnet, Play, Pause, Step, Reset, Frame };
 
 void drawIcon(ImDrawList* dl, Icon icon, ImVec2 c, float r, ImU32 col)
 {
@@ -165,6 +165,15 @@ void drawIcon(ImDrawList* dl, Icon icon, ImVec2 c, float r, ImU32 col)
             const float y = -0.6f + i * 0.4f;
             dl->AddLine(P(-0.42f, y), P(0.42f, y), col, t * 0.9f);
         }
+        break;
+    }
+    case Icon::Magnet: {   // aimant en U
+        dl->PathArcTo(P(0.0f, 0.05f), r * 0.5f, 0.0f, kPi, 20);
+        dl->PathStroke(col, 0, t * 2.2f);
+        dl->AddLine(P(-0.5f, 0.05f), P(-0.5f, -0.7f), col, t * 2.2f);
+        dl->AddLine(P(0.5f, 0.05f), P(0.5f, -0.7f), col, t * 2.2f);
+        dl->AddLine(P(-0.72f, -0.55f), P(-0.28f, -0.55f), col, t);
+        dl->AddLine(P(0.28f, -0.55f), P(0.72f, -0.55f), col, t);
         break;
     }
     case Icon::Play:
@@ -1759,6 +1768,9 @@ void App::drawToolbar()
     ImGui::SameLine(0, 2);
     if (iconButton("seam", Icon::Seam, "Couture (S)\nCliquer deux bords à coudre ensemble", editor_.tool == Tool::Seam, b))
         editor_.tool = Tool::Seam;
+    ImGui::SameLine(0, 2);
+    if (iconButton("magnet", Icon::Magnet, "Aimant (M)\nLes points et les pièces s'accrochent aux points et bords voisins", editor_.magnet, b))
+        editor_.magnet = !editor_.magnet;
 
     toolbarSeparator(b);
     if (iconButton("play", playing_ ? Icon::Pause : Icon::Play, playing_ ? "Pause (Espace)" : "Simuler (Espace)", playing_, b))
@@ -2002,7 +2014,25 @@ void App::inspectorPanel()
         }
     }
 
+    {
+        bool sym = panel.symmetric;
+        if (ImGui::Checkbox("Symétrie (axe vertical au milieu)", &sym)) {
+            panel.symmetric = sym;
+            if (sym) {
+                float lo = 1e9f, hi = -1e9f;
+                for (const auto& q : panel.points) {
+                    lo = std::min(lo, q.x);
+                    hi = std::max(hi, q.x);
+                }
+                panel.symAxisX = (lo + hi) * 0.5f;
+            }
+            committed_ = garment_;
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Un point déplacé, ajouté (double-clic) ou supprimé l'est aussi de l'autre côté de l'axe.");
+    }
     inspectorTaper();
+    inspectorCombine(idx);
 
     float perimeter = 0.0f;
     for (std::size_t e = 0; e < panel.points.size(); ++e) perimeter += garment_.edgeLength({idx, static_cast<int>(e)});
@@ -2152,6 +2182,65 @@ void App::inspectorBackdrop()
     ImGui::SameLine();
     if (ImGui::Button("Retirer l'image", ImVec2(hw, 0))) removeBackdrop();
     ImGui::Spacing();
+}
+
+void App::inspectorCombine(int idx)
+{
+    // Ajouter ou découper la forme sélectionnée dans une autre pièce.
+    const int n = static_cast<int>(garment_.panels.size());
+    if (n < 2 || garment_.attachmentOf(idx) >= 0) return;
+    const auto& self = garment_.panels[static_cast<std::size_t>(idx)].points;
+    auto overlaps = [&](int p) {
+        if (p < 0 || p >= n || p == idx || garment_.attachmentOf(p) >= 0) return false;
+        const auto& other = garment_.panels[static_cast<std::size_t>(p)].points;
+        for (const auto& q : self)
+            if (garment::pointInPolygon(other, q)) return true;
+        return false;
+    };
+    if (combineFor_ != idx || !overlaps(combineTarget_)) {   // pièce proposée : celle que la forme recouvre
+        combineFor_ = idx;
+        combineTarget_ = -1;
+        for (int p = 0; p < n && combineTarget_ < 0; ++p)
+            if (overlaps(p)) combineTarget_ = p;
+    }
+    if (combineTarget_ < 0 || combineTarget_ >= n || combineTarget_ == idx) {
+        combineTarget_ = -1;
+        return;   // la forme ne recouvre aucune pièce : rien à proposer
+    }
+    ImGui::SeparatorText("Ajouter ou découper cette forme");
+    label("Pièce");
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::BeginCombo("##combine", garment_.panels[static_cast<std::size_t>(combineTarget_)].name.c_str())) {
+        for (int p = 0; p < n; ++p) {
+            if (p == idx || garment_.attachmentOf(p) >= 0) continue;
+            ImGui::PushID(p);
+            if (ImGui::Selectable(garment_.panels[static_cast<std::size_t>(p)].name.c_str(), p == combineTarget_)) combineTarget_ = p;
+            ImGui::PopID();
+        }
+        ImGui::EndCombo();
+    }
+    const float hw = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+    int action = -1;
+    if (ImGui::Button("Ajouter à la pièce", ImVec2(hw, 0))) action = 0;
+    ImGui::SameLine();
+    if (ImGui::Button("Découper dans la pièce", ImVec2(hw, 0))) action = 1;
+    if (action >= 0) {
+        const int target = combineTarget_;
+        const std::string name = garment_.panels[static_cast<std::size_t>(target)].name;
+        std::string error;
+        if (garment::combinePanels(garment_, target, idx, action == 1, error)) {
+            editor_.clearSelection();
+            editor_.selectedPanel = idx < target ? target - 1 : target;
+            combineFor_ = -1;
+            commitGarment();
+            setStatus(std::string(action == 1 ? "Forme découpée dans « " : "Forme ajoutée à « ") + name + " ». Ctrl+Z pour annuler.", false);
+        } else {
+            setStatus(error, true);
+        }
+    }
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextWrapped("Tracez une forme (polygone, rectangle) qui chevauche le bord d'une pièce, puis ajoutez-la ou découpez-la.");
+    ImGui::PopStyleColor();
 }
 
 void App::inspectorTaper()

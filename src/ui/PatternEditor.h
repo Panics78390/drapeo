@@ -39,6 +39,7 @@ public:
     int selectedSeam = -1;
     std::vector<int> selection;   // sélection multiple (rectangle, Maj+clic) ; contient selectedPanel
     Backdrop backdrop;
+    bool magnet = true;           // aimant : points et pièces s'accrochent aux points et bords voisins
 
     [[nodiscard]] bool isSelected(int panel) const;
 
@@ -61,6 +62,15 @@ private:
     int pickPoint(const garment::Garment& g, int panel, ImVec2 mouse) const;
     int pickPanel(const garment::Garment& g, glm::vec2 w) const;
     glm::vec2 snap(glm::vec2 w) const;
+    /// Petit décalage qui accroche un point des pièces `ids` (déplacées de `delta`) au point le plus proche d'une autre pièce.
+    glm::vec2 magnetOffset(const garment::Garment& g, const std::vector<int>& ids, glm::vec2 delta) const;
+    const garment::Garment* g_ = nullptr;   // vêtement en cours d'édition (pour l'aimant)
+    mutable bool snapped_ = false;          // l'aimant a accroché le dernier point
+    mutable glm::vec2 snapPos_{0.0f};
+    int snapExcludePanel_ = -1;             // pièce ignorée par l'aimant (celle dont on tire un point)
+    int symPartner_ = -1;                   // point miroir du point tiré (pièce symétrique)
+    bool symOnAxis_ = false;                // le point tiré est sur l'axe de symétrie
+    glm::vec2 dragApplied_{0.0f};           // déplacement déjà appliqué aux pièces glissées
     /// Déplace des pièces dans le patron ; les poches cousues suivent leur base.
     void movePanels(garment::Garment& g, const std::vector<int>& ids, glm::vec2 d);
     bool attachMoved_ = false;   // une pose a bougé pendant le glisser : il faudra recoudre

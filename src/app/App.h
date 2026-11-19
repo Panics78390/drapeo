@@ -101,6 +101,7 @@ private:
     void inspectorSeams();
     void inspectorSewOn(int panel);
     void inspectorTaper();
+    void inspectorCombine(int panel);
     void inspectorFabric();
     void inspectorAvatar();
     void inspectorSimulation();
@@ -142,6 +143,7 @@ private:
     int sewFor_ = -1, sewBase_ = -1, sewKind_ = 0;
     float taperPercent_ = 10.0f;   // « Cintrer » de l'inspecteur
     bool taperWiden_ = false;
+    int combineFor_ = -1, combineTarget_ = -1;   // « Ajouter ou découper » de l'inspecteur
     int taperMode_ = 1, taperAnchor_ = 0;   // « Coudre sur une pièce » de l'inspecteur
     std::vector<glm::vec3> displayPositions_;   // positions affichées (pièces posées décollées)
     // Buffers réutilisés à chaque image
