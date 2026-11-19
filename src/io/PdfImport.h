@@ -17,11 +17,14 @@
 
 #include <glm/glm.hpp>
 
+#include "io/RasterImage.h"
+
 namespace drapeo::io {
 
 struct PdfPatternResult {
     std::vector<std::vector<glm::vec2>> outlines;   // contours fermés (m), Y vers le haut
-    std::string jpeg;                               // première image JPEG intégrée (PDF scanné)
+    std::string jpeg;                               // plus grande image, si elle est en JPEG (PDF scanné)
+    RasterImage image;                              // plus grande image, si elle est en pixels compressés
     std::size_t paths = 0;                          // tracés lus (fermés ou non)
     glm::vec2 pageSize{0.0f};                       // format de la première page (m), 0 si inconnu
 };

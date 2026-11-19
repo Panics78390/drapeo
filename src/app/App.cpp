@@ -673,8 +673,8 @@ void App::importPattern(const std::string& path)
             return;
         }
         // PDF scanné : la page est une image, on l'importe comme calque.
-        io::RasterImage img;
-        if (!io::decodeRasterImage(pdf.jpeg, img, error)) {
+        io::RasterImage img = std::move(pdf.image);
+        if (img.width == 0 && !io::decodeRasterImage(pdf.jpeg, img, error)) {
             setStatus("Image du PDF illisible : " + error, true);
             return;
         }

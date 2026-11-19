@@ -61,6 +61,53 @@ std::string decodeAscii85(const std::string& in)
     return out;
 }
 
+/// Valeur numérique d'une clé de dictionnaire (« /Width 1200 »), -1 si absente.
+int dictNumber(const std::string& dict, const char* key)
+{
+    std::size_t p = 0;
+    const std::string k(key);
+    while ((p = dict.find(k, p)) != std::string::npos) {
+        p += k.size();
+        if (p < dict.size() && std::isalpha(static_cast<unsigned char>(dict[p]))) continue;   // /Widths...
+        while (p < dict.size() && std::isspace(static_cast<unsigned char>(dict[p]))) ++p;
+        if (p < dict.size() && std::isdigit(static_cast<unsigned char>(dict[p]))) return std::atoi(dict.c_str() + p);
+    }
+    return -1;
+}
+
+/// Inverse le filtre « prédicteur PNG » (DecodeParms /Predictor >= 10).
+std::string unpredictPng(const std::string& in, int columns, int bpp)
+{
+    const std::size_t row = static_cast<std::size_t>(columns) * bpp;
+    std::string out;
+    std::string prev(row, '\0');
+    for (std::size_t p = 0; p + 1 + row <= in.size(); p += 1 + row) {
+        const int type = static_cast<unsigned char>(in[p]);
+        std::string cur = in.substr(p + 1, row);
+        for (std::size_t i = 0; i < row; ++i) {
+            const int a = i >= static_cast<std::size_t>(bpp) ? static_cast<unsigned char>(cur[i - bpp]) : 0;
+            const int b = static_cast<unsigned char>(prev[i]);
+            const int c = i >= static_cast<std::size_t>(bpp) ? static_cast<unsigned char>(prev[i - bpp]) : 0;
+            int x = static_cast<unsigned char>(cur[i]);
+            switch (type) {
+            case 1: x += a; break;
+            case 2: x += b; break;
+            case 3: x += (a + b) / 2; break;
+            case 4: {
+                const int pa = std::abs(b - c), pb = std::abs(a - c), pc = std::abs(a + b - 2 * c);
+                x += (pa <= pb && pa <= pc) ? a : (pb <= pc ? b : c);
+                break;
+            }
+            default: break;
+            }
+            cur[i] = static_cast<char>(x & 0xFF);
+        }
+        out += cur;
+        prev = cur;
+    }
+    return out;
+}
+
 bool isDelimiter(char ch)
 {
     return std::isspace(static_cast<unsigned char>(ch)) || ch == '(' || ch == ')' || ch == '<' || ch == '>' || ch == '[' ||
@@ -182,6 +229,7 @@ bool parsePdf(const std::string& bytes, PdfPatternResult& out, std::string& erro
     }
     std::vector<std::vector<glm::vec2>> closed;
     std::size_t pos = 0;
+    long long bestImagePixels = 0;
     while ((pos = bytes.find("stream", pos)) != std::string::npos) {
         // « endstream » contient aussi « stream » : on l'ignore.
         if (pos >= 3 && bytes.compare(pos - 3, 3, "end") == 0) { pos += 6; continue; }
@@ -199,7 +247,55 @@ bool parsePdf(const std::string& bytes, PdfPatternResult& out, std::string& erro
 
         const bool image = dict.find("/Image") != std::string::npos;
         if (image) {
-            if (out.jpeg.empty() && dict.find("/DCTDecode") != std::string::npos) out.jpeg = bytes.substr(dataStart, len);
+            // Page scannée : on garde la plus grande image (JPEG, ou pixels compressés
+            // comme dans les PDF enregistrés depuis un navigateur).
+            const int w = dictNumber(dict, "/Width"), h = dictNumber(dict, "/Height");
+            if (w <= 0 || h <= 0) continue;
+            const long long pixels = static_cast<long long>(w) * h;
+            if (pixels <= bestImagePixels) continue;
+            std::string encoded = bytes.substr(dataStart, len);
+            if (dict.find("/ASCII85Decode") != std::string::npos) encoded = decodeAscii85(encoded);
+            if (dict.find("/DCTDecode") != std::string::npos) {
+                out.jpeg = encoded;
+                out.image = {};
+                bestImagePixels = pixels;
+            } else if (dict.find("/FlateDecode") != std::string::npos && dictNumber(dict, "/BitsPerComponent") == 8) {
+                int outLen = 0;
+                char* raw = stbi_zlib_decode_malloc(encoded.data(), static_cast<int>(encoded.size()), &outLen);
+                if (raw == nullptr) continue;
+                std::string data(raw, raw + outLen);
+                std::free(raw);
+                int comps = 0;
+                for (const int c : {3, 1, 4}) {
+                    const auto need = static_cast<std::size_t>(pixels) * static_cast<std::size_t>(c);
+                    if (data.size() == need || (dictNumber(dict, "/Predictor") >= 10 && data.size() == need + static_cast<std::size_t>(h))) {
+                        comps = c;
+                        break;
+                    }
+                }
+                if (comps == 0) continue;
+                if (dictNumber(dict, "/Predictor") >= 10) data = unpredictPng(data, w, comps);
+                RasterImage img;
+                img.width = w;
+                img.height = h;
+                img.rgba.resize(static_cast<std::size_t>(pixels) * 4);
+                for (long long i = 0; i < pixels; ++i) {
+                    const auto* src = reinterpret_cast<const unsigned char*>(data.data()) + i * comps;
+                    unsigned char* dst = &img.rgba[static_cast<std::size_t>(i) * 4];
+                    if (comps == 1) dst[0] = dst[1] = dst[2] = src[0];
+                    else if (comps == 3) { dst[0] = src[0]; dst[1] = src[1]; dst[2] = src[2]; }
+                    else {   // CMJN -> RVB approximatif
+                        const int k = src[3];
+                        dst[0] = static_cast<unsigned char>((255 - src[0]) * (255 - k) / 255);
+                        dst[1] = static_cast<unsigned char>((255 - src[1]) * (255 - k) / 255);
+                        dst[2] = static_cast<unsigned char>((255 - src[2]) * (255 - k) / 255);
+                    }
+                    dst[3] = 255;
+                }
+                out.image = std::move(img);
+                out.jpeg.clear();
+                bestImagePixels = pixels;
+            }
             continue;
         }
         // Flux qui ne sont pas du contenu de page : polices, métadonnées, tables...
@@ -254,7 +350,7 @@ bool parsePdf(const std::string& bytes, PdfPatternResult& out, std::string& erro
         out.outlines.push_back(std::move(p));
     }
     keepOutermost(out.outlines);
-    if (out.outlines.empty() && out.jpeg.empty()) {
+    if (out.outlines.empty() && out.jpeg.empty() && out.image.width == 0) {
         error = out.paths > 0 ? "Le PDF contient des tracés, mais aucun contour fermé assez grand pour être une pièce."
                               : "Aucun tracé ni image exploitable dans ce PDF.";
         return false;
