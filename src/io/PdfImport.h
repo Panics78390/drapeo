@@ -21,6 +21,13 @@
 
 namespace drapeo::io {
 
+/// Texte posé sur la page (position en m, taille de police apparente en m).
+struct PdfText {
+    glm::vec2 position{0.0f};
+    float size = 0.0f;
+    std::string text;
+};
+
 struct PdfPatternResult {
     std::vector<std::vector<glm::vec2>> outlines;   // contours fermés (m), Y vers le haut
     std::vector<std::string> names;                 // nom de chaque contour (« H3 DEVANT DU BUSTE »), vide si aucun
@@ -28,16 +35,10 @@ struct PdfPatternResult {
     RasterImage image;                              // plus grande image, si elle est en pixels compressés
     std::size_t paths = 0;                          // tracés lus (fermés ou non)
     glm::vec2 pageSize{0.0f};                       // format de la première page (m), 0 si inconnu
+    std::vector<PdfText> texts;                     // textes des pages (repères, consignes)
 };
 
 bool parsePdf(const std::string& bytes, PdfPatternResult& out, std::string& error);
-
-/// Texte posé sur la page (position en m, taille de police apparente en m).
-struct PdfText {
-    glm::vec2 position{0.0f};
-    float size = 0.0f;
-    std::string text;
-};
 
 /// Rejoue un flux de contenu PDF décompressé (exposé pour les tests).
 void parsePdfContent(const std::string& content, std::vector<std::vector<glm::vec2>>& closedPaths, std::size_t& pathCount,

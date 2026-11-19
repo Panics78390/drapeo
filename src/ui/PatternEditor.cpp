@@ -385,6 +385,31 @@ bool PatternEditor::draw(garment::Garment& g)
         dl->AddText({sc.x - ts.x * 0.5f, sc.y - ts.y * 0.5f}, kInk, panel.name.c_str());
     }
 
+    // --- Pièces posées (poches, rabats, renforts) : contour en tirets sur leur base
+    for (const auto& at : g.attachments) {
+        if (at.patch < 0 || at.base < 0 || at.patch >= static_cast<int>(g.panels.size()) || at.base >= static_cast<int>(g.panels.size()))
+            continue;
+        const auto& pp = g.panels[static_cast<std::size_t>(at.patch)].points;
+        glm::vec2 lo(1e9f), hi(-1e9f);
+        for (const auto& q : pp) {
+            lo = glm::min(lo, q);
+            hi = glm::max(hi, q);
+        }
+        const glm::vec2 shift = at.at - (lo + hi) * 0.5f;
+        const auto edges = g.attachedEdges(at);
+        for (std::size_t e = 0; e < pp.size(); ++e) {
+            const bool sewn = std::find(edges.begin(), edges.end(), static_cast<int>(e)) != edges.end();
+            const ImVec2 a = toScreen(pp[e] + shift), b = toScreen(pp[(e + 1) % pp.size()] + shift);
+            const float len = std::hypot(b.x - a.x, b.y - a.y);
+            const int dashes = std::max(1, static_cast<int>(len / 6.0f));
+            for (int k = 0; k < dashes; k += 2) {
+                const float t0 = static_cast<float>(k) / dashes, t1 = static_cast<float>(k + 1) / dashes;
+                dl->AddLine({a.x + (b.x - a.x) * t0, a.y + (b.y - a.y) * t0}, {a.x + (b.x - a.x) * t1, a.y + (b.y - a.y) * t1},
+                            sewn ? IM_COL32(230, 200, 120, 220) : IM_COL32(160, 160, 160, 140), sewn ? 1.6f : 1.0f);
+            }
+        }
+    }
+
     // --- Coutures : chaque bord cousu prend la couleur de sa couture ----------
     for (std::size_t s = 0; s < g.seams.size(); ++s) {
         const auto& seam = g.seams[s];

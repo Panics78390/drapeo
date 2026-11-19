@@ -501,6 +501,44 @@ bool parsePdf(const std::string& bytes, PdfPatternResult& out, std::string& erro
             bestSize[k] = t.size;
         }
     }
+    // Petites pièces : leur titre est posé juste à côté (pas dedans).
+    for (const auto& t : texts) {
+        const std::string code = pieceCode(t.text);
+        if (code.empty() || t.size < 0.0035f) continue;
+        bool inside = false;
+        for (const auto& o : out.outlines) inside = inside || garment::pointInPolygon(o, t.position);
+        if (inside) continue;
+        bool taken = false;   // repère déjà utilisé par une pièce
+        for (const auto& nm : out.names) taken = taken || (!nm.empty() && pieceCode(nm) == code);
+        if (taken) continue;
+        float best = 0.03f;
+        int bestK = -1;
+        for (std::size_t k = 0; k < out.outlines.size(); ++k) {
+            if (!out.names[k].empty()) continue;
+            glm::vec2 lo(1e9f), hi(-1e9f);
+            for (const auto& q : out.outlines[k]) {
+                lo = glm::min(lo, q);
+                hi = glm::max(hi, q);
+            }
+            const float d = glm::length(glm::max(glm::max(lo - t.position, t.position - hi), glm::vec2(0.0f)));
+            if (d < best) {
+                best = d;
+                bestK = static_cast<int>(k);
+            }
+        }
+        if (bestK < 0) continue;
+        bool plain = t.text.size() <= 48;
+        for (const char c : t.text) plain &= c >= 0x20 && c < 0x7F;
+        out.names[static_cast<std::size_t>(bestK)] = plain ? t.text : code;
+    }
+    // Espaces multiples dans les titres (« J2  DOS ») : un seul.
+    for (auto& nm : out.names) {
+        std::string clean;
+        for (const char c : nm)
+            if (!(c == ' ' && !clean.empty() && clean.back() == ' ')) clean += c;
+        nm = clean;
+    }
+    out.texts = std::move(texts);
     if (out.outlines.empty() && out.jpeg.empty() && out.image.width == 0) {
         error = out.paths > 0 ? "Le PDF contient des tracés, mais aucun contour fermé assez grand pour être une pièce."
                               : "Aucun tracé ni image exploitable dans ce PDF.";

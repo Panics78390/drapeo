@@ -27,26 +27,26 @@ PanelFrame frameOf(const Panel& p)
 }
 } // namespace
 
-static void limbAxis(BodyZone zone, glm::vec3& top, glm::vec3& bottom)
+static void limbAxis(BodyZone zone, const BodyAxes& axes, glm::vec3& top, glm::vec3& bottom)
 {
-    // Axes des membres du mannequin intégré (avatar de 1,75 m, bras en A).
-    const float sx = (zone == BodyZone::LeftArm || zone == BodyZone::LeftLeg) ? 1.0f : -1.0f;
+    const int side = (zone == BodyZone::LeftArm || zone == BodyZone::LeftLeg) ? 0 : 1;
     if (zone == BodyZone::LeftArm || zone == BodyZone::RightArm) {
-        top = {sx * 0.175f, 1.40f, 0.0f};
-        bottom = {sx * 0.465f, 0.96f, 0.02f};
+        top = axes.armTop[side];
+        bottom = axes.armBottom[side];
     } else {
-        top = {sx * 0.095f, 0.98f, 0.0f};
-        bottom = {sx * 0.10f, 0.04f, 0.0f};
+        top = axes.legTop[side];
+        bottom = axes.legBottom[side];
     }
 }
 
 ZoneFrame zoneFrame(BodyZone zone, const MeshingOptions& options)
 {
     ZoneFrame f;
-    f.origin = options.bodyCenter;
+    f.origin = options.bodyCenter + glm::vec3(options.axes.torsoCenter.x, 0.0f, options.axes.torsoCenter.z) * options.bodyScale;
     if (zone == BodyZone::Torso) return f;
+    f.origin = options.bodyCenter;
     glm::vec3 top, bottom;
-    limbAxis(zone, top, bottom);
+    limbAxis(zone, options.axes, top, bottom);
     f.origin += bottom * options.bodyScale;
     f.up = glm::normalize(top - bottom);
     f.front = glm::normalize(glm::vec3(0, 0, 1) - f.up * f.up.z);
@@ -60,13 +60,15 @@ static glm::vec3 wrapPoint(const Panel& panel, const PanelFrame& f, glm::vec2 p,
     const float u = p.x - f.cx;           // abscisse le long du tour du corps
     const float v = p.y - f.minY;         // hauteur dans la pièce
     const float a = glm::radians(panel.placement.angleDeg) + u / R;
-    if (panel.placement.zone == BodyZone::Torso)
-        return options.bodyCenter + glm::vec3(R * std::sin(a), panel.placement.height * options.bodyScale + v, R * std::cos(a));
+    if (panel.placement.zone == BodyZone::Torso) {
+        const glm::vec3 tc = glm::vec3(options.axes.torsoCenter.x, 0.0f, options.axes.torsoCenter.z) * options.bodyScale;
+        return options.bodyCenter + tc + glm::vec3(R * std::sin(a), panel.placement.height * options.bodyScale + v, R * std::cos(a));
+    }
 
     // Membre : cylindre le long de l'axe incliné ; le bas de la pièce est posé à
     // l'endroit de l'axe qui est à la hauteur `height`.
     glm::vec3 top, bottom;
-    limbAxis(panel.placement.zone, top, bottom);
+    limbAxis(panel.placement.zone, options.axes, top, bottom);
     top *= options.bodyScale;
     bottom *= options.bodyScale;
     const glm::vec3 up = glm::normalize(top - bottom);
@@ -95,16 +97,74 @@ glm::vec3 placePoint(const Panel& panel, glm::vec2 p, const MeshingOptions& opti
     return pivot + glm::normalize(pl.rotation) * (w - pivot) + pl.offset;
 }
 
+glm::vec3 placeGarmentPoint(const Garment& garment, int pi, glm::vec2 q, const MeshingOptions& options)
+{
+    const Panel& panel = garment.panels[static_cast<std::size_t>(pi)];
+    const int ai = garment.attachmentOf(pi);
+    if (ai < 0) return placePoint(panel, q, options);
+    const Attachment& att = garment.attachments[static_cast<std::size_t>(ai)];
+    if (att.base < 0 || att.base >= static_cast<int>(garment.panels.size()) || att.base == pi) return placePoint(panel, q, options);
+    // Posée à plat sur la base, 6 mm au-dessus (vers l'extérieur).
+    const Panel& bp = garment.panels[static_cast<std::size_t>(att.base)];
+    glm::vec2 lo(1e9f), hi(-1e9f);
+    for (const auto& p : panel.points) {
+        lo = glm::min(lo, p);
+        hi = glm::max(hi, p);
+    }
+    const glm::vec2 m = q + att.at - (lo + hi) * 0.5f;
+    const glm::vec3 p0 = placePoint(bp, m, options);
+    const glm::vec3 du = placePoint(bp, m + glm::vec2(0.01f, 0.0f), options) - p0;
+    const glm::vec3 dv = placePoint(bp, m + glm::vec2(0.0f, 0.01f), options) - p0;
+    glm::vec3 nrm = glm::cross(du, dv);
+    const ZoneFrame zf = zoneFrame(bp.placement.zone, options);
+    glm::vec3 radial = p0 - zf.origin;
+    radial -= zf.up * glm::dot(radial, zf.up);
+    if (glm::dot(nrm, radial) < 0.0f) nrm = -nrm;
+    const float l = glm::length(nrm);
+    return p0 + (l > 1e-9f ? nrm / l : glm::vec3(0.0f)) * 0.006f;
+}
+
 std::vector<std::array<uint32_t, 2>> enabledSeamPairs(const Garment& garment, const GarmentMesh& mesh)
 {
     std::vector<std::array<uint32_t, 2>> out;
     for (std::size_t k = 0; k < mesh.allSeamPairs.size(); ++k) {
         const int s = mesh.seamOfPair[k];
-        if (s >= 0 && s < static_cast<int>(garment.seams.size()) && garment.seams[static_cast<std::size_t>(s)].enabled)
+        if (s < 0 || (s < static_cast<int>(garment.seams.size()) && garment.seams[static_cast<std::size_t>(s)].enabled))
             out.push_back(mesh.allSeamPairs[k]);
     }
     return out;
 }
+
+namespace {
+/// Points 2D (repère de la pièce posée) le long de ses bords cousus, tels que
+/// le maillage les échantillonne : début de chaque bord, puis la fin du dernier.
+std::vector<glm::vec2> attachedSamples(const Garment& g, const Attachment& a, const std::map<std::pair<int, int>, int>& segments)
+{
+    std::vector<glm::vec2> out;
+    const auto& pts = g.panels[static_cast<std::size_t>(a.patch)].points;
+    const int n = static_cast<int>(pts.size());
+    const auto edges = g.attachedEdges(a);
+    for (std::size_t i = 0; i < edges.size(); ++i) {
+        const int e = edges[i];
+        const glm::vec2 p0 = pts[static_cast<std::size_t>(e)], p1 = pts[static_cast<std::size_t>((e + 1) % n)];
+        const auto it = segments.find({a.patch, e});
+        const int segs = it == segments.end() ? 1 : it->second;
+        for (int k = 0; k < segs; ++k) out.push_back(p0 + (p1 - p0) * (static_cast<float>(k) / segs));
+        if (i + 1 == edges.size() && static_cast<int>(edges.size()) < n) out.push_back(p1);   // chaîne ouverte : dernier point
+    }
+    return out;
+}
+
+glm::vec2 patchCenter(const Panel& p)
+{
+    glm::vec2 lo(1e9f), hi(-1e9f);
+    for (const auto& q : p.points) {
+        lo = glm::min(lo, q);
+        hi = glm::max(hi, q);
+    }
+    return (lo + hi) * 0.5f;
+}
+} // namespace
 
 bool buildGarmentMesh(const Garment& garment, const MeshingOptions& options, GarmentMesh& out, std::string& error)
 {
@@ -153,6 +213,7 @@ bool buildGarmentMesh(const Garment& garment, const MeshingOptions& options, Gar
     // Sommets (indices globaux) de chaque bord, du début à la fin.
     std::map<std::pair<int, int>, std::vector<uint32_t>> edgeVertices;
 
+    std::map<std::size_t, std::vector<int>> attachBaseIds;   // attache -> sommets de la pièce de base
     for (std::size_t pi = 0; pi < garment.panels.size(); ++pi) {
         const Panel& panel = garment.panels[pi];
         const int n = static_cast<int>(panel.points.size());
@@ -172,6 +233,32 @@ bool buildGarmentMesh(const Garment& garment, const MeshingOptions& options, Gar
         const auto boundaryCount = static_cast<uint32_t>(local.size());
         for (uint32_t i = 0; i < boundaryCount; ++i) cons.emplace_back(i, (i + 1) % boundaryCount);
 
+        // --- 2a'. Pièces posées sur celle-ci : leur contour devient des sommets
+        //          intérieurs, auxquels leurs bords seront cousus.
+        std::vector<std::pair<std::size_t, glm::vec2>> attachPts;   // (attache, point) ; ids réservés ensuite
+        std::vector<std::vector<int>> attachSlots;                    // par attache : index dans attachPts ou -1
+        std::vector<std::size_t> attachHere;
+        for (std::size_t ai = 0; ai < garment.attachments.size(); ++ai) {
+            const Attachment& at = garment.attachments[ai];
+            if (at.base != static_cast<int>(pi) || at.patch < 0 || at.patch >= static_cast<int>(garment.panels.size()) ||
+                at.patch == at.base)
+                continue;
+            attachHere.push_back(ai);
+            attachSlots.emplace_back();
+            const glm::vec2 shift = at.at - patchCenter(garment.panels[static_cast<std::size_t>(at.patch)]);
+            for (const auto& q0 : attachedSamples(garment, at, segments)) {
+                const glm::vec2 q = q0 + shift;
+                float dmin = 1e9f;
+                for (int e = 0; e < n; ++e)
+                    dmin = std::min(dmin, distanceToSegment(q, panel.points[static_cast<std::size_t>(e)],
+                                                            panel.points[static_cast<std::size_t>((e + 1) % n)]));
+                bool ok = pointInPolygon(panel.points, q) && dmin > 0.3f * h;
+                for (const auto& [_, other] : attachPts) ok = ok && glm::distance(other, q) > 0.25f * h;
+                attachSlots.back().push_back(ok ? static_cast<int>(attachPts.size()) : -1);
+                if (ok) attachPts.push_back({ai, q});
+            }
+        }
+
         // --- 2b. Points intérieurs (grille décalée d'une demi-maille) -------
         glm::vec2 lo(1e9f), hi(-1e9f);
         for (const auto& q : panel.points) {
@@ -188,10 +275,14 @@ bool buildGarmentMesh(const Garment& garment, const MeshingOptions& options, Gar
                 for (int e = 0; e < n; ++e)
                     dmin = std::min(dmin, distanceToSegment(q, panel.points[static_cast<std::size_t>(e)],
                                                             panel.points[static_cast<std::size_t>((e + 1) % n)]));
-                if (dmin > 0.6f * h) local.push_back(q);
+                bool farFromAttach = true;
+                for (const auto& ap : attachPts) farFromAttach = farFromAttach && glm::distance(ap.second, q) > 0.5f * h;
+                if (dmin > 0.6f * h && farFromAttach) local.push_back(q);
             }
         }
 
+        const std::size_t attachStart = local.size();
+        for (const auto& ap : attachPts) local.push_back(ap.second);
         for (const auto& q : local) verts.push_back({q.x, q.y});
 
         // --- 3. Delaunay contrainte -----------------------------------------
@@ -212,8 +303,13 @@ bool buildGarmentMesh(const Garment& garment, const MeshingOptions& options, Gar
 
         // --- 4. Placement 3D --------------------------------------------------
         const auto base = static_cast<uint32_t>(out.mesh.positions.size());
+        for (std::size_t k = 0; k < attachHere.size(); ++k) {
+            auto& ids = attachBaseIds[attachHere[k]];
+            for (const int slot : attachSlots[k])
+                ids.push_back(slot < 0 ? -1 : static_cast<int>(base + attachStart + static_cast<std::size_t>(slot)));
+        }
         for (const auto& q : local) {
-            out.mesh.positions.push_back(placePoint(panel, q, options));
+            out.mesh.positions.push_back(placeGarmentPoint(garment, static_cast<int>(pi), q, options));
             out.mesh.uvs.push_back(q);
             out.panelOfVertex.push_back(static_cast<int>(pi));
         }
@@ -265,6 +361,26 @@ bool buildGarmentMesh(const Garment& garment, const MeshingOptions& options, Gar
             out.allSeamPairs.push_back({a, b});
             out.seamOfPair.push_back(static_cast<int>(si));
             if (s.enabled) out.seamPairs.push_back({a, b});
+        }
+    }
+
+    // --- 6. Pièces posées : bords de la pièce <-> sommets intérieurs de la base
+    for (const auto& [ai, baseIds] : attachBaseIds) {
+        const Attachment& at = garment.attachments[ai];
+        std::vector<uint32_t> patchIds;
+        for (const int e : garment.attachedEdges(at)) {
+            const auto& ev = edgeVertices[{at.patch, e}];
+            patchIds.insert(patchIds.end(), ev.begin() + (patchIds.empty() ? 0 : 1), ev.end());
+        }
+        // Chaîne fermée : le dernier sommet répète le premier.
+        if (static_cast<int>(garment.attachedEdges(at).size()) == static_cast<int>(garment.panels[static_cast<std::size_t>(at.patch)].points.size()) &&
+            !patchIds.empty())
+            patchIds.pop_back();
+        for (std::size_t k = 0; k < patchIds.size() && k < baseIds.size(); ++k) {
+            if (baseIds[k] < 0) continue;
+            out.allSeamPairs.push_back({patchIds[k], static_cast<uint32_t>(baseIds[k])});
+            out.seamOfPair.push_back(-1);
+            out.seamPairs.push_back({patchIds[k], static_cast<uint32_t>(baseIds[k])});
         }
     }
 

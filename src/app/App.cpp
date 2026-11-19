@@ -536,6 +536,7 @@ garment::MeshingOptions App::meshingOptions() const
     garment::MeshingOptions mo;
     mo.spacing = spacing_;
     mo.bodyScale = avatarHeight_ / 1.75f;
+    mo.axes = bodyAxes_;
     return mo;
 }
 
@@ -574,9 +575,7 @@ void App::dragPanelTo(const glm::vec3& o, const glm::vec3& d)
     panel.placement.angleDeg = angle;
     panel.placement.height = std::clamp(panel.placement.height + axial * f.up.y / mo.bodyScale, -0.5f, 2.2f);
     // On replace tout de suite les particules de la pièce (sans remailler).
-    for (std::size_t i = 0; i < garmentMesh_.panelOfVertex.size() && i < solver_.positions().size(); ++i)
-        if (garmentMesh_.panelOfVertex[i] == dragPanel_)
-            solver_.setParticlePosition(static_cast<uint32_t>(i), garment::placePoint(panel, garmentMesh_.mesh.uvs[i], mo));
+    refreshPanelParticles(dragPanel_);
     dragMoved_ = true;
 }
 
@@ -683,15 +682,40 @@ void App::importPattern(const std::string& path)
     std::string bytes;
     if (ext == "drapeo") {
         garment::Garment g;
-        if (!io::loadProject(path, g, error)) {
+        io::ProjectAvatar av;
+        if (!io::loadProject(path, g, error, &av)) {
             setStatus("Ouverture du projet impossible : " + error, true);
             return;
+        }
+        std::string avatarNote;
+        if (av.present) {
+            if (av.path.empty()) {
+                if (!builtinAvatar_) loadDefaultMannequin();
+            } else if (av.path != avatarPath_ || builtinAvatar_) {
+                // Chemin enregistré, sinon même nom de fichier à côté du projet.
+                std::string candidate = av.path;
+                std::string tmp;
+                std::string err2;
+                if (!io::readFileBytes(candidate, tmp, err2)) {
+                    const auto cut = av.path.find_last_of("/\\");
+                    const auto dir = path.find_last_of("/\\");
+                    candidate = (dir == std::string::npos ? std::string() : path.substr(0, dir + 1)) +
+                                (cut == std::string::npos ? av.path : av.path.substr(cut + 1));
+                }
+                if (!loadAvatar(candidate)) avatarNote = " Avatar introuvable : " + av.path + " (mannequin conservé).";
+            }
+            if (!av.path.empty() || builtinAvatar_) {
+                avatarHeight_ = std::clamp(av.height, 0.5f, 2.5f);
+                avatarRotation_ = av.rotationDeg;
+                applyAvatarTransform();
+                frameCamera();
+            }
         }
         setGarment(std::move(g));
         char text[200];
         std::snprintf(text, sizeof(text), "Projet %s ouvert : %zu pièce(s), %zu couture(s).", name.c_str(), garment_.panels.size(),
                       garment_.seams.size());
-        setStatus(text, false);
+        setStatus(text + avatarNote, !avatarNote.empty());
         return;
     }
     if (ext != "svg" && ext != "dxf" && ext != "pdf" && !isImageExtension(ext)) {
@@ -891,7 +915,12 @@ void App::saveProjectFile()
         return;
     }
     std::string error;
-    if (!io::saveProject(path, garment_, error)) {
+    io::ProjectAvatar av;
+    av.present = true;
+    av.path = builtinAvatar_ ? std::string() : avatarPath_;
+    av.height = avatarHeight_;
+    av.rotationDeg = avatarRotation_;
+    if (!io::saveProject(path, garment_, error, &av)) {
         setStatus("Enregistrement impossible : " + error, true);
         return;
     }
@@ -940,6 +969,7 @@ void App::loadDefaultMannequin()
     avatarSource_.sourceObjects = 1;
     avatarSource_.sourceHeight = 1.75f;
     builtinAvatar_ = true;
+    avatarPath_.clear();
     avatarHeight_ = 1.75f;
     avatarRotation_ = 0.0f;
     applyAvatarTransform();
@@ -957,6 +987,7 @@ bool App::loadAvatar(const std::string& path)
     }
     avatarSource_ = std::move(mesh);
     builtinAvatar_ = false;
+    avatarPath_ = path;
     avatarRotation_ = 0.0f;
     // Hauteur proposée : celle du fichier si elle est plausible, sinon 1,75 m.
     const float h = avatarSource_.sourceHeight;
@@ -983,6 +1014,7 @@ void App::applyAvatarTransform()
     fit.targetHeight = avatarHeight_;
     fit.rotationYDegrees = avatarRotation_;
     io::fitToGround(avatarPositions_, fit);
+    bodyAxes_ = builtinAvatar_ ? garment::BodyAxes{} : garment::estimateBodyAxes(avatarPositions_);
     geometry::computeVertexNormals(avatarPositions_, avatarSource_.indices, avatarNormals_);
     avatarBvh_.build(avatarPositions_, avatarSource_.indices);
     if (showAvatar_) renderer_.setAvatarMesh(avatarPositions_, avatarNormals_, avatarSource_.indices);
@@ -1110,6 +1142,8 @@ void App::handleViewportInput()
             const int p = pickParticle(depth);
             if (p >= 0 && static_cast<std::size_t>(p) < garmentMesh_.panelOfVertex.size()) {
                 dragPanel_ = garmentMesh_.panelOfVertex[static_cast<std::size_t>(p)];
+                // Une pièce posée (poche...) suit sa base : on déplace la base.
+                if (const int ai = garment_.attachmentOf(dragPanel_); ai >= 0) dragPanel_ = garment_.attachments[static_cast<std::size_t>(ai)].base;
                 dragMoved_ = false;
                 dragLastHit_ = solver_.positions()[static_cast<std::size_t>(p)];
                 editor_.selectedPanel = dragPanel_;
@@ -1195,7 +1229,8 @@ glm::vec2 App::projectToScreen(const glm::vec3& p, bool* inFront) const
 
 bool App::gizmoVisible() const
 {
-    return !playing_ && clothValid_ && editor_.selectedPanel >= 0 && editor_.selectedPanel < static_cast<int>(garment_.panels.size());
+    return !playing_ && clothValid_ && editor_.selectedPanel >= 0 && editor_.selectedPanel < static_cast<int>(garment_.panels.size()) &&
+           garment_.attachmentOf(editor_.selectedPanel) < 0;   // une pièce posée suit sa base
 }
 
 void App::updateGizmoFrame()
@@ -1262,10 +1297,13 @@ void App::refreshPanelParticles(int panel)
 {
     if (panel < 0 || panel >= static_cast<int>(garment_.panels.size())) return;
     const garment::MeshingOptions mo = meshingOptions();
-    const auto& p = garment_.panels[static_cast<std::size_t>(panel)];
-    for (std::size_t i = 0; i < garmentMesh_.panelOfVertex.size() && i < solver_.positions().size(); ++i)
-        if (garmentMesh_.panelOfVertex[i] == panel)
-            solver_.setParticlePosition(static_cast<uint32_t>(i), garment::placePoint(p, garmentMesh_.mesh.uvs[i], mo));
+    for (std::size_t i = 0; i < garmentMesh_.panelOfVertex.size() && i < solver_.positions().size(); ++i) {
+        const int pv = garmentMesh_.panelOfVertex[i];
+        const int ai = pv >= 0 ? garment_.attachmentOf(pv) : -1;
+        // la pièce, et les pièces posées dessus (poches, rabats...)
+        if (pv == panel || (ai >= 0 && garment_.attachments[static_cast<std::size_t>(ai)].base == panel))
+            solver_.setParticlePosition(static_cast<uint32_t>(i), garment::placeGarmentPoint(garment_, pv, garmentMesh_.mesh.uvs[i], mo));
+    }
 }
 
 void App::finishPanelEdit(int panel)
@@ -1858,6 +1896,21 @@ void App::inspectorPanel()
                         static_cast<double>(perimeter * 100.0f));
 
     ImGui::SeparatorText("Placement sur l'avatar");
+    if (const int ai = garment_.attachmentOf(idx); ai >= 0) {
+        auto& at = garment_.attachments[static_cast<std::size_t>(ai)];
+        ImGui::TextWrapped("Posée sur « %s » (%zu bord(s) cousu(s)) : elle suit cette pièce.",
+                           garment_.panels[static_cast<std::size_t>(at.base)].name.c_str(), garment_.attachedEdges(at).size());
+        label("Position");
+        float pos[2] = {at.at.x * 100.0f, at.at.y * 100.0f};
+        if (ImGui::DragFloat2("##poseat", pos, 0.2f, -500.0f, 500.0f, "%.1f cm")) at.at = glm::vec2(pos[0], pos[1]) / 100.0f;
+        if (ImGui::IsItemDeactivatedAfterEdit()) commitGarment();
+        if (ImGui::Button("Détacher de la pièce", ImVec2(-1, 0))) {
+            garment_.attachments.erase(garment_.attachments.begin() + ai);
+            commitGarment();
+        }
+        ImGui::PopID();
+        return;
+    }
     const float bw = (ImGui::GetContentRegionAvail().x - 3 * ImGui::GetStyle().ItemSpacing.x) / 4.0f;
     auto place = [&](const char* text, float angle) {
         const bool on = std::abs(panel.placement.angleDeg - angle) < 0.5f;

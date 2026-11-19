@@ -54,6 +54,7 @@ add_library(drapeo_core STATIC
   src/io/RasterImage.cpp
   src/io/PdfImport.cpp
   src/io/ProjectFile.cpp
+  src/garment/BodyAxes.cpp
   src/geometry/Mannequin.cpp
   src/garment/Pattern.cpp
   src/garment/GarmentMesher.cpp

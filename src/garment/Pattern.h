@@ -56,9 +56,19 @@ struct Seam {
     bool enabled = true;    // une couture désactivée reste dessinée mais n'est pas cousue
 };
 
+/// Pièce posée sur une autre (poche plaquée, rabat, renfort) : le contour de
+/// `patch` est cousu à l'intérieur de `base`, centré au point `at` (coordonnées
+/// 2D de base). On coud `count` bords à partir de `startEdge` (0 = tous les bords).
+struct Attachment {
+    int patch = -1, base = -1;
+    glm::vec2 at{0.0f};
+    int startEdge = 0, count = 0;
+};
+
 struct Garment {
     std::vector<Panel> panels;
     std::vector<Seam> seams;
+    std::vector<Attachment> attachments;
 
     [[nodiscard]] bool empty() const { return panels.empty(); }
     [[nodiscard]] glm::vec2 edgeStart(const EdgeRef& e) const;
@@ -77,6 +87,10 @@ struct Garment {
     void insertPoint(int panel, int edge, glm::vec2 position);   // coupe le bord `edge` en deux
     void removeSeamsOn(const EdgeRef& e);
     int addMirrorCopy(int panel, float gap);                       // copie miroir à droite, renvoie son index
+    /// Pièce posée sur `panel`, ou -1.
+    [[nodiscard]] int attachmentOf(int panel) const;
+    /// Bords cousus d'une pièce posée, dans l'ordre.
+    [[nodiscard]] std::vector<int> attachedEdges(const Attachment& a) const;
 };
 
 // --- Géométrie 2D utilitaire -------------------------------------------------

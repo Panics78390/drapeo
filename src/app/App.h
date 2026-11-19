@@ -148,6 +148,8 @@ private:
     std::vector<glm::vec3> avatarNormals_;
     geometry::TriangleBvh avatarBvh_;
     float avatarHeight_ = 1.75f;
+    std::string avatarPath_;                     // fichier de l'avatar importé (vide = mannequin)
+    garment::BodyAxes bodyAxes_;                 // axes du buste et des membres de l'avatar
     float avatarRotation_ = 0.0f;
 
     // Image de patron (calque sous l'éditeur 2D)

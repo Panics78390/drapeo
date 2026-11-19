@@ -114,12 +114,34 @@ void remapSeams(Garment& g, int panel, int oldN, int newN, Map map)
 }
 } // namespace
 
+int Garment::attachmentOf(int panel) const
+{
+    for (std::size_t i = 0; i < attachments.size(); ++i)
+        if (attachments[i].patch == panel) return static_cast<int>(i);
+    return -1;
+}
+
+std::vector<int> Garment::attachedEdges(const Attachment& a) const
+{
+    std::vector<int> out;
+    if (a.patch < 0 || a.patch >= static_cast<int>(panels.size())) return out;
+    const int n = static_cast<int>(panels[static_cast<std::size_t>(a.patch)].points.size());
+    const int count = a.count <= 0 || a.count > n ? n : a.count;
+    for (int k = 0; k < count; ++k) out.push_back(((a.startEdge % n) + n + k) % n);
+    return out;
+}
+
 void Garment::removePanel(int panel)
 {
     std::erase_if(seams, [&](const Seam& s) { return s.a.panel == panel || s.b.panel == panel; });
     for (auto& s : seams) {
         if (s.a.panel > panel) --s.a.panel;
         if (s.b.panel > panel) --s.b.panel;
+    }
+    std::erase_if(attachments, [&](const Attachment& a) { return a.patch == panel || a.base == panel; });
+    for (auto& a : attachments) {
+        if (a.patch > panel) --a.patch;
+        if (a.base > panel) --a.base;
     }
     panels.erase(panels.begin() + panel);
 }
@@ -135,6 +157,11 @@ void Garment::removePoint(int panel, int point)
         if (e < point) return {e};
         return {e - 1};
     });
+    for (auto& a : attachments)
+        if (a.patch == panel && a.count > 0) {
+            if (point > a.startEdge && point < a.startEdge + a.count) a.count = std::max(1, a.count - 1);
+            else if (point <= a.startEdge && a.startEdge > 0) --a.startEdge;
+        }
     pts.erase(pts.begin() + point);
 }
 
@@ -148,6 +175,11 @@ void Garment::insertPoint(int panel, int edge, glm::vec2 position)
         if (e == edge) return {e, e + 1};
         return {e + 1};
     });
+    for (auto& a : attachments)
+        if (a.patch == panel && a.count > 0) {
+            if (edge < a.startEdge) ++a.startEdge;
+            else if (edge < a.startEdge + a.count) ++a.count;
+        }
     pts.insert(pts.begin() + edge + 1, position);
 }
 

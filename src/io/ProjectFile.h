@@ -13,10 +13,18 @@
 
 namespace drapeo::io {
 
-std::string writeProject(const garment::Garment& g);
-bool parseProject(const std::string& text, garment::Garment& out, std::string& error);
+/// Avatar du projet : fichier FBX / OBJ (vide = mannequin intégré), taille, rotation.
+struct ProjectAvatar {
+    bool present = false;   // le fichier contenait une ligne « avatar »
+    std::string path;
+    float height = 1.75f;
+    float rotationDeg = 0.0f;
+};
 
-bool saveProject(const std::string& path, const garment::Garment& g, std::string& error);
-bool loadProject(const std::string& path, garment::Garment& out, std::string& error);
+std::string writeProject(const garment::Garment& g, const ProjectAvatar* avatar = nullptr);
+bool parseProject(const std::string& text, garment::Garment& out, std::string& error, ProjectAvatar* avatar = nullptr);
+
+bool saveProject(const std::string& path, const garment::Garment& g, std::string& error, const ProjectAvatar* avatar = nullptr);
+bool loadProject(const std::string& path, garment::Garment& out, std::string& error, ProjectAvatar* avatar = nullptr);
 
 } // namespace drapeo::io

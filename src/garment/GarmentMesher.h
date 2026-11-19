@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "garment/BodyAxes.h"
 #include "garment/Pattern.h"
 #include "geometry/ClothMesh.h"
 
@@ -34,6 +35,7 @@ struct MeshingOptions {
     float spacing = 0.02f;     // distance cible entre particules (m)
     float bodyScale = 1.0f;    // hauteur avatar / 1,75 m : adapte le placement
     glm::vec3 bodyCenter{0.0f};
+    BodyAxes axes;             // axes du buste et des membres (avatar de 1,75 m)
 };
 
 /// Construit le maillage. Renvoie false (et `error`) si une pièce est invalide.
@@ -49,6 +51,9 @@ ZoneFrame zoneFrame(BodyZone zone, const MeshingOptions& options);
 
 /// Position 3D d'un point 2D d'une pièce selon son placement.
 glm::vec3 placePoint(const Panel& panel, glm::vec2 p, const MeshingOptions& options);
+
+/// Position 3D d'un point d'une pièce du vêtement (une pièce posée suit sa base).
+glm::vec3 placeGarmentPoint(const Garment& garment, int panel, glm::vec2 p, const MeshingOptions& options);
 
 /// Centre de rotation d'une pièce (centre de son contour enroulé, sans le décalage libre).
 glm::vec3 panelPivot(const Panel& panel, const MeshingOptions& options);

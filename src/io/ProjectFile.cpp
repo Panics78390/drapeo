@@ -11,11 +11,13 @@
 
 namespace drapeo::io {
 
-std::string writeProject(const garment::Garment& g)
+std::string writeProject(const garment::Garment& g, const ProjectAvatar* avatar)
 {
     std::ostringstream o;
     o.precision(6);
     o << "drapeo-projet 1\n";
+    if (avatar != nullptr)   // avatar <taille> <rotation> <chemin, vide = mannequin intégré>
+        o << "avatar " << avatar->height << ' ' << avatar->rotationDeg << ' ' << avatar->path << "\n";
     for (const auto& p : g.panels) {
         o << "piece\n";
         o << "nom " << p.name << "\n";
@@ -27,13 +29,15 @@ std::string writeProject(const garment::Garment& g)
         o << "points " << p.points.size() << "\n";
         for (const auto& q : p.points) o << q.x << ' ' << q.y << "\n";
     }
+    for (const auto& a : g.attachments)
+        o << "posee " << a.patch << ' ' << a.base << ' ' << a.at.x << ' ' << a.at.y << ' ' << a.startEdge << ' ' << a.count << "\n";
     for (const auto& s : g.seams)
         o << "couture " << s.a.panel << ' ' << s.a.edge << ' ' << s.countA << ' ' << s.b.panel << ' ' << s.b.edge << ' '
           << s.countB << ' ' << (s.flipped ? 1 : 0) << ' ' << (s.enabled ? 1 : 0) << "\n";
     return o.str();
 }
 
-bool parseProject(const std::string& text, garment::Garment& out, std::string& error)
+bool parseProject(const std::string& text, garment::Garment& out, std::string& error, ProjectAvatar* avatar)
 {
     std::istringstream in(text);
     std::string line;
@@ -47,7 +51,14 @@ bool parseProject(const std::string& text, garment::Garment& out, std::string& e
         std::istringstream ls(line);
         std::string key;
         ls >> key;
-        if (key == "piece") {
+        if (key == "avatar" && avatar != nullptr) {
+            avatar->present = true;
+            ls >> avatar->height >> avatar->rotationDeg;
+            std::string rest;
+            std::getline(ls, rest);
+            const auto first = rest.find_first_not_of(' ');
+            avatar->path = first == std::string::npos ? "" : rest.substr(first);
+        } else if (key == "piece") {
             g.panels.emplace_back();
         } else if (key == "nom" && !g.panels.empty()) {
             g.panels.back().name = line.size() > 4 ? line.substr(4) : "";
@@ -75,6 +86,10 @@ bool parseProject(const std::string& text, garment::Garment& out, std::string& e
                 ps >> q.x >> q.y;
                 pts.push_back(q);
             }
+        } else if (key == "posee") {
+            garment::Attachment a;
+            ls >> a.patch >> a.base >> a.at.x >> a.at.y >> a.startEdge >> a.count;
+            g.attachments.push_back(a);
         } else if (key == "couture") {
             garment::Seam s;
             int flipped = 0;
@@ -99,11 +114,15 @@ bool parseProject(const std::string& text, garment::Garment& out, std::string& e
         }
         return false;
     });
+    std::erase_if(g.attachments, [&](const garment::Attachment& a) {
+        const int n = static_cast<int>(g.panels.size());
+        return a.patch < 0 || a.patch >= n || a.base < 0 || a.base >= n || a.patch == a.base;
+    });
     out = std::move(g);
     return true;
 }
 
-bool saveProject(const std::string& path, const garment::Garment& g, std::string& error)
+bool saveProject(const std::string& path, const garment::Garment& g, std::string& error, const ProjectAvatar* avatar)
 {
 #ifdef _WIN32
     const int wlen = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
@@ -117,18 +136,18 @@ bool saveProject(const std::string& path, const garment::Garment& g, std::string
         error = "Impossible d'écrire " + path;
         return false;
     }
-    const std::string text = writeProject(g);
+    const std::string text = writeProject(g, avatar);
     const bool ok = std::fwrite(text.data(), 1, text.size(), f) == text.size();
     std::fclose(f);
     if (!ok) error = "Écriture incomplète de " + path;
     return ok;
 }
 
-bool loadProject(const std::string& path, garment::Garment& out, std::string& error)
+bool loadProject(const std::string& path, garment::Garment& out, std::string& error, ProjectAvatar* avatar)
 {
     std::string bytes;
     if (!readFileBytes(path, bytes, error)) return false;
-    return parseProject(bytes, out, error);
+    return parseProject(bytes, out, error, avatar);
 }
 
 } // namespace drapeo::io
