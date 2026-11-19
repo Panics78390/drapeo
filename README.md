@@ -121,6 +121,9 @@ Glissez la poche dans le patron pour la déplacer sur sa base ; déplacer la bas
 - Maj + clic sur des points : plusieurs points choisis, à glisser ensemble ou à supprimer (Suppr).
 - Ctrl + rectangle dans le vide : choisit les points de la pièce compris dans le rectangle.
 - Flèches : déplacent les points choisis, le point ou les pièces de 1 mm (Maj : 1 cm).
+- En 3D, l'**endroit** (extérieur) de la pièce choisie est montré par une flèche orange ; l'**envers** du tissu est
+  bleuté (Affichage › Envers du tissu en bleu). « Retourner endroit / envers » (inspecteur ou menu clic droit › Pièce en 3D)
+  fait faire un demi-tour à la pièce sur elle-même.
 - Les pièces tracées (polygone, rectangle) sont posées **à plat** devant le corps ; l'inspecteur (Placement › Forme)
   permet de choisir « Plate » ou « Enroulée » autour du corps.
 

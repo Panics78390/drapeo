@@ -1632,6 +1632,50 @@ void App::drawSelection3D()
         const glm::vec2 a = projectToScreen(pos[e[0]], &f0), b = projectToScreen(pos[e[1]], &f1);
         if (f0 && f1) dl->AddLine({a.x, a.y}, {b.x, b.y}, IM_COL32(255, 222, 70, 235), 2.0f);
     }
+    // Flèche « endroit » : du centre de chaque pièce choisie, vers l'extérieur du vêtement.
+    if (normals_.size() == pos.size())
+        for (const int panel : highlighted_) {
+            if (panel < 0 || panel >= static_cast<int>(garment_.panels.size()) || garment_.panels[static_cast<std::size_t>(panel)].hidden3D) continue;
+            glm::vec3 c(0.0f), nrm(0.0f);
+            int count = 0;
+            for (std::size_t i = 0; i < pos.size() && i < pov.size(); ++i)
+                if (pov[i] == panel) {
+                    c += pos[i];
+                    nrm += normals_[i];
+                    ++count;
+                }
+            if (count == 0 || glm::length(nrm) < 1e-6f) continue;
+            c /= static_cast<float>(count);
+            nrm = glm::normalize(nrm);
+            // Point de la pièce le plus proche du centre (le centre moyen peut être dans le vide si la pièce est courbée).
+            float best = 1e9f;
+            glm::vec3 nearest = c;
+            for (std::size_t i = 0; i < pos.size() && i < pov.size(); ++i)
+                if (pov[i] == panel && glm::distance(pos[i], c) < best) {
+                    best = glm::distance(pos[i], c);
+                    nearest = pos[i];
+                }
+            c = nearest;
+            bool f0 = false, f1 = false;
+            const glm::vec2 a = projectToScreen(c, &f0), b = projectToScreen(c + nrm * 0.15f, &f1);
+            if (!f0 || !f1) continue;
+            const ImU32 col = IM_COL32(255, 150, 40, 245);
+            dl->AddLine({a.x, a.y}, {b.x, b.y}, col, 3.0f);
+            dl->AddCircleFilled({a.x, a.y}, 4.0f, col);
+            const glm::vec2 d = b - a;
+            const float len = glm::length(d);
+            if (len > 4.0f) {
+                const glm::vec2 u = d / len, v(-u.y, u.x);
+                const glm::vec2 l = b - u * 11.0f + v * 6.0f, r = b - u * 11.0f - v * 6.0f;
+                dl->AddTriangleFilled({b.x, b.y}, {l.x, l.y}, {r.x, r.y}, col);
+            }
+            {   // étiquette au-delà de la pointe, du côté où va la flèche
+                const glm::vec2 u = len > 1e-3f ? d / len : glm::vec2(1, 0);
+                const ImVec2 ts = ImGui::CalcTextSize("endroit");
+                const glm::vec2 at = b + u * 10.0f;
+                dl->AddText({u.x < 0.0f ? at.x - ts.x : at.x, at.y - ts.y * 0.5f}, col, "endroit");
+            }
+        }
     dl->PopClipRect();
 }
 
@@ -1864,6 +1908,7 @@ void App::drawMenuBar()
         if (ImGui::MenuItem("Couleurs des pièces", nullptr, &panelColors_)) updateClothColors();
         ImGui::MenuItem("Fil de fer", nullptr, &appearance_.wireframe);
         ImGui::MenuItem("Carte de tension", nullptr, &appearance_.showStrain);
+        ImGui::MenuItem("Envers du tissu en bleu", nullptr, &appearance_.showBackSide);
         if (ImGui::MenuItem("Avatar visible", nullptr, &showAvatar_)) applyAvatarTransform();
         ImGui::Separator();
         if (ImGui::MenuItem("Cadrer l'avatar", "F")) frameCamera();
@@ -2299,6 +2344,19 @@ void App::pieceAction(PieceAction a)
         commitGarment();
         break;
     }
+    case A::FlipFace: {
+        // Retourne la pièce en 3D (demi-tour sur elle-même) : l'endroit passe de l'autre côté.
+        const garment::MeshingOptions mo = meshingOptions();
+        for (const int p : t) {
+            auto& pl = garment_.panels[static_cast<std::size_t>(p)].placement;
+            const glm::vec3 up = garment::zoneFrame(pl.zone, mo).up;
+            pl.rotation = glm::normalize(glm::angleAxis(glm::pi<float>(), up) * pl.rotation);
+        }
+        commitGarment();
+        playing_ = false;
+        setStatus(plural("retournée(s) : l'endroit est maintenant de l'autre côté (flèche orange)."), false);
+        break;
+    }
     case A::FlipH:
     case A::FlipV:
         garment::flipPanels(garment_, t, a == A::FlipH);
@@ -2409,6 +2467,8 @@ void App::drawPieceMenu()
             item("Désactiver (pièce seule)", "Ctrl+J", A::Deactivate, has);
             item("Désactiver (pièce et coutures)", nullptr, A::DeactivateWithSeams, has);
         }
+        ImGui::Separator();
+        item("Retourner endroit / envers", nullptr, A::FlipFace, has);
         ImGui::Separator();
         if (all([](const garment::Panel& p) { return p.frozen; })) item("Libérer", "Ctrl+K", A::Unfreeze);
         else item("Figer", "Ctrl+K", A::Freeze, has);
@@ -2704,6 +2764,14 @@ void App::inspectorPanel()
             edited = true;
         }
     }
+    label("Endroit");
+    if (ImGui::Button("Retourner endroit / envers", ImVec2(-1, 0))) {
+        ImGui::PopID();
+        pieceAction(PieceAction::FlipFace);
+        return;
+    }
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+        ImGui::SetTooltip("En 3D, la flèche orange montre l'endroit (extérieur) de la pièce ; l'envers est bleuté.");
     label("Angle");
     ImGui::SliderFloat("##angle", &panel.placement.angleDeg, -180.0f, 180.0f, "%.0f°");
     edited |= ImGui::IsItemDeactivatedAfterEdit();
@@ -3180,6 +3248,7 @@ void App::inspectorDisplay()
     if (!ImGui::CollapsingHeader("Affichage")) return;
     ImGui::Checkbox("Fil de fer", &appearance_.wireframe);
     ImGui::SameLine();
+    ImGui::Checkbox("Envers du tissu en bleu", &appearance_.showBackSide);
     ImGui::Checkbox("Carte de tension", &appearance_.showStrain);
     if (appearance_.showStrain) {
         float pct = appearance_.strainScale * 100.0f;

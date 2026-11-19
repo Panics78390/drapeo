@@ -52,6 +52,7 @@ uniform float uRoughness;
 uniform float uSheen;
 uniform int   uShowStrain;
 uniform float uStrainScale;
+uniform int   uBackSide;      // 1 = envers du tissu teinté
 uniform vec3  uSphereCenter;  // pour l'ombre analytique sur le sol
 uniform float uSphereRadius;
 
@@ -99,6 +100,8 @@ void main() {
         shadow = mix(0.35, 1.0, smoothstep(uSphereRadius * 0.6, uSphereRadius * 1.25, dist));
     }
     if (uMode == 0 && uShowStrain == 1) albedo = heatmap(vScalar / uStrainScale);
+    // Envers du tissu (face tournée vers le corps) : plus sombre et bleuté, pour reconnaître l'endroit.
+    if (uMode == 0 && uBackSide == 1 && !gl_FrontFacing) albedo = mix(albedo * 0.55, vec3(0.22, 0.30, 0.46), 0.45);
 
     vec3 base = pow(albedo, vec3(2.2));                 // sRGB -> linéaire
     float a = max(uRoughness * uRoughness, 0.03);
@@ -259,6 +262,7 @@ void Renderer::render(const SceneView& scene, const ClothAppearance& cloth)
     shader_.set("uCameraPos", scene.camera->position());
     shader_.set("uLightDir", glm::normalize(glm::vec3(-0.45f, -1.0f, -0.35f)));
     shader_.set("uShowStrain", 0);
+    shader_.set("uBackSide", 0);
     shader_.set("uVertexColor", 0);
 
     const bool hasSphere = scene.spheres != nullptr && !scene.spheres->empty();
@@ -309,6 +313,7 @@ void Renderer::render(const SceneView& scene, const ClothAppearance& cloth)
     shader_.set("uShowStrain", cloth.showStrain ? 1 : 0);
     shader_.set("uVertexColor", clothHasColors_ ? 1 : 0);
     shader_.set("uStrainScale", cloth.strainScale);
+    shader_.set("uBackSide", cloth.showBackSide ? 1 : 0);
     if (cloth.wireframe) gl::PolygonMode(gl::FRONT_AND_BACK, gl::LINE);
     drawMesh(cloth_);
     if (cloth.wireframe) gl::PolygonMode(gl::FRONT_AND_BACK, gl::FILL);

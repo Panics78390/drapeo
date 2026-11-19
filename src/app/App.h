@@ -85,7 +85,7 @@ private:
         CloneMirrorSewn, CloneMirror, CloneInstance, CloneOver, CloneUnder, Link, Unlink,
         Grow, Shrink, Offset, Simplify, InnerShape,
         Deactivate, DeactivateWithSeams, Activate, Freeze, Unfreeze, Strengthen, Soften, Hide, Show, ShowAll,
-        Front, Forward, Backward, Back, RotateCW, RotateCCW, Rotate180, RotateFree, FlipH, FlipV,
+        Front, Forward, Backward, Back, FlipFace, RotateCW, RotateCCW, Rotate180, RotateFree, FlipH, FlipV,
         FrameSelection, ExportSelection
     };
     void drawPieceMenu();

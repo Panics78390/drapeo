@@ -26,6 +26,7 @@ struct ClothAppearance {
     bool showStrain = false;
     float strainScale = 0.10f;   // étirement affiché en rouge (10 %)
     bool wireframe = false;
+    bool showBackSide = true;    // envers du tissu (intérieur du vêtement) plus sombre et bleuté
 };
 
 struct SceneView {
