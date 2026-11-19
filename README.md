@@ -18,7 +18,8 @@ Logiciel original de création de vêtements 3D : on dessine des **patrons 2D**,
 - **Simulation XPBD** : étirement, flexion, collisions avec l'avatar (BVH), auto-collisions, frottement ; les coutures se resserrent puis la gravité agit.
 - **Tissus** : coton, soie, denim, cuir, réglables (grammage, épaisseur, raideur, amortissement).
 - **Avatar** : mannequin intégré, ou import **FBX / OBJ** (glisser-déposer accepté), taille et rotation réglables.
-- **Import de patrons SVG / DXF**, **export du vêtement drapé en OBJ** (UV = patron 2D, un groupe par pièce).
+- **Import de patrons** : SVG, DXF, **PDF** (vectoriel, ou scanné) et **images PNG / JPEG** (scan ou photo). L'image s'affiche en calque à l'échelle sous le patron, et les pièces sont **détectées automatiquement** (traits ou pièces sombres sur papier clair) ; sinon on les trace par-dessus.
+- **Export du vêtement drapé en OBJ** (UV = patron 2D, un groupe par pièce).
 - Modèles prêts à l'emploi : débardeur, jupe, robe. Annuler / rétablir (Ctrl+Z / Ctrl+Y).
 
 ## Compiler
@@ -58,6 +59,16 @@ cmake --build build-tests
 ctest --test-dir build-tests --output-on-failure
 ```
 
+## Importer un patron (PDF, PNG, JPEG, SVG, DXF)
+
+Menu **Fichier → Importer un patron...** (Ctrl+I) ou glisser-déposer le fichier sur la fenêtre.
+
+- **PDF vectoriel** (patrons vendus en PDF) : les contours fermés deviennent des pièces, à l'échelle réelle. Les petits tracés (crans, texte) et les lignes de couture intérieures sont ignorés.
+- **Image ou PDF scanné** : indiquez la **largeur réelle** de l'image (préremplie si le fichier contient sa résolution), cochez **Détecter les pièces**. L'image reste en calque ; dans le panneau **Image de fond** on règle l'opacité, l'échelle, la position et le seuil, puis on relance la détection.
+- Après l'import : placez chaque pièce (Devant / Dos) et reliez les bords avec l'outil **Couture**.
+
+![Import d'une image de patron](docs/capture-import-image.png)
+
 ## Importer un avatar (FBX, OBJ)
 
 - menu **Fichier → Importer un avatar (FBX, OBJ)...** (Ctrl+O), ou
@@ -92,11 +103,13 @@ src/
   geometry/    ClothMesh, TriangleBvh, Mannequin intégré
   garment/     Pattern (pièces, coutures, modèles), GarmentMesher (triangulation CDT, placement)
   simulation/  XpbdSolver (XPBD à petits pas, coutures), SpatialHash (auto-collisions), Materials
-  io/          MeshImport (FBX/OBJ via ufbx), PatternImport (SVG/DXF), GarmentExport (OBJ)
+  io/          MeshImport (FBX/OBJ via ufbx), PatternImport (SVG/DXF), PdfImport, RasterImage
+               (images + détection des pièces), GarmentExport (OBJ)
   rendering/   GlFunctions (chargeur OpenGL sans dépendance), Shader, Camera, Renderer (PBR)
   ui/          PatternEditor (éditeur 2D)
   app/         App (fenêtre, menus, inspecteur), FileDialog, logo intégré
 tools/         make_mannequin.py, make_logo_assets.py
+third_party/   stb_image (domaine public)
 tests/         tests du cœur, sans OpenGL
 ```
 

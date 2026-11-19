@@ -20,12 +20,21 @@ namespace drapeo::ui {
 
 enum class Tool { Select, Polygon, Rectangle, Seam };
 
+/// Image de patron (photo, scan, page de PDF) affichée sous les pièces, à l'échelle.
+struct Backdrop {
+    ImTextureID texture = 0;
+    glm::vec2 min{0.0f}, max{0.0f};   // coins bas-gauche et haut-droit (m)
+    float opacity = 0.65f;
+    bool visible = true;
+};
+
 class PatternEditor {
 public:
     Tool tool = Tool::Select;
     int selectedPanel = -1;
     int selectedPoint = -1;
     int selectedSeam = -1;
+    Backdrop backdrop;
 
     /// Dessine l'éditeur dans la région disponible de la fenêtre ImGui courante.
     /// Renvoie true quand une modification du patron est terminée (il faut

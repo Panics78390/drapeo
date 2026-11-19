@@ -51,13 +51,16 @@ add_library(drapeo_core STATIC
   src/io/MeshImport.cpp
   src/io/PatternImport.cpp
   src/io/GarmentExport.cpp
+  src/io/RasterImage.cpp
+  src/io/PdfImport.cpp
   src/geometry/Mannequin.cpp
   src/garment/Pattern.cpp
   src/garment/GarmentMesher.cpp
   src/simulation/SpatialHash.cpp
   src/simulation/XpbdSolver.cpp
   src/simulation/Materials.cpp)
-target_include_directories(drapeo_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src PRIVATE ${cdt_SOURCE_DIR}/CDT/include)
+target_include_directories(drapeo_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src PRIVATE ${cdt_SOURCE_DIR}/CDT/include
+                                                ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb)
 target_link_libraries(drapeo_core PUBLIC glm::glm PRIVATE ufbx)
 if(MSVC)
   target_compile_options(drapeo_core PRIVATE /W4 /permissive-)

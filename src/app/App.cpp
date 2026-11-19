@@ -17,6 +17,8 @@
 #include "geometry/Mannequin.h"
 #include "io/GarmentExport.h"
 #include "io/PatternImport.h"
+#include "io/PdfImport.h"
+#include "io/RasterImage.h"
 #include "rendering/GlFunctions.h"
 #include "simulation/Materials.h"
 
@@ -246,6 +248,48 @@ std::string lowerExtension(const std::string& path)
     return ext;
 }
 
+/// Texture RGBA pour l'interface. Les très grandes images sont réduites à 4096 px.
+unsigned int uploadTexture(int w, int h, const unsigned char* px)
+{
+    std::vector<unsigned char> small;
+    const int maxSide = 4096;
+    if (w > maxSide || h > maxSide) {
+        const float k = static_cast<float>(maxSide) / static_cast<float>(std::max(w, h));
+        const int nw = std::max(1, static_cast<int>(w * k)), nh = std::max(1, static_cast<int>(h * k));
+        small.resize(static_cast<std::size_t>(nw) * nh * 4);
+        for (int y = 0; y < nh; ++y)
+            for (int x = 0; x < nw; ++x) {
+                const int sx = std::min(w - 1, static_cast<int>(x / k)), sy = std::min(h - 1, static_cast<int>(y / k));
+                std::copy_n(px + (static_cast<std::size_t>(sy) * w + sx) * 4, 4, &small[(static_cast<std::size_t>(y) * nw + x) * 4]);
+            }
+        w = nw;
+        h = nh;
+        px = small.data();
+    }
+    gl::GLuint t = 0;
+    gl::GenTextures(1, &t);
+    gl::BindTexture(gl::TEXTURE_2D, t);
+    gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, static_cast<gl::GLint>(gl::LINEAR));
+    gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, static_cast<gl::GLint>(gl::LINEAR));
+    gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, static_cast<gl::GLint>(gl::CLAMP_TO_EDGE));
+    gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, static_cast<gl::GLint>(gl::CLAMP_TO_EDGE));
+    gl::PixelStorei(gl::UNPACK_ALIGNMENT, 1);
+    gl::TexImage2D(gl::TEXTURE_2D, 0, static_cast<gl::GLint>(gl::RGBA), w, h, 0, gl::RGBA, gl::UNSIGNED_BYTE, px);
+    gl::BindTexture(gl::TEXTURE_2D, 0);
+    return t;
+}
+
+void deleteTexture(unsigned int& t)
+{
+    if (t != 0) gl::DeleteTextures(1, &t);
+    t = 0;
+}
+
+bool isImageExtension(const std::string& ext)
+{
+    return ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "bmp" || ext == "tga" || ext == "gif" || ext == "psd";
+}
+
 const char* kSpacingNames[] = {"Grossier (3 cm)", "Normal (2 cm)", "Fin (1,5 cm)", "Très fin (1 cm)"};
 const float kSpacingValues[] = {0.03f, 0.02f, 0.015f, 0.01f};
 } // namespace
@@ -279,9 +323,14 @@ int App::run(const AppOptions& options)
     loadDefaultMannequin();
     if (!options_.avatarPath.empty()) loadAvatar(options_.avatarPath);
     setGarment(garment::makeTankTop());
+    setStatus("Bienvenue dans Drapeo. Modifiez le patron à gauche : le vêtement est recousu en 3D.", false);
     editor_.selectedPanel = 0;
     showAbout_ = options_.showAbout;
-    setStatus("Bienvenue dans Drapeo. Modifiez le patron à gauche : le vêtement est recousu en 3D.", false);
+    if (!options_.patternPath.empty()) {
+        setGarment({});
+        importPattern(options_.patternPath);
+        if (options_.acceptImport && pendingImage_.width > 0) finishImageImport();
+    }
 
     while (!glfwWindowShouldClose(window_)) {
         glfwPollEvents();
@@ -289,7 +338,7 @@ int App::run(const AppOptions& options)
             const std::string path = pendingDrop_;
             pendingDrop_.clear();
             const std::string ext = lowerExtension(path);
-            if (ext == "svg" || ext == "dxf") importPattern(path);
+            if (ext == "svg" || ext == "dxf" || ext == "pdf" || isImageExtension(ext)) importPattern(path);
             else loadAvatar(path);
         }
         ImGui_ImplOpenGL3_NewFrame();
@@ -308,6 +357,7 @@ int App::run(const AppOptions& options)
         drawStatusBar();
         drawViewportOverlay();
         drawAboutWindow();
+        drawImageImportPopup();
 
         if (clothValid_ && (playing_ || stepOnce_)) {
             solver_.step(kFrameDt);
@@ -455,28 +505,17 @@ void App::loadLogo()
     glfwSetWindowIcon(window_, static_cast<int>(images.size()), images.data());
 
     // Textures pour l'interface : petit logo (barre de menus) et logo complet.
-    auto texture = [](int w, int h, const unsigned char* px) {
-        gl::GLuint t = 0;
-        gl::GenTextures(1, &t);
-        gl::BindTexture(gl::TEXTURE_2D, t);
-        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, static_cast<gl::GLint>(gl::LINEAR));
-        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, static_cast<gl::GLint>(gl::LINEAR));
-        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, static_cast<gl::GLint>(gl::CLAMP_TO_EDGE));
-        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, static_cast<gl::GLint>(gl::CLAMP_TO_EDGE));
-        gl::PixelStorei(gl::UNPACK_ALIGNMENT, 1);
-        gl::TexImage2D(gl::TEXTURE_2D, 0, static_cast<gl::GLint>(gl::RGBA), w, h, 0, gl::RGBA, gl::UNSIGNED_BYTE, px);
-        gl::BindTexture(gl::TEXTURE_2D, 0);
-        return t;
-    };
-    logoIcon_ = texture(logo::kIcon64Width, logo::kIcon64Height, logo::kIcon64Pixels);
-    logoFull_ = texture(logo::kFullWidth, logo::kFullHeight, logo::kFullPixels);
+    logoIcon_ = uploadTexture(logo::kIcon64Width, logo::kIcon64Height, logo::kIcon64Pixels);
+    logoFull_ = uploadTexture(logo::kFullWidth, logo::kFullHeight, logo::kFullPixels);
 }
 
 void App::shutdown()
 {
     if (window_ == nullptr) return;
-    const gl::GLuint textures[] = {logoIcon_, logoFull_};
-    gl::DeleteTextures(2, textures);
+    deleteTexture(logoIcon_);
+    deleteTexture(logoFull_);
+    deleteTexture(backdropTex_);
+    deleteTexture(pendingTex_);
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
@@ -584,30 +623,84 @@ void App::updateClothColors()
 void App::importPattern(const std::string& path)
 {
     if (path.empty()) return;
-    std::vector<std::vector<glm::vec2>> outlines;
+    const std::string ext = lowerExtension(path);
     std::string error;
+    const auto slash = path.find_last_of("/\\");
+    const std::string name = slash == std::string::npos ? path : path.substr(slash + 1);
+
+    if (isImageExtension(ext)) {
+        io::RasterImage img;
+        if (!io::loadRasterImage(path, img, error)) {
+            setStatus("Import de l'image impossible : " + error, true);
+            return;
+        }
+        beginImageImport(std::move(img), name);
+        return;
+    }
+    if (ext == "pdf") {
+        std::string bytes;
+        io::PdfPatternResult pdf;
+        if (!io::readFileBytes(path, bytes, error) || !io::parsePdf(bytes, pdf, error)) {
+            setStatus("Import du PDF impossible : " + error, true);
+            return;
+        }
+        if (!pdf.outlines.empty()) {
+            addImportedPanels(pdf.outlines, true);
+            return;
+        }
+        // PDF scanné : la page est une image, on l'importe comme calque.
+        io::RasterImage img;
+        if (!io::decodeRasterImage(pdf.jpeg, img, error)) {
+            setStatus("Image du PDF illisible : " + error, true);
+            return;
+        }
+        if (pdf.pageSize.x > 0.0f) img.dpi = static_cast<float>(img.width) / (pdf.pageSize.x / 0.0254f);
+        beginImageImport(std::move(img), name);
+        return;
+    }
+    std::vector<std::vector<glm::vec2>> outlines;
     if (!io::importPatternFile(path, outlines, error)) {
         setStatus("Import du patron impossible : " + error, true);
         return;
     }
+    addImportedPanels(outlines, true);
+}
+
+void App::addImportedPanels(const std::vector<std::vector<glm::vec2>>& outlines, bool arrange)
+{
     garment::Garment g = garment_;
-    // Les pièces importées sont rangées à droite des pièces existantes.
+    // Les pièces d'un fichier vectoriel sont rangées à droite des pièces existantes ;
+    // celles détectées sur une image restent à leur place sur l'image.
     float offsetX = 0.0f;
     for (const auto& p : g.panels)
         for (const auto& q : p.points) offsetX = std::max(offsetX, q.x + 0.08f);
     glm::vec2 lo(1e9f);
     for (const auto& o : outlines)
         for (const auto& q : o) lo = glm::min(lo, q);
+    // Numérotation de gauche à droite, puis de haut en bas.
+    std::vector<std::size_t> order(outlines.size());
+    for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
+    std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+        const glm::vec2 ca = garment::centroid(outlines[a]), cb = garment::centroid(outlines[b]);
+        if (std::abs(ca.x - cb.x) > 0.05f) return ca.x < cb.x;
+        return ca.y > cb.y;
+    });
     int added = 0;
-    for (const auto& o : outlines) {
+    for (const std::size_t idx : order) {
+        const auto& o = outlines[idx];
         garment::Panel panel;
         panel.points = io::simplifyOutline(o, 0.002f);
         if (panel.points.size() < 3) continue;
-        for (auto& q : panel.points) q += glm::vec2(offsetX, 0.0f) - glm::vec2(lo.x, lo.y);
+        if (arrange)
+            for (auto& q : panel.points) q += glm::vec2(offsetX, 0.0f) - lo;
         panel.name = "Pièce " + std::to_string(g.panels.size() + 1);
         panel.placement.angleDeg = (added % 2 == 0) ? 0.0f : 180.0f;
         g.panels.push_back(std::move(panel));
         ++added;
+    }
+    if (added == 0) {
+        setStatus("Aucune pièce exploitable dans ce fichier.", true);
+        return;
     }
     undoStack_.push_back(committed_);
     redoStack_.clear();
@@ -616,9 +709,77 @@ void App::importPattern(const std::string& path)
     editor_.clearSelection();
     editor_.frameAll(garment_);
     resetCloth();
-    char text[160];
-    std::snprintf(text, sizeof(text), "%d pièce(s) importée(s). Reliez les bords avec l'outil Couture (S).", added);
+    char text[200];
+    std::snprintf(text, sizeof(text),
+                  "%d pièce(s) importée(s). Vérifiez le placement (Devant / Dos) et reliez les bords avec l'outil Couture (S).", added);
     setStatus(text, false);
+}
+
+void App::beginImageImport(io::RasterImage image, const std::string& name)
+{
+    deleteTexture(pendingTex_);
+    pendingImage_ = std::move(image);
+    pendingName_ = name;
+    pendingTex_ = uploadTexture(pendingImage_.width, pendingImage_.height, pendingImage_.rgba.data());
+    // Taille réelle proposée : d'après la résolution du fichier, sinon 150 ppp (scan courant).
+    const float dpi = pendingImage_.dpi > 1.0f ? pendingImage_.dpi : 150.0f;
+    importWidthCm_ = static_cast<float>(pendingImage_.width) / dpi * 2.54f;
+    showImagePopup_ = true;
+}
+
+void App::finishImageImport()
+{
+    showImagePopup_ = false;
+    deleteTexture(backdropTex_);
+    backdropImage_ = std::move(pendingImage_);
+    pendingImage_ = {};
+    backdropTex_ = pendingTex_;
+    pendingTex_ = 0;
+    backdropWidthCm_ = std::max(1.0f, importWidthCm_);
+    // L'image se place à droite des pièces existantes.
+    float offsetX = 0.0f;
+    for (const auto& p : garment_.panels)
+        for (const auto& q : p.points) offsetX = std::max(offsetX, q.x + 0.10f);
+    backdropOrigin_ = {offsetX, 0.0f};
+    editor_.backdrop.visible = true;
+    updateBackdropRect();
+    if (importDetect_) detectBackdropPieces();
+    else setStatus("Image importée : tracez les pièces par-dessus avec les outils Polygone (P) ou Rectangle (B).", false);
+    editor_.frameAll(garment_);
+}
+
+void App::updateBackdropRect()
+{
+    auto& b = editor_.backdrop;
+    b.texture = static_cast<ImTextureID>(backdropTex_);
+    if (backdropImage_.width <= 0) return;
+    const float w = backdropWidthCm_ / 100.0f;
+    const float h = w * static_cast<float>(backdropImage_.height) / static_cast<float>(backdropImage_.width);
+    b.min = backdropOrigin_;
+    b.max = backdropOrigin_ + glm::vec2(w, h);
+}
+
+void App::detectBackdropPieces()
+{
+    if (backdropImage_.width <= 0) return;
+    io::TraceOptions opt;
+    opt.metersPerPixel = backdropWidthCm_ / 100.0f / static_cast<float>(backdropImage_.width);
+    opt.origin = backdropOrigin_;
+    opt.threshold = autoThreshold_ ? -1 : threshold_;
+    const auto outlines = io::traceOutlines(backdropImage_, opt);
+    if (outlines.empty()) {
+        setStatus("Aucune pièce détectée. Réglez le seuil dans le panneau Image de fond, ou tracez les pièces à la main "
+                  "(outil Polygone) sur l'image.", true);
+        return;
+    }
+    addImportedPanels(outlines, false);
+}
+
+void App::removeBackdrop()
+{
+    deleteTexture(backdropTex_);
+    backdropImage_ = {};
+    editor_.backdrop = {};
 }
 
 void App::exportGarment()
@@ -826,7 +987,8 @@ void App::openAvatarDialog()
 void App::openPatternDialog()
 {
     if (hasNativeFileDialog()) {
-        importPattern(openFileDialog("Importer un patron", "Patrons (SVG, DXF)|*.svg;*.dxf"));
+        importPattern(openFileDialog("Importer un patron",
+                                     "Patrons (SVG, DXF, PDF, PNG, JPEG)|*.svg;*.dxf;*.pdf;*.png;*.jpg;*.jpeg;*.bmp;*.tga;*.gif"));
     } else {
         pathPopupKind_ = 1;
         pathInput_[0] = '\0';
@@ -870,7 +1032,7 @@ void App::drawMenuBar()
         if (ImGui::MenuItem("Nouveau vêtement", "Ctrl+N")) setGarment({});
         ImGui::Separator();
         if (ImGui::MenuItem("Importer un avatar (FBX, OBJ)...", "Ctrl+O")) openAvatarDialog();
-        if (ImGui::MenuItem("Importer un patron (SVG, DXF)...", "Ctrl+I")) openPatternDialog();
+        if (ImGui::MenuItem("Importer un patron (SVG, DXF, PDF, image)...", "Ctrl+I")) openPatternDialog();
         ImGui::Separator();
         if (ImGui::MenuItem("Exporter le vêtement (OBJ)...", "Ctrl+E", false, clothValid_)) exportGarment();
         ImGui::Separator();
@@ -1141,6 +1303,7 @@ void App::drawInspector()
     paneTitle("PROPRIÉTÉS", fontBold_);
     ImGui::Spacing();
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8 * uiScale_, 5 * uiScale_));
+    inspectorBackdrop();
     inspectorPanel();
     inspectorSeams();
     inspectorFabric();
@@ -1232,6 +1395,41 @@ void App::inspectorPanel()
     ImGui::Spacing();
 }
 
+void App::inspectorBackdrop()
+{
+    if (backdropImage_.width <= 0) return;
+    if (!ImGui::CollapsingHeader("Image de fond", ImGuiTreeNodeFlags_DefaultOpen)) return;
+    auto& b = editor_.backdrop;
+    ImGui::TextDisabled("%d x %d pixels", backdropImage_.width, backdropImage_.height);
+    ImGui::Checkbox("Visible", &b.visible);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(-1);
+    ImGui::SliderFloat("##opacite", &b.opacity, 0.05f, 1.0f, "opacité %.2f");
+    label("Largeur réelle");
+    ImGui::InputFloat("##largeur", &backdropWidthCm_, 1.0f, 10.0f, "%.1f cm");
+    if (ImGui::IsItemDeactivatedAfterEdit() || ImGui::IsItemClicked()) {
+        backdropWidthCm_ = std::clamp(backdropWidthCm_, 1.0f, 2000.0f);
+        updateBackdropRect();
+    }
+    glm::vec2 cm = backdropOrigin_ * 100.0f;
+    label("Position");
+    if (ImGui::DragFloat2("##position", &cm.x, 0.5f, -1000.0f, 1000.0f, "%.1f cm")) {
+        backdropOrigin_ = cm / 100.0f;
+        updateBackdropRect();
+    }
+    ImGui::Checkbox("Seuil auto", &autoThreshold_);
+    if (!autoThreshold_) {
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderInt("##seuil", &threshold_, 1, 254, "seuil %d");
+    }
+    const float hw = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+    if (ImGui::Button("Détecter les pièces", ImVec2(hw, 0))) detectBackdropPieces();
+    ImGui::SameLine();
+    if (ImGui::Button("Retirer l'image", ImVec2(hw, 0))) removeBackdrop();
+    ImGui::Spacing();
+}
+
 void App::inspectorSeams()
 {
     char header[48];
@@ -1256,7 +1454,7 @@ void App::inspectorSeams()
         const float h = ImGui::GetFrameHeight();
         const ImU32 col = ui::PatternEditor::seamColor(static_cast<int>(s));
         ImGui::GetWindowDrawList()->AddCircleFilled({p.x + h * 0.4f, p.y + h * 0.5f}, h * 0.3f, col);
-        char num[8];
+        char num[24];
         std::snprintf(num, sizeof(num), "%zu", s + 1);
         const ImVec2 ns = ImGui::CalcTextSize(num);
         ImGui::GetWindowDrawList()->AddText({p.x + h * 0.4f - ns.x * 0.5f, p.y + (h - ns.y) * 0.5f}, IM_COL32(20, 20, 24, 255), num);
@@ -1468,6 +1666,8 @@ void App::drawAboutWindow()
     if (showAbout_) ImGui::OpenPopup("À propos de Drapeo");
     if (showShortcuts_) ImGui::OpenPopup("Raccourcis clavier");
     if (showPathPopup_) ImGui::OpenPopup("Ouvrir un fichier");
+    if (showImagePopup_) ImGui::OpenPopup("Importer une image de patron");
+    showImagePopup_ = false;
     showAbout_ = showShortcuts_ = showPathPopup_ = false;
 
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
@@ -1513,7 +1713,7 @@ void App::drawAboutWindow()
     }
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     if (ImGui::BeginPopupModal("Ouvrir un fichier", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        const char* what[] = {"Avatar (.fbx, .obj)", "Patron (.svg, .dxf)", "Export OBJ"};
+        const char* what[] = {"Avatar (.fbx, .obj)", "Patron (.svg, .dxf, .pdf, .png, .jpg)", "Export OBJ"};
         ImGui::TextUnformatted(what[pathPopupKind_]);
         ImGui::SetNextItemWidth(420 * uiScale_);
         const bool enter = ImGui::InputText("##chemin", pathInput_, sizeof(pathInput_), ImGuiInputTextFlags_EnterReturnsTrue);
@@ -1529,6 +1729,45 @@ void App::drawAboutWindow()
         if (ImGui::Button("Annuler", ImVec2(120 * uiScale_, 0))) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
+}
+
+void App::drawImageImportPopup()
+{
+    const ImVec2 center(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.5f);
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    if (!ImGui::BeginPopupModal("Importer une image de patron", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+    const float maxW = 420.0f * uiScale_, maxH = 300.0f * uiScale_;
+    if (pendingImage_.width > 0) {
+        const float k = std::min(maxW / static_cast<float>(pendingImage_.width), maxH / static_cast<float>(pendingImage_.height));
+        ImGui::Image(static_cast<ImTextureID>(pendingTex_),
+                     ImVec2(static_cast<float>(pendingImage_.width) * k, static_cast<float>(pendingImage_.height) * k));
+        ImGui::TextUnformatted(pendingName_.c_str());
+        ImGui::TextDisabled("%d x %d pixels", pendingImage_.width, pendingImage_.height);
+        if (pendingImage_.dpi > 1.0f) ImGui::TextDisabled("Résolution lue dans le fichier : %.0f ppp", static_cast<double>(pendingImage_.dpi));
+        else ImGui::TextDisabled("Résolution inconnue : mesurez une pièce sur le papier pour régler la largeur.");
+        ImGui::Spacing();
+        label("Largeur réelle");
+        ImGui::SetNextItemWidth(200 * uiScale_);
+        ImGui::InputFloat("##largeur_import", &importWidthCm_, 1.0f, 10.0f, "%.1f cm");
+        importWidthCm_ = std::clamp(importWidthCm_, 1.0f, 2000.0f);
+        ImGui::TextDisabled("Hauteur correspondante : %.1f cm",
+                            static_cast<double>(importWidthCm_ * static_cast<float>(pendingImage_.height) /
+                                                static_cast<float>(pendingImage_.width)));
+        ImGui::Checkbox("Détecter les pièces automatiquement", &importDetect_);
+        ImGui::TextDisabled("Traits ou pièces sombres sur papier clair. Sinon, tracez\nles pièces sur l'image avec l'outil Polygone (P).");
+    }
+    ImGui::Spacing();
+    if (ImGui::Button("Importer", ImVec2(140 * uiScale_, 0))) {
+        ImGui::CloseCurrentPopup();
+        finishImageImport();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Annuler", ImVec2(140 * uiScale_, 0))) {
+        ImGui::CloseCurrentPopup();
+        deleteTexture(pendingTex_);
+        pendingImage_ = {};
+    }
+    ImGui::EndPopup();
 }
 
 void App::saveScreenshot(const std::string& path) const

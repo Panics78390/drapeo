@@ -24,6 +24,7 @@
 #include "garment/Pattern.h"
 #include "geometry/TriangleBvh.h"
 #include "io/MeshImport.h"
+#include "io/RasterImage.h"
 #include "rendering/Camera.h"
 #include "rendering/Renderer.h"
 #include "simulation/XpbdSolver.h"
@@ -40,6 +41,8 @@ struct AppOptions {
     int frames = -1;              // > 0 : quitte après N images (tests, captures)
     std::string screenshotPath;   // capture PPM de la dernière image
     bool showAbout = false;       // ouvre la fenêtre « À propos » au démarrage
+    std::string patternPath;      // patron à importer au démarrage (.svg, .dxf, .pdf, image)
+    bool acceptImport = false;    // valide directement la fenêtre d'import d'image
     std::string avatarPath;       // avatar à charger au démarrage (.fbx / .obj)
 };
 
@@ -62,6 +65,12 @@ private:
     void redo();
     void updateClothColors();
     void importPattern(const std::string& path);
+    void addImportedPanels(const std::vector<std::vector<glm::vec2>>& outlines, bool arrange);
+    void beginImageImport(io::RasterImage image, const std::string& name);
+    void finishImageImport();
+    void updateBackdropRect();
+    void detectBackdropPieces();
+    void removeBackdrop();
     void exportGarment();
 
     // --- Avatar ---------------------------------------------------------------
@@ -82,6 +91,8 @@ private:
     void drawInspector();
     void drawStatusBar();
     void drawAboutWindow();
+    void drawImageImportPopup();
+    void inspectorBackdrop();
     void inspectorPanel();
     void inspectorSeams();
     void inspectorFabric();
@@ -135,6 +146,20 @@ private:
     geometry::TriangleBvh avatarBvh_;
     float avatarHeight_ = 1.75f;
     float avatarRotation_ = 0.0f;
+
+    // Image de patron (calque sous l'éditeur 2D)
+    io::RasterImage backdropImage_;
+    unsigned int backdropTex_ = 0;
+    glm::vec2 backdropOrigin_{0.0f};
+    float backdropWidthCm_ = 100.0f;
+    bool autoThreshold_ = true;
+    int threshold_ = 128;
+    io::RasterImage pendingImage_;               // image en attente de validation
+    unsigned int pendingTex_ = 0;
+    std::string pendingName_;
+    float importWidthCm_ = 100.0f;
+    bool importDetect_ = true;
+    bool showImagePopup_ = false;
 
     // Messages
     std::string status_;

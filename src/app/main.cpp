@@ -1,5 +1,6 @@
 // Drapeo — point d'entrée.
 // Usage : drapeo [avatar.fbx|avatar.obj] [--frames N] [--screenshot fichier.ppm] [--size LxH]
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -16,12 +17,19 @@ int main(int argc, char** argv)
             options.frames = std::atoi(argv[++i]);
         } else if (arg == "--screenshot" && i + 1 < argc) {
             options.screenshotPath = argv[++i];
+        } else if (arg == "--accept-import") {
+            options.acceptImport = true;
         } else if (arg == "--about") {
             options.showAbout = true;
         } else if (arg == "--size" && i + 1 < argc) {
             std::sscanf(argv[++i], "%dx%d", &options.width, &options.height);
         } else if (!arg.empty() && arg[0] != '-') {
-            options.avatarPath = arg;   // drapeo avatar.fbx
+            // drapeo avatar.fbx  ou  drapeo patron.pdf / patron.png
+            const auto dot = arg.find_last_of('.');
+            std::string ext = dot == std::string::npos ? "" : arg.substr(dot + 1);
+            for (auto& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (ext == "fbx" || ext == "obj") options.avatarPath = arg;
+            else options.patternPath = arg;
         } else {
             std::printf("Usage : %s [avatar.fbx] [--frames N] [--screenshot fichier.ppm] [--size 1600x900]\n", argv[0]);
             return arg == "--help" ? 0 : 1;

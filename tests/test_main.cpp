@@ -5,6 +5,7 @@
 // =============================================================================
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <functional>
 #include <random>
@@ -15,6 +16,8 @@
 #include "geometry/TriangleBvh.h"
 #include "io/MeshImport.h"
 #include "io/PatternImport.h"
+#include "io/PdfImport.h"
+#include "io/RasterImage.h"
 #include "garment/GarmentMesher.h"
 #include "geometry/Mannequin.h"
 #include "simulation/Materials.h"
@@ -344,6 +347,87 @@ int main()
         CHECK(io::parseDxf(dxf, out, error));
         CHECK(out.size() == 2);
         if (!out.empty()) CHECK(std::abs(glm::distance(out[0][0], out[0][1]) - 0.40f) < 1e-4f);   // 40 cm
+    });
+
+    run("Image de patron : détection des pièces (contour tracé et pièce pleine)", [] {
+        // 600 x 400 px à 100 px/m (1 px = 1 cm) : papier blanc, un rectangle
+        // dessiné au trait (200 x 100 cm) et un disque plein (rayon 60 cm).
+        io::RasterImage img;
+        img.width = 600;
+        img.height = 400;
+        img.rgba.assign(static_cast<std::size_t>(600 * 400 * 4), 255);
+        auto ink = [&](int x, int y) {
+            auto* p = &img.rgba[static_cast<std::size_t>(y * 600 + x) * 4];
+            p[0] = p[1] = p[2] = 20;
+        };
+        for (int x = 50; x <= 250; ++x)
+            for (int w = 0; w < 3; ++w) { ink(x, 100 + w); ink(x, 200 - w); }
+        for (int y = 100; y <= 200; ++y)
+            for (int w = 0; w < 3; ++w) { ink(50 + w, y); ink(250 - w, y); }
+        ink(150, 150);   // une marque à l'intérieur ne crée pas de pièce
+        for (int y = 0; y < 400; ++y)
+            for (int x = 0; x < 600; ++x)
+                if ((x - 430) * (x - 430) + (y - 250) * (y - 250) <= 60 * 60) ink(x, y);
+        io::TraceOptions opt;
+        opt.metersPerPixel = 0.01f;
+        const auto out = io::traceOutlines(img, opt);
+        std::printf("    %zu pièce(s) détectée(s)\n", out.size());
+        CHECK(out.size() == 2);
+        bool rectOk = false, discOk = false;
+        for (const auto& p : out) {
+            const float area = std::abs(garment::signedArea(p));
+            glm::vec2 lo(1e9f), hi(-1e9f);
+            for (const auto& q : p) { lo = glm::min(lo, q); hi = glm::max(hi, q); }
+            std::printf("    aire %.3f m², %zu points, x %.2f..%.2f y %.2f..%.2f\n", static_cast<double>(area), p.size(),
+                        static_cast<double>(lo.x), static_cast<double>(hi.x), static_cast<double>(lo.y), static_cast<double>(hi.y));
+            if (std::abs(area - 2.0f) < 0.1f && p.size() <= 6) rectOk = true;          // 2 m x 1 m
+            if (std::abs(area - 3.1416f * 0.36f) < 0.08f) discOk = true;               // pi r²
+            if (std::abs(area - 2.0f) < 0.1f) CHECK(std::abs(hi.y - 3.0f) < 0.03f);   // Y retourné : haut de l'image = 4 m
+        }
+        CHECK(rectOk);
+        CHECK(discOk);
+    });
+
+    run("PDF : tracés vectoriels, matrices, flux compressé et JFIF", [] {
+        std::vector<std::vector<glm::vec2>> paths;
+        std::size_t count = 0;
+        io::parsePdfContent("q 2 0 0 2 10 0 cm 0 0 m 72 0 l 72 36 l 0 36 l h S Q 0 0 72 72 re f 5 5 m 50 5 l S", paths, count);
+        CHECK(count == 3);
+        CHECK(paths.size() == 2);   // la ligne ouverte est ignorée
+        if (paths.size() == 2) {
+            glm::vec2 lo(1e9f), hi(-1e9f);
+            for (const auto& q : paths[0]) { lo = glm::min(lo, q); hi = glm::max(hi, q); }
+            CHECK(std::abs((hi.x - lo.x) - 0.0508f) < 1e-4f);   // 72 pt x 2 = 2 pouces
+            CHECK(std::abs(lo.x - 10.0f * 0.0254f / 72.0f) < 1e-5f);
+        }
+        // PDF minimal dont le flux est compressé (zlib, bloc « stocké ») : un carré
+        // de 20 cm avec une ligne de couture intérieure, plus un cran trop petit.
+        const std::string content = "0 0 m 566.93 0 l 566.93 566.93 l 0 566.93 l h S 28 28 m 538 28 l 538 538 l 28 538 l h S "
+                                    "100 100 m 105 100 l 102 105 l h f";
+        std::string z = "\x78\x01";
+        z += '\x01';
+        const auto len = static_cast<uint16_t>(content.size());
+        z += static_cast<char>(len & 0xFF); z += static_cast<char>(len >> 8);
+        z += static_cast<char>(~len & 0xFF); z += static_cast<char>((~len >> 8) & 0xFF);
+        z += content;
+        uint32_t a = 1, b = 0;
+        for (const unsigned char ch : content) { a = (a + ch) % 65521; b = (b + a) % 65521; }
+        const uint32_t adler = (b << 16) | a;
+        for (int k = 3; k >= 0; --k) z += static_cast<char>((adler >> (k * 8)) & 0xFF);
+        const std::string pdf = "%PDF-1.4\n4 0 obj << /Length " + std::to_string(z.size()) + " /Filter /FlateDecode >>\nstream\n" + z +
+                                "\nendstream\nendobj\n%%EOF\n";
+        io::PdfPatternResult res;
+        std::string error;
+        CHECK(io::parsePdf(pdf, res, error));
+        CHECK(res.outlines.size() == 1);   // la ligne de couture intérieure et le cran sont écartés
+        if (!res.outlines.empty()) {
+            const float area = std::abs(garment::signedArea(res.outlines[0]));
+            std::printf("    PDF : %zu tracé(s), pièce de %.4f m², %zu points\n", res.paths, static_cast<double>(area), res.outlines[0].size());
+            CHECK(std::abs(area - 0.04f) < 0.001f);
+        }
+
+        const std::string jfif("\xFF\xD8\xFF\xE0\x00\x10JFIF\x00\x01\x02\x01\x01\x2C\x01\x2C\x00\x00\xFF\xDA", 22);
+        CHECK(std::abs(io::detectDpi(jfif) - 300.0f) < 0.5f);
     });
 
     std::printf("\n%d vérifications, %d échec(s)\n", g_checks, g_failures);

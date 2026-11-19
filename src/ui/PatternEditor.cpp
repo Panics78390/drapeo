@@ -52,6 +52,10 @@ void PatternEditor::frameAll(const garment::Garment& g)
             lo = glm::min(lo, q);
             hi = glm::max(hi, q);
         }
+    if (backdrop.texture != 0 && backdrop.visible) {
+        lo = glm::min(lo, backdrop.min);
+        hi = glm::max(hi, backdrop.max);
+    }
     if (lo.x > hi.x) {
         lo = {-0.3f, -0.1f};
         hi = {0.9f, 0.8f};
@@ -156,6 +160,13 @@ bool PatternEditor::draw(garment::Garment& g)
     if (zoom_ * 0.01f > 7.0f) gridLines(0.01f, IM_COL32(255, 255, 255, 8));
     gridLines(0.1f, IM_COL32(255, 255, 255, 18));
     gridLines(0.5f, IM_COL32(255, 255, 255, 34));
+    // Calque : image du patron sous les pièces
+    if (backdrop.texture != 0 && backdrop.visible) {
+        const int alpha = static_cast<int>(std::clamp(backdrop.opacity, 0.0f, 1.0f) * 255.0f);
+        dl->AddImage(backdrop.texture, toScreen({backdrop.min.x, backdrop.max.y}), toScreen({backdrop.max.x, backdrop.min.y}),
+                     ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, alpha));
+        dl->AddRect(toScreen({backdrop.min.x, backdrop.max.y}), toScreen({backdrop.max.x, backdrop.min.y}), IM_COL32(255, 255, 255, 40));
+    }
     {   // échelle graphique
         const ImVec2 o(c0.x + 14, c1.y - 16);
         dl->AddLine(o, {o.x + 0.1f * zoom_, o.y}, kMuted, 2.0f);
@@ -373,7 +384,7 @@ bool PatternEditor::draw(garment::Garment& g)
             dl->AddLine({ma.x + (mb.x - ma.x) * t0, ma.y + (mb.y - ma.y) * t0},
                         {ma.x + (mb.x - ma.x) * t1, ma.y + (mb.y - ma.y) * t1}, (col & 0x00FFFFFF) | 0x90000000, 1.2f);
         }
-        char label[8];
+        char label[24];
         std::snprintf(label, sizeof(label), "%zu", s + 1);
         dl->AddCircleFilled(ma, 8, col);
         dl->AddText({ma.x - 4, ma.y - 7}, IM_COL32(20, 20, 24, 255), label);
