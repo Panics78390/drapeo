@@ -1,0 +1,2 @@
+// Icône de drapeo.exe (Explorateur, barre des tâches). Générée par tools/make_logo_assets.py.
+IDI_ICON1 ICON "drapeo.ico"

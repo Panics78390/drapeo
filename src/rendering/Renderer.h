@@ -1,0 +1,82 @@
+// =============================================================================
+//  rendering/Renderer — rendu OpenGL 3.3 core du tissu et de la scène
+//
+//  Éclairage physique simplifié : GGX (Cook-Torrance) + Lambert + reflet
+//  « sheen » de tissu, tone mapping et correction gamma. Le tissu est rendu
+//  double face (la normale est retournée pour les faces arrière).
+// =============================================================================
+#pragma once
+
+#include <string>
+#include <vector>
+
+#include <glm/glm.hpp>
+
+#include "rendering/Camera.h"
+#include "rendering/GlFunctions.h"
+#include "rendering/Shader.h"
+#include "simulation/XpbdSolver.h"
+
+namespace drapeo::rendering {
+
+struct ClothAppearance {
+    glm::vec3 color{0.8f};
+    float roughness = 0.8f;
+    float sheen = 0.3f;
+    bool showStrain = false;
+    float strainScale = 0.10f;   // étirement affiché en rouge (10 %)
+    bool wireframe = false;
+};
+
+struct SceneView {
+    const OrbitCamera* camera = nullptr;
+    int x = 0, y = 0;            // coin inférieur gauche de la vue 3D (pixels du framebuffer)
+    int width = 1, height = 1;
+    const std::vector<simulation::SphereCollider>* spheres = nullptr;
+    bool groundEnabled = true;
+    float groundHeight = 0.0f;
+};
+
+class Renderer {
+public:
+    Renderer() = default;
+    ~Renderer();
+    Renderer(const Renderer&) = delete;
+    Renderer& operator=(const Renderer&) = delete;
+
+    bool init(std::string& error);
+
+    /// À appeler quand le maillage change (réinitialisation, résolution).
+    void setClothTopology(const std::vector<uint32_t>& indices, std::size_t vertexCount);
+    /// À appeler à chaque image : positions, normales, étirement par sommet.
+    void updateCloth(const std::vector<glm::vec3>& positions, const std::vector<glm::vec3>& normals,
+                     const std::vector<float>& strain);
+    /// Couleur par sommet du tissu (couleur de chaque pièce) ; vide = couleur unique.
+    void setClothColors(const std::vector<glm::vec3>& colors);
+
+    /// Avatar importé (statique). Appeler clearAvatar() pour le retirer.
+    void setAvatarMesh(const std::vector<glm::vec3>& positions, const std::vector<glm::vec3>& normals,
+                       const std::vector<uint32_t>& indices);
+    void clearAvatar() { destroyMesh(avatar_); }
+
+    void render(const SceneView& scene, const ClothAppearance& cloth);
+
+private:
+    struct GpuMesh {
+        gl::GLuint vao = 0, position = 0, normal = 0, scalar = 0, color = 0, index = 0;
+        gl::GLsizei indexCount = 0;
+        std::size_t vertexCount = 0;
+    };
+
+    static void createMesh(GpuMesh& mesh, const std::vector<glm::vec3>& positions,
+                           const std::vector<glm::vec3>& normals, const std::vector<uint32_t>& indices,
+                           gl::GLenum usage);
+    static void destroyMesh(GpuMesh& mesh);
+    static void drawMesh(const GpuMesh& mesh);
+
+    Shader shader_;
+    GpuMesh cloth_, sphere_, ground_, avatar_;
+    bool clothHasColors_ = false;
+};
+
+} // namespace drapeo::rendering
