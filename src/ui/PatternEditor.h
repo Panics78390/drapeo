@@ -37,7 +37,10 @@ public:
     int selectedPanel = -1;
     int selectedPoint = -1;
     int selectedSeam = -1;
+    std::vector<int> selection;   // sélection multiple (rectangle, Maj+clic) ; contient selectedPanel
     Backdrop backdrop;
+
+    [[nodiscard]] bool isSelected(int panel) const;
 
     /// Dessine l'éditeur dans la région disponible de la fenêtre ImGui courante.
     /// Renvoie true quand une modification du patron est terminée (il faut
@@ -46,7 +49,7 @@ public:
 
     /// Cadre toutes les pièces dans la vue.
     void frameAll(const garment::Garment& g);
-    void clearSelection() { selectedPanel = selectedPoint = selectedSeam = -1; pendingSeam_ = {}; drawing_.clear(); }
+    void clearSelection() { selectedPanel = selectedPoint = selectedSeam = -1; selection.clear(); pendingSeam_ = {}; drawing_.clear(); }
 
     [[nodiscard]] std::string hint() const;
     [[nodiscard]] static ImU32 seamColor(int index);
@@ -65,7 +68,7 @@ private:
     bool needsFrame_ = true;
 
     // États d'interaction
-    enum class Drag { None, Point, Panel, Pan, Rect, Backdrop } drag_ = Drag::None;
+    enum class Drag { None, Point, Panel, Pan, Rect, Backdrop, Marquee } drag_ = Drag::None;
     glm::vec2 dragStart_{0.0f};
     glm::vec2 dragLast_{0.0f};
     std::vector<glm::vec2> drawing_;  // polygone en cours

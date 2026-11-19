@@ -92,6 +92,8 @@ Au démarrage, Drapeo recharge le dernier avatar utilisé (mémorisé dans `%APP
 | Déplacer la vue | Maj + clic gauche, ou clic milieu |
 | Saisir le tissu | clic droit maintenu |
 | Lecture / pause | Espace |
+| Sélection rectangle (patron 2D) | glisser dans le vide ; Maj pour ajouter, Maj + clic pour basculer une pièce |
+| Tout sélectionner / désélectionner (patron 2D) | Ctrl+A / Échap |
 | Recoudre depuis le patron | R |
 | Cadrer la vue survolée | F |
 | Annuler / rétablir | Ctrl+Z / Ctrl+Y |

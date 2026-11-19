@@ -103,13 +103,20 @@ garment::EdgeRef PatternEditor::pickEdge(const garment::Garment& g, ImVec2 mouse
     return best;
 }
 
+bool PatternEditor::isSelected(int panel) const
+{
+    return panel >= 0 && (panel == selectedPanel || std::find(selection.begin(), selection.end(), panel) != selection.end());
+}
+
 std::string PatternEditor::hint() const
 {
     switch (tool) {
     case Tool::Select:
+        if (selection.size() > 1)
+            return std::to_string(selection.size()) + " pièces sélectionnées : glisser pour les déplacer, Suppr pour les supprimer, Échap pour désélectionner.";
         if (backdrop.selected)
             return "Image de fond sélectionnée : glisser pour la déplacer, Suppr pour la retirer.";
-        return "Sélection : glisser une pièce ou un point. Double-clic sur un bord : ajouter un point. Suppr : supprimer.";
+        return "Sélection : glisser une pièce ou un point, ou tracer un rectangle dans le vide (Maj : ajouter). Double-clic sur un bord : ajouter un point. Suppr : supprimer.";
     case Tool::Polygon:
         return drawing_.empty() ? "Polygone : cliquez pour poser le premier point."
                                 : "Polygone : cliquez pour ajouter des points, cliquez sur le premier (ou Entrée) pour fermer. Échap : annuler.";
@@ -127,6 +134,13 @@ bool PatternEditor::draw(garment::Garment& g)
     bool committed = false;
     ImGuiIO& io = ImGui::GetIO();
     shift_ = io.KeyShift;
+    // Sélection multiple périmée (pièce choisie ailleurs, pièces supprimées) : on l'oublie.
+    if (!selection.empty()) {
+        const bool stale = std::find(selection.begin(), selection.end(), selectedPanel) == selection.end() ||
+                           std::any_of(selection.begin(), selection.end(),
+                                       [&](int p) { return p < 0 || p >= static_cast<int>(g.panels.size()); });
+        if (stale) selection.clear();
+    }
 
     canvasPos_ = ImGui::GetCursorScreenPos();
     canvasSize_ = ImGui::GetContentRegionAvail();
@@ -211,23 +225,44 @@ bool PatternEditor::draw(garment::Garment& g)
                     hitPoint = pickPoint(g, p, mouse);
                     if (hitPoint >= 0) hitPanel = p;
                 }
-                if (hitPoint >= 0) {
+                const bool shift = io.KeyShift;
+                const bool onBackdrop = backdrop.texture != 0 && backdrop.visible && mw.x >= backdrop.min.x &&
+                                        mw.x <= backdrop.max.x && mw.y >= backdrop.min.y && mw.y <= backdrop.max.y;
+                if (hitPoint >= 0 && !shift) {
                     selectedPanel = hitPanel;
                     selectedPoint = hitPoint;
+                    selection.clear();
                     drag_ = Drag::Point;
+                    backdrop.selected = false;
                 } else if (const int p = pickPanel(g, mw); p >= 0) {
-                    selectedPanel = p;
                     selectedPoint = -1;
-                    drag_ = Drag::Panel;
+                    backdrop.selected = false;
+                    if (shift) {
+                        // Maj + clic : ajoute ou retire la pièce de la sélection.
+                        if (selection.empty() && selectedPanel >= 0) selection.push_back(selectedPanel);
+                        if (const auto it = std::find(selection.begin(), selection.end(), p); it != selection.end()) {
+                            selection.erase(it);
+                            selectedPanel = selection.empty() ? -1 : selection.back();
+                        } else {
+                            selection.push_back(p);
+                            selectedPanel = p;
+                        }
+                        if (selection.size() == 1) selection.clear();
+                    } else {
+                        if (!isSelected(p)) selection.clear();   // clic dans la sélection : on la déplace entière
+                        selectedPanel = p;
+                        drag_ = Drag::Panel;
+                    }
+                } else if (backdrop.selected && onBackdrop && !shift) {
+                    drag_ = Drag::Backdrop;   // image déjà sélectionnée : on la glisse
                 } else {
-                    selectedPanel = selectedPoint = -1;
-                }
-                // Clic dans le vide sur l'image de fond : on la sélectionne pour la déplacer.
-                backdrop.selected = false;
-                if (selectedPanel < 0 && backdrop.texture != 0 && backdrop.visible &&
-                    mw.x >= backdrop.min.x && mw.x <= backdrop.max.x && mw.y >= backdrop.min.y && mw.y <= backdrop.max.y) {
-                    backdrop.selected = true;
-                    drag_ = Drag::Backdrop;
+                    // Clic dans le vide : rectangle de sélection.
+                    if (!shift) {
+                        selectedPanel = selectedPoint = -1;
+                        selection.clear();
+                    }
+                    backdrop.selected = false;
+                    drag_ = Drag::Marquee;
                 }
                 dragStart_ = dragLast_ = mw;
                 break;
@@ -305,6 +340,41 @@ bool PatternEditor::draw(garment::Garment& g)
     if (drag_ == Drag::Pan) {
         center_ -= glm::vec2(io.MouseDelta.x, -io.MouseDelta.y) / zoom_;
         if (!ImGui::IsMouseDown(ImGuiMouseButton_Middle) && !ImGui::IsMouseDown(ImGuiMouseButton_Right)) drag_ = Drag::None;
+    } else if (drag_ == Drag::Panel && selection.size() > 1) {
+        if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            const glm::vec2 d = mw - dragLast_;
+            for (const int p : selection)
+                if (p >= 0 && p < static_cast<int>(g.panels.size()))
+                    for (auto& q : g.panels[static_cast<std::size_t>(p)].points) q += d;
+            dragLast_ = mw;
+        } else {
+            drag_ = Drag::None;
+        }
+    } else if (drag_ == Drag::Marquee) {
+        dragLast_ = mw;
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            const ImVec2 a = toScreen(dragStart_), b = toScreen(dragLast_);
+            if (std::abs(a.x - b.x) < 4.0f && std::abs(a.y - b.y) < 4.0f) {
+                // Simple clic dans le vide : sélectionne l'image de fond si on est dessus.
+                backdrop.selected = backdrop.texture != 0 && backdrop.visible && mw.x >= backdrop.min.x &&
+                                    mw.x <= backdrop.max.x && mw.y >= backdrop.min.y && mw.y <= backdrop.max.y &&
+                                    selection.empty() && selectedPanel < 0;
+            } else {
+                const glm::vec2 lo = glm::min(dragStart_, dragLast_), hi = glm::max(dragStart_, dragLast_);
+                const auto inside = [&](glm::vec2 q) { return q.x >= lo.x && q.x <= hi.x && q.y >= lo.y && q.y <= hi.y; };
+                if (selection.empty() && selectedPanel >= 0) selection.push_back(selectedPanel);
+                for (int p = 0; p < static_cast<int>(g.panels.size()); ++p) {
+                    const auto& pts = g.panels[static_cast<std::size_t>(p)].points;
+                    bool hit = inside(garment::centroid(pts));
+                    for (std::size_t i = 0; !hit && i < pts.size(); ++i) hit = inside(pts[i]);
+                    if (hit && !isSelected(p)) selection.push_back(p);
+                }
+                if (!selection.empty()) selectedPanel = selection.back();
+                if (selection.size() == 1) selection.clear();
+                selectedPoint = -1;
+            }
+            drag_ = Drag::None;
+        }
     } else if (drag_ == Drag::Point || drag_ == Drag::Panel) {
         if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
             if (selectedPanel >= 0 && selectedPanel < static_cast<int>(g.panels.size())) {
@@ -352,7 +422,18 @@ bool PatternEditor::draw(garment::Garment& g)
 
     // Clavier (si la vue 2D est survolée ou active)
     if (hovered || ImGui::IsItemActive()) {
+        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A, false) && tool == Tool::Select && !g.panels.empty()) {
+            selection.clear();
+            for (int p = 0; p < static_cast<int>(g.panels.size()); ++p) selection.push_back(p);
+            selectedPanel = selection.back();
+            selectedPoint = selectedSeam = -1;
+            if (selection.size() == 1) selection.clear();
+        }
         if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            if (drawing_.empty() && pendingSeam_.panel < 0) {
+                selection.clear();
+                selectedPanel = selectedPoint = -1;
+            }
             drawing_.clear();
             pendingSeam_ = {};
         }
@@ -369,6 +450,14 @@ bool PatternEditor::draw(garment::Garment& g)
             if (backdrop.selected && selectedPanel < 0 && selectedSeam < 0) {
                 backdrop.removeRequested = true;
                 backdrop.selected = false;
+            } else if (selection.size() > 1 && selectedSeam < 0) {
+                std::vector<int> doomed = selection;
+                std::sort(doomed.rbegin(), doomed.rend());
+                for (const int p : doomed)
+                    if (p >= 0 && p < static_cast<int>(g.panels.size())) g.removePanel(p);
+                selection.clear();
+                selectedPanel = selectedPoint = -1;
+                committed = true;
             } else if (selectedSeam >= 0 && selectedSeam < static_cast<int>(g.seams.size())) {
                 g.seams.erase(g.seams.begin() + selectedSeam);
                 selectedSeam = -1;
@@ -401,7 +490,7 @@ bool PatternEditor::draw(garment::Garment& g)
         const auto& panel = g.panels[p];
         scr.clear();
         for (const auto& q : panel.points) scr.push_back(toScreen(q));
-        const bool sel = static_cast<int>(p) == selectedPanel;
+        const bool sel = isSelected(static_cast<int>(p));
         // Remplissage : triangulation en éventail impossible pour les pièces
         // concaves, on utilise le remplissage de polygone concave d'ImGui.
         dl->AddConcavePolyFilled(scr.data(), static_cast<int>(scr.size()), rgba(panel.color, sel ? 0.42f : 0.28f));
@@ -520,6 +609,11 @@ bool PatternEditor::draw(garment::Garment& g)
         char text[32];
         std::snprintf(text, sizeof(text), "%.1f cm", static_cast<double>(glm::distance(drawing_.back(), snap(mw)) * 100.0f));
         dl->AddText({cur.x + 12, cur.y + 8}, kInk, text);
+    }
+    if (drag_ == Drag::Marquee) {
+        const ImVec2 a = toScreen(dragStart_), b = toScreen(dragLast_);
+        dl->AddRectFilled(a, b, IM_COL32(120, 170, 230, 36));
+        dl->AddRect(a, b, IM_COL32(120, 170, 230, 220), 0.0f, 0, 1.5f);
     }
     if (drag_ == Drag::Rect) {
         const ImVec2 a = toScreen(dragStart_), b = toScreen(dragLast_);
