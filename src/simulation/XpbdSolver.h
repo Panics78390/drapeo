@@ -89,6 +89,8 @@ public:
     void grab(uint32_t particle);
     void moveGrabbed(const glm::vec3& target);
     void release();
+    /// Place une particule (vitesse remise à zéro) : déplacement d'une pièce avant simulation.
+    void setParticlePosition(uint32_t particle, const glm::vec3& p);
     [[nodiscard]] int grabbedParticle() const { return grabbed_; }
 
     // --- Accès aux résultats -----------------------------------------------

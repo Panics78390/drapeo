@@ -37,6 +37,14 @@ struct MeshingOptions {
 /// Construit le maillage. Renvoie false (et `error`) si une pièce est invalide.
 bool buildGarmentMesh(const Garment& garment, const MeshingOptions& options, GarmentMesh& out, std::string& error);
 
+/// Repère d'une zone du corps : axe (origine, direction vers le haut) et
+/// directions devant / côté (angle 0 = devant, 90 = côté). Les pièces de cette
+/// zone sont enroulées sur un cylindre autour de cet axe.
+struct ZoneFrame {
+    glm::vec3 origin{0.0f}, up{0, 1, 0}, front{0, 0, 1}, side{1, 0, 0};
+};
+ZoneFrame zoneFrame(BodyZone zone, const MeshingOptions& options);
+
 /// Position 3D d'un point 2D d'une pièce selon son placement.
 glm::vec3 placePoint(const Panel& panel, glm::vec2 p, const MeshingOptions& options);
 

@@ -1,6 +1,7 @@
 #include "app/App.h"
 
 #include <algorithm>
+#include <numbers>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
@@ -529,6 +530,55 @@ void App::shutdown()
 // =============================================================================
 //  Vêtement
 // =============================================================================
+garment::MeshingOptions App::meshingOptions() const
+{
+    garment::MeshingOptions mo;
+    mo.spacing = spacing_;
+    mo.bodyScale = avatarHeight_ / 1.75f;
+    return mo;
+}
+
+void App::dragPanelTo(const glm::vec3& o, const glm::vec3& d)
+{
+    if (dragPanel_ < 0 || dragPanel_ >= static_cast<int>(garment_.panels.size())) return;
+    auto& panel = garment_.panels[static_cast<std::size_t>(dragPanel_)];
+    const garment::MeshingOptions mo = meshingOptions();
+    const garment::ZoneFrame f = garment::zoneFrame(panel.placement.zone, mo);
+    const float R = std::max(panel.placement.radius * mo.bodyScale, 0.03f);
+    // Point du cylindre de la pièce sous la souris (le plus proche du point précédent).
+    const auto perp = [&](const glm::vec3& v) { return v - f.up * glm::dot(v, f.up); };
+    const glm::vec3 q = perp(o - f.origin), dp = perp(d);
+    const float a = glm::dot(dp, dp), b = 2.0f * glm::dot(q, dp), c = glm::dot(q, q) - R * R;
+    const float disc = b * b - 4 * a * c;
+    glm::vec3 hit;
+    if (a < 1e-8f) return;
+    if (disc >= 0.0f) {
+        const glm::vec3 h0 = o + d * ((-b - std::sqrt(disc)) / (2 * a)), h1 = o + d * ((-b + std::sqrt(disc)) / (2 * a));
+        hit = glm::distance(h0, dragLastHit_) <= glm::distance(h1, dragLastHit_) ? h0 : h1;
+    } else {
+        hit = o + d * (-b / (2 * a));   // la souris sort du cylindre : point le plus proche de l'axe
+    }
+    const auto angleOf = [&](const glm::vec3& p) {
+        const glm::vec3 r = p - f.origin;
+        return std::atan2(glm::dot(r, f.side), glm::dot(r, f.front));
+    };
+    float da = angleOf(hit) - angleOf(dragLastHit_);
+    while (da > std::numbers::pi_v<float>) da -= (2.0f * std::numbers::pi_v<float>);
+    while (da < -std::numbers::pi_v<float>) da += (2.0f * std::numbers::pi_v<float>);
+    const float axial = glm::dot(hit - dragLastHit_, f.up);
+    dragLastHit_ = hit;
+    float angle = panel.placement.angleDeg + glm::degrees(da);
+    while (angle > 180.0f) angle -= 360.0f;
+    while (angle < -180.0f) angle += 360.0f;
+    panel.placement.angleDeg = angle;
+    panel.placement.height = std::clamp(panel.placement.height + axial * f.up.y / mo.bodyScale, -0.5f, 2.2f);
+    // On replace tout de suite les particules de la pièce (sans remailler).
+    for (std::size_t i = 0; i < garmentMesh_.panelOfVertex.size() && i < solver_.positions().size(); ++i)
+        if (garmentMesh_.panelOfVertex[i] == dragPanel_)
+            solver_.setParticlePosition(static_cast<uint32_t>(i), garment::placePoint(panel, garmentMesh_.mesh.uvs[i], mo));
+    dragMoved_ = true;
+}
+
 void App::resetCloth()
 {
     clothValid_ = false;
@@ -539,9 +589,7 @@ void App::resetCloth()
         renderer_.setClothTopology({}, 0);
         return;
     }
-    garment::MeshingOptions mo;
-    mo.spacing = spacing_;
-    mo.bodyScale = avatarHeight_ / 1.75f;
+    const garment::MeshingOptions mo = meshingOptions();
     garment::GarmentMesh gm;
     std::string error;
     if (!garment::buildGarmentMesh(garment_, mo, gm, error)) {
@@ -995,28 +1043,49 @@ void App::handleViewportInput()
     const float ndcX = 2.0f * (m.x - viewPos_.x) / viewSize_.x - 1.0f;
     const float ndcY = 1.0f - 2.0f * (m.y - viewPos_.y) / viewSize_.y;
 
+    // Particule la plus proche du rayon de la souris (-1 si aucune).
+    const auto pickParticle = [&](float& depth) {
+        glm::vec3 o, d;
+        camera_.ray(ndcX, ndcY, aspect, o, d);
+        const auto& pos = solver_.positions();
+        int best = -1;
+        depth = 1e9f;
+        const float pickRadius = std::max(0.03f, solver_.restSpacing() * 1.5f);
+        for (std::size_t i = 0; i < pos.size(); ++i) {
+            const float t = glm::dot(pos[i] - o, d);
+            if (t <= 0.0f || t >= depth) continue;
+            if (glm::length(pos[i] - (o + d * t)) < pickRadius) {
+                best = static_cast<int>(i);
+                depth = t;
+            }
+        }
+        return best;
+    };
+
     if (inside) {
-        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) (io.KeyShift ? panning_ : orbiting_) = true;
+        // En pause : clic gauche sur une pièce = la déplacer autour du corps.
+        bool pickedPanel = false;
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !playing_ && clothValid_ && !io.KeyShift) {
+            float depth = 0.0f;
+            const int p = pickParticle(depth);
+            if (p >= 0 && static_cast<std::size_t>(p) < garmentMesh_.panelOfVertex.size()) {
+                dragPanel_ = garmentMesh_.panelOfVertex[static_cast<std::size_t>(p)];
+                dragMoved_ = false;
+                dragLastHit_ = solver_.positions()[static_cast<std::size_t>(p)];
+                editor_.selectedPanel = dragPanel_;
+                editor_.selectedPoint = editor_.selectedSeam = -1;
+                pickedPanel = true;
+            }
+        }
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !pickedPanel) (io.KeyShift ? panning_ : orbiting_) = true;
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) panning_ = true;
         if (io.MouseWheel != 0.0f) camera_.zoom(std::pow(0.9f, io.MouseWheel));
         if (!io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F, false)) frameCamera();
 
         // Clic droit : saisir la particule la plus proche du rayon de la souris.
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Right) && clothValid_) {
-            glm::vec3 o, d;
-            camera_.ray(ndcX, ndcY, aspect, o, d);
-            const auto& pos = solver_.positions();
-            int best = -1;
-            float bestT = 1e9f;
-            const float pickRadius = std::max(0.03f, solver_.restSpacing() * 1.5f);
-            for (std::size_t i = 0; i < pos.size(); ++i) {
-                const float t = glm::dot(pos[i] - o, d);
-                if (t <= 0.0f || t >= bestT) continue;
-                if (glm::length(pos[i] - (o + d * t)) < pickRadius) {
-                    best = static_cast<int>(i);
-                    bestT = t;
-                }
-            }
+            float bestT = 0.0f;
+            const int best = pickParticle(bestT);
             if (best >= 0) {
                 solver_.grab(static_cast<uint32_t>(best));
                 grabDepth_ = bestT;
@@ -1025,6 +1094,33 @@ void App::handleViewportInput()
     }
     if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) orbiting_ = false;
     if (!ImGui::IsMouseDown(ImGuiMouseButton_Left) && !ImGui::IsMouseDown(ImGuiMouseButton_Middle)) panning_ = false;
+
+    if (dragPanel_ >= 0) {
+        if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && clothValid_) {
+            if (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f) {
+                glm::vec3 o, d;
+                camera_.ray(ndcX, ndcY, aspect, o, d);
+                dragPanelTo(o, d);
+            }
+        } else {
+            // Fin du déplacement : nouvel état du patron (annulable), maillage refait, toujours en pause.
+            if (dragMoved_ && dragPanel_ < static_cast<int>(garment_.panels.size())) {
+                undoStack_.push_back(committed_);
+                redoStack_.clear();
+                committed_ = garment_;
+                resetCloth();
+                playing_ = false;
+                const auto& pl = garment_.panels[static_cast<std::size_t>(dragPanel_)].placement;
+                char text[200];
+                std::snprintf(text, sizeof(text), "%s : angle %.0f°, hauteur %.0f cm. Espace pour simuler.",
+                              garment_.panels[static_cast<std::size_t>(dragPanel_)].name.c_str(), static_cast<double>(pl.angleDeg),
+                              static_cast<double>(pl.height * 100.0f));
+                setStatus(text, false);
+            }
+            dragPanel_ = -1;
+            dragMoved_ = false;
+        }
+    }
 
     const float dx = io.MouseDelta.x, dy = io.MouseDelta.y;
     if (orbiting_) camera_.orbit(-dx * 0.006f, dy * 0.006f);
@@ -1328,7 +1424,8 @@ void App::drawViewportOverlay()
         const ImVec2 ts = ImGui::CalcTextSize(msg);
         dl->AddText({o.x + (viewSize_.x - ts.x) * 0.5f, o.y + viewSize_.y * 0.5f}, ImGui::GetColorU32(kTextDim), msg);
     }
-    const char* help = "Clic gauche : tourner    Maj / clic milieu : déplacer    Molette : zoom    Clic droit : saisir le tissu";
+    const char* help = playing_ ? "Clic gauche : tourner    Maj / clic milieu : déplacer    Molette : zoom    Clic droit : saisir le tissu"
+                                : "En pause : glisser une pièce pour la placer autour du corps    Clic gauche ailleurs : tourner    Molette : zoom";
     const ImVec2 hs = ImGui::CalcTextSize(help);
     if (hs.x < viewSize_.x - 2 * pad)
         dl->AddText({o.x + pad, o.y + viewSize_.y - hs.y - pad * 0.7f}, IM_COL32(150, 154, 162, 170), help);

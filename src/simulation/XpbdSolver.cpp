@@ -128,6 +128,13 @@ void XpbdSolver::moveGrabbed(const glm::vec3& target)
     if (grabbed_ >= 0) x_[static_cast<std::size_t>(grabbed_)] = target;
 }
 
+void XpbdSolver::setParticlePosition(uint32_t particle, const glm::vec3& p)
+{
+    x_[particle] = p;
+    if (particle < prev_.size()) prev_[particle] = p;
+    v_[particle] = glm::vec3(0.0f);
+}
+
 void XpbdSolver::release()
 {
     grabbed_ = -1;

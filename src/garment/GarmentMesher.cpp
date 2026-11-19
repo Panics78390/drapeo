@@ -39,6 +39,20 @@ static void limbAxis(BodyZone zone, glm::vec3& top, glm::vec3& bottom)
     }
 }
 
+ZoneFrame zoneFrame(BodyZone zone, const MeshingOptions& options)
+{
+    ZoneFrame f;
+    f.origin = options.bodyCenter;
+    if (zone == BodyZone::Torso) return f;
+    glm::vec3 top, bottom;
+    limbAxis(zone, top, bottom);
+    f.origin += bottom * options.bodyScale;
+    f.up = glm::normalize(top - bottom);
+    f.front = glm::normalize(glm::vec3(0, 0, 1) - f.up * f.up.z);
+    f.side = glm::cross(f.up, f.front);
+    return f;
+}
+
 glm::vec3 placePoint(const Panel& panel, glm::vec2 p, const MeshingOptions& options)
 {
     const PanelFrame f = frameOf(panel);

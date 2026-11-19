@@ -182,6 +182,12 @@ private:
     // Souris dans la vue 3D
     bool orbiting_ = false, panning_ = false;
     float grabDepth_ = 0.0f;
+    // Déplacement d'une pièce dans la vue 3D (simulation en pause)
+    int dragPanel_ = -1;
+    bool dragMoved_ = false;
+    glm::vec3 dragLastHit_{0.0f};
+    [[nodiscard]] garment::MeshingOptions meshingOptions() const;
+    void dragPanelTo(const glm::vec3& rayOrigin, const glm::vec3& rayDir);
 
     friend void dropCallback(GLFWwindow*, int, const char**);
 };
