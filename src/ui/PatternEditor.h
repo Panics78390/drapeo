@@ -4,6 +4,7 @@
 //  Outils : Sélection (déplacer pièces et points, double-clic sur un bord pour
 //  ajouter un point), Polygone, Rectangle, Couture (cliquer deux bords).
 //  Navigation : molette = zoom, clic milieu ou clic droit glissé = déplacer.
+//  Clic droit sans glisser : menu des pièces (ouvert par l'application).
 //  Maj = aimanter à la grille de 1 cm. Suppr = supprimer la sélection.
 // =============================================================================
 #pragma once
@@ -50,6 +51,18 @@ public:
 
     /// Cadre toutes les pièces dans la vue.
     void frameAll(const garment::Garment& g);
+    /// Cadre les pièces données (sélection).
+    void frameParts(const garment::Garment& g, const std::vector<int>& ids);
+    /// Pièces visées par une commande : la sélection multiple, sinon la pièce sélectionnée.
+    [[nodiscard]] std::vector<int> targets() const;
+    /// Remplace la sélection (la dernière pièce devient la pièce active).
+    void select(const std::vector<int>& ids);
+    [[nodiscard]] bool hovered() const { return hovered_; }
+
+    // Clic droit sans glisser : l'application ouvre le menu des pièces.
+    bool menuRequested = false;
+    int menuPanel = -1;            // pièce sous la souris (-1 : clic dans le vide)
+    glm::vec2 menuWorld{0.0f};     // point cliqué (m)
     void clearSelection() { selectedPanel = selectedPoint = selectedSeam = -1; selection.clear(); pendingSeam_ = {}; drawing_.clear(); }
 
     [[nodiscard]] std::string hint() const;
@@ -90,6 +103,9 @@ private:
     garment::EdgeRef pendingSeam_;    // premier bord choisi (outil couture)
     garment::EdgeRef hoverEdge_;
     bool shift_ = false;
+    bool hovered_ = false;
+    bool rightPan_ = false;       // glisser commencé au clic droit
+    ImVec2 rightPress_{0, 0};
 };
 
 } // namespace drapeo::ui

@@ -107,6 +107,25 @@ La flèche de la pièce sélectionnée est aussi reportée sur le tissu dans la 
 Glissez la poche dans le patron pour la déplacer sur sa base ; déplacer la base emporte ses poches.
 **Détacher de la pièce** la libère.
 
+## Menu clic droit des pièces (vue patron)
+
+Un clic droit sans glisser sur une pièce (ou sur une sélection) ouvre son menu ; clic droit glissé = déplacer la vue.
+
+- **Sélection** : tout sélectionner, inverser la sélection, pièces de la même couleur, de la même zone du corps, clones liés.
+- **Nouvelle couleur de tissu** pour les pièces choisies.
+- **Copier / Coller ici / Coller en miroir / Supprimer** (Ctrl+C, Ctrl+V, Ctrl+R, Suppr).
+- **Cloner (édition liée)** : clone symétrique cousu (Ctrl+D : le clone est aussi cousu sur le côté opposé des
+  pièces symétriques voisines, et ses poches posées en face), clone symétrique, clone identique, clone par-dessus
+  ou en dessous (couche, Ctrl+Maj+V / Ctrl+Maj+B). Les clones restent liés : changer la forme de l'un (points, cintrage,
+  ajout ou découpe, contour) change les autres, en miroir si besoin. Déplacer, pivoter ou retourner un clone ne touche pas les autres.
+- **Édition liée** : lier des pièces de même forme déjà existantes, ou les délier.
+- **Contour** : agrandir / réduire de 1 cm ou d'une valeur libre, simplifier les points (ceux des coutures sont gardés),
+  renfort intérieur (copie réduite de 2 cm cousue tout le tour).
+- **Pièce en 3D** : désactiver la pièce seule ou avec ses coutures (Ctrl+J), figer (Ctrl+K), renforcer (Ctrl+H),
+  masquer en 3D (Maj+Q). Ces états sont enregistrés dans le projet et affichés sous le nom de la pièce.
+- **Ordre**, **Pivoter** (90°, 180°, angle libre), **Retourner** (gauche-droite, haut-bas), **Cadrer la sélection**,
+  **Exporter la sélection en 3D (OBJ)**.
+
 ## Importer un avatar (FBX, OBJ)
 
 - menu **Fichier → Importer un avatar (FBX, OBJ)...** (Ctrl+O), ou
@@ -135,6 +154,10 @@ Au démarrage, Drapeo recharge le dernier avatar utilisé (mémorisé dans `%APP
 | Annuler / rétablir | Ctrl+Z / Ctrl+Y |
 | Importer avatar / patron | Ctrl+O / Ctrl+I |
 | Exporter en OBJ | Ctrl+E |
+| Menu de la pièce (patron 2D) | clic droit sans glisser |
+| Copier / coller / coller en miroir | Ctrl+C / Ctrl+V / Ctrl+R |
+| Clone symétrique cousu / inverser la sélection | Ctrl+D / Ctrl+Maj+I |
+| Désactiver / figer / renforcer / masquer en 3D | Ctrl+J / Ctrl+K / Ctrl+H / Maj+Q |
 
 Options : `drapeo --frames 200 --screenshot capture.ppm --size 1600x900` lance 200 images puis enregistre une capture (utile pour les tests automatiques).
 

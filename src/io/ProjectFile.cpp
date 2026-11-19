@@ -24,6 +24,9 @@ std::string writeProject(const garment::Garment& g, const ProjectAvatar* avatar)
         o << "couleur " << p.color.r << ' ' << p.color.g << ' ' << p.color.b << "\n";
         o << "droitfil " << p.grainDeg << "\n";
         if (p.symmetric) o << "symetrie " << p.symAxisX << "\n";
+        if (!p.active3D || p.hidden3D || p.frozen || p.stiffness != 1.0f)   // etat3d <active> <masquée> <figée> <raideur>
+            o << "etat3d " << (p.active3D ? 1 : 0) << ' ' << (p.hidden3D ? 1 : 0) << ' ' << (p.frozen ? 1 : 0) << ' ' << p.stiffness << "\n";
+        if (p.linkGroup > 0) o << "lien " << p.linkGroup << ' ' << (p.linkMirror ? 1 : 0) << ' ' << p.linkAngle << "\n";
         const auto& pl = p.placement;
         o << "placement " << static_cast<int>(pl.zone) << ' ' << pl.angleDeg << ' ' << pl.height << ' ' << pl.radius << ' '
           << pl.offset.x << ' ' << pl.offset.y << ' ' << pl.offset.z << ' ' << pl.rotation.w << ' ' << pl.rotation.x << ' '
@@ -70,6 +73,20 @@ bool parseProject(const std::string& text, garment::Garment& out, std::string& e
         } else if (key == "symetrie" && !g.panels.empty()) {
             g.panels.back().symmetric = true;
             ls >> g.panels.back().symAxisX;
+        } else if (key == "etat3d" && !g.panels.empty()) {
+            auto& pn = g.panels.back();
+            int active = 1, hidden = 0, frozen = 0;
+            ls >> active >> hidden >> frozen >> pn.stiffness;
+            pn.active3D = active != 0;
+            pn.hidden3D = hidden != 0;
+            pn.frozen = frozen != 0;
+            if (!(pn.stiffness > 0.0f)) pn.stiffness = 1.0f;
+        } else if (key == "lien" && !g.panels.empty()) {
+            auto& pn = g.panels.back();
+            int mirror = 0;
+            ls >> pn.linkGroup >> mirror >> pn.linkAngle;
+            pn.linkMirror = mirror != 0;
+            if (pn.linkGroup < 0) pn.linkGroup = 0;
         } else if (key == "droitfil" && !g.panels.empty()) {
             ls >> g.panels.back().grainDeg;
         } else if (key == "placement" && !g.panels.empty()) {

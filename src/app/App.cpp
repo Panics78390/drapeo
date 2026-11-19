@@ -18,6 +18,7 @@
 #include "app/LogoData.h"
 #include "geometry/ClothMesh.h"
 #include "geometry/Mannequin.h"
+#include "garment/PatternOps.h"
 #include "io/GarmentExport.h"
 #include "io/PatternImport.h"
 #include "io/PdfImport.h"
@@ -652,6 +653,7 @@ void App::resetCloth()
     renderer_.setClothTopology(garmentMesh_.mesh.indices, garmentMesh_.mesh.vertexCount());
     clothValid_ = true;
     updateClothColors();
+    apply3DState();
 }
 
 void App::setGarment(garment::Garment g)
@@ -670,6 +672,9 @@ void App::setGarment(garment::Garment g)
 
 void App::commitGarment()
 {
+    // Clones liés : la nouvelle forme d'une pièce est reportée sur ses clones.
+    if (const int linked = garment::propagateLinkedEdits(committed_, garment_); linked > 0)
+        setStatus("Modification reportée sur " + std::to_string(linked) + " clone(s) lié(s).", false);
     undoStack_.push_back(committed_);
     if (undoStack_.size() > 100) undoStack_.erase(undoStack_.begin());
     redoStack_.clear();
@@ -1006,8 +1011,46 @@ void App::exportGarment()
     m.indices = &solver_.indices();
     m.panelOfVertex = &garmentMesh_.panelOfVertex;
     for (const auto& p : garment_.panels) m.panelNames.push_back(p.name);
+    // Export des pièces sélectionnées seulement : sommets et triangles de ces pièces, renumérotés.
+    std::vector<glm::vec3> subPos, subNrm;
+    std::vector<glm::vec2> subUv;
+    std::vector<uint32_t> subIdx;
+    std::vector<int> subPanel;
+    if (!exportOnly_.empty()) {
+        const auto& pov = garmentMesh_.panelOfVertex;
+        const auto& pos = solver_.positions();
+        std::vector<int> remap(pos.size(), -1);
+        auto keep = [&](uint32_t v) { return v < pov.size() && std::find(exportOnly_.begin(), exportOnly_.end(), pov[v]) != exportOnly_.end(); };
+        const auto& idx = solver_.indices();
+        for (std::size_t t = 0; t + 2 < idx.size(); t += 3) {
+            if (!keep(idx[t]) || !keep(idx[t + 1]) || !keep(idx[t + 2])) continue;
+            for (int k = 0; k < 3; ++k) {
+                const uint32_t v = idx[t + static_cast<std::size_t>(k)];
+                if (remap[v] < 0) {
+                    remap[v] = static_cast<int>(subPos.size());
+                    subPos.push_back(pos[v]);
+                    subNrm.push_back(v < normals_.size() ? normals_[v] : glm::vec3(0, 1, 0));
+                    subUv.push_back(v < garmentMesh_.mesh.uvs.size() ? garmentMesh_.mesh.uvs[v] : glm::vec2(0.0f));
+                    subPanel.push_back(pov[v]);
+                }
+                subIdx.push_back(static_cast<uint32_t>(remap[v]));
+            }
+        }
+        if (subIdx.empty()) {
+            setStatus("Les pièces choisies ne sont pas dans la vue 3D (désactivées ?).", true);
+            exportOnly_.clear();
+            return;
+        }
+        m.positions = &subPos;
+        m.normals = &subNrm;
+        m.uvs = &subUv;
+        m.indices = &subIdx;
+        m.panelOfVertex = &subPanel;
+    }
     std::string error;
-    if (io::exportObj(path, m, error)) setStatus("Vêtement exporté : " + path, false);
+    const bool partial = !exportOnly_.empty();
+    exportOnly_.clear();
+    if (io::exportObj(path, m, error)) setStatus(std::string(partial ? "Pièces exportées : " : "Vêtement exporté : ") + path, false);
     else setStatus("Export impossible : " + error, true);
 }
 
@@ -1112,8 +1155,33 @@ void App::handleShortcuts()
     if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Z, false)) io.KeyShift ? redo() : undo();
     if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Y, false)) redo();
     if (ctrl && ImGui::IsKeyPressed(ImGuiKey_O, false)) openAvatarDialog();
-    if (ctrl && ImGui::IsKeyPressed(ImGuiKey_I, false)) openPatternDialog();
-    if (ctrl && ImGui::IsKeyPressed(ImGuiKey_E, false)) exportGarment();
+    const bool shift = io.KeyShift;
+    if (ctrl && !shift && ImGui::IsKeyPressed(ImGuiKey_I, false)) openPatternDialog();
+    if (ctrl && ImGui::IsKeyPressed(ImGuiKey_E, false)) {
+        exportOnly_.clear();
+        exportGarment();
+    }
+    // Menu des pièces (vue patron)
+    if (ctrl && shift && ImGui::IsKeyPressed(ImGuiKey_I, false)) pieceAction(PieceAction::InvertSelection);
+    if (ctrl && !shift && ImGui::IsKeyPressed(ImGuiKey_C, false)) pieceAction(PieceAction::Copy);
+    if (ctrl && !shift && ImGui::IsKeyPressed(ImGuiKey_V, false)) pasteClipboard(false, false);
+    if (ctrl && !shift && ImGui::IsKeyPressed(ImGuiKey_R, false)) pasteClipboard(true, false);
+    if (ctrl && !shift && ImGui::IsKeyPressed(ImGuiKey_D, false)) pieceAction(PieceAction::CloneMirrorSewn);
+    if (ctrl && shift && ImGui::IsKeyPressed(ImGuiKey_V, false)) pieceAction(PieceAction::CloneOver);
+    if (ctrl && shift && ImGui::IsKeyPressed(ImGuiKey_B, false)) pieceAction(PieceAction::CloneUnder);
+    if (ctrl && !shift && ImGui::IsKeyPressed(ImGuiKey_J, false)) pieceAction(PieceAction::Deactivate);
+    const auto all = [&](bool (*test)(const garment::Panel&)) {
+        const auto t = editor_.targets();
+        return !t.empty() && std::all_of(t.begin(), t.end(), [&](int p) {
+            return p >= 0 && p < static_cast<int>(garment_.panels.size()) && test(garment_.panels[static_cast<std::size_t>(p)]);
+        });
+    };
+    if (ctrl && !shift && ImGui::IsKeyPressed(ImGuiKey_K, false))
+        pieceAction(all([](const garment::Panel& p) { return p.frozen; }) ? PieceAction::Unfreeze : PieceAction::Freeze);
+    if (ctrl && !shift && ImGui::IsKeyPressed(ImGuiKey_H, false))
+        pieceAction(all([](const garment::Panel& p) { return p.stiffness > 1.0f; }) ? PieceAction::Soften : PieceAction::Strengthen);
+    if (!ctrl && shift && ImGui::IsKeyPressed(ImGuiKey_Q, false))
+        pieceAction(all([](const garment::Panel& p) { return p.hidden3D; }) ? PieceAction::Show : PieceAction::Hide);
     if (ctrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) saveProjectFile();
     if (ctrl && ImGui::IsKeyPressed(ImGuiKey_N, false)) newGarment();
     if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_Space, false)) playing_ = !playing_;
@@ -1517,6 +1585,7 @@ void App::drawGrain3D()
     // Droit fil de la pièce sélectionnée, reporté sur le tissu en 3D.
     const int sel = editor_.selectedPanel;
     if (!clothValid_ || sel < 0 || sel >= static_cast<int>(garment_.panels.size())) return;
+    if (garment_.panels[static_cast<std::size_t>(sel)].hidden3D || !garment_.panels[static_cast<std::size_t>(sel)].active3D) return;
     const auto& pos = solver_.positions();
     const auto& uvs = garmentMesh_.mesh.uvs;
     glm::vec2 wa, wb;
@@ -1579,6 +1648,9 @@ void App::drawSeams3D()
         if (pr[0] >= pos.size() || pr[1] >= pos.size() || s < 0 || s >= static_cast<int>(garment_.seams.size())) continue;
         const bool enabled = garment_.seams[static_cast<std::size_t>(s)].enabled;
         if (glm::distance(pos[pr[0]], pos[pr[1]]) < 0.008f) continue;   // déjà cousue : rien à montrer
+        const auto& sm = garment_.seams[static_cast<std::size_t>(s)];
+        if (garment_.panels[static_cast<std::size_t>(sm.a.panel)].hidden3D || garment_.panels[static_cast<std::size_t>(sm.b.panel)].hidden3D)
+            continue;   // pièce masquée
         bool f0 = false, f1 = false;
         const glm::vec2 a = projectToScreen(pos[pr[0]], &f0), b = projectToScreen(pos[pr[1]], &f1);
         if (!f0 || !f1) continue;
@@ -1686,7 +1758,10 @@ void App::drawMenuBar()
         if (ImGui::MenuItem("Ouvrir un projet / importer un patron...", "Ctrl+I")) openPatternDialog();
         if (ImGui::MenuItem("Enregistrer le projet...", "Ctrl+S", false, !garment_.empty())) saveProjectFile();
         ImGui::Separator();
-        if (ImGui::MenuItem("Exporter le vêtement (OBJ)...", "Ctrl+E", false, clothValid_)) exportGarment();
+        if (ImGui::MenuItem("Exporter le vêtement (OBJ)...", "Ctrl+E", false, clothValid_)) {
+            exportOnly_.clear();
+            exportGarment();
+        }
         ImGui::Separator();
         if (ImGui::MenuItem("Quitter", "Alt+F4")) glfwSetWindowShouldClose(window_, GLFW_TRUE);
         ImGui::EndMenu();
@@ -1880,6 +1955,11 @@ void App::drawPatternPane()
         ImGui::SetCursorPos({0, h});
     }
     if (editor_.draw(garment_)) commitGarment();
+    if (editor_.menuRequested) {
+        editor_.menuRequested = false;
+        ImGui::OpenPopup("##menuPieces");
+    }
+    drawPieceMenu();
     if (editor_.backdrop.moved) {
         editor_.backdrop.moved = false;
         backdropOrigin_ = editor_.backdrop.min;
@@ -1889,6 +1969,439 @@ void App::drawPatternPane()
         setStatus("Image de fond retirée.", false);
     }
     ImGui::End();
+}
+
+// =============================================================================
+//  Menu clic droit des pièces (vue patron)
+// =============================================================================
+
+void App::commitState()
+{
+    undoStack_.push_back(committed_);
+    if (undoStack_.size() > 100) undoStack_.erase(undoStack_.begin());
+    redoStack_.clear();
+    committed_ = garment_;
+    apply3DState();
+}
+
+void App::apply3DState()
+{
+    if (!clothValid_) return;
+    const auto& pov = garmentMesh_.panelOfVertex;
+    const int np = static_cast<int>(garment_.panels.size());
+    auto panelOf = [&](uint32_t v) -> const garment::Panel* {
+        const int p = v < pov.size() ? pov[v] : -1;
+        return p >= 0 && p < np ? &garment_.panels[static_cast<std::size_t>(p)] : nullptr;
+    };
+    const auto n = static_cast<uint32_t>(std::min(pov.size(), solver_.positions().size()));
+    std::vector<float> stiffness(n, 1.0f);
+    bool anyStiff = false;
+    for (uint32_t i = 0; i < n; ++i) {
+        const garment::Panel* p = panelOf(i);
+        const bool frozen = p != nullptr && p->frozen;
+        if (solver_.isPinned(i) != frozen) solver_.setPinned(i, frozen);   // pièce figée : particules immobiles
+        stiffness[i] = p != nullptr ? std::max(1.0f, p->stiffness) : 1.0f;
+        anyStiff = anyStiff || stiffness[i] > 1.0f;
+    }
+    solver_.setStiffnessScale(anyStiff ? std::move(stiffness) : std::vector<float>{});
+    // Pièces masquées : simulées mais pas dessinées.
+    std::vector<uint32_t> shown;
+    const auto& idx = garmentMesh_.mesh.indices;
+    shown.reserve(idx.size());
+    for (std::size_t t = 0; t + 2 < idx.size(); t += 3) {
+        bool hidden = false;
+        for (int k = 0; k < 3; ++k) {
+            const garment::Panel* p = panelOf(idx[t + static_cast<std::size_t>(k)]);
+            hidden = hidden || (p != nullptr && p->hidden3D);
+        }
+        if (!hidden) shown.insert(shown.end(), {idx[t], idx[t + 1], idx[t + 2]});
+    }
+    renderer_.setClothTopology(shown, garmentMesh_.mesh.vertexCount());
+}
+
+void App::pasteClipboard(bool mirror, bool atMenuPoint)
+{
+    if (clipboard_.panels.empty()) {
+        setStatus("Rien à coller : copiez d'abord une pièce (Ctrl+C).", true);
+        return;
+    }
+    garment::Garment part = clipboard_;
+    for (auto& p : part.panels) p.linkGroup = 0;
+    glm::vec2 lo(1e9f), hi(-1e9f);
+    for (const auto& p : part.panels)
+        for (const auto& q : p.points) {
+            lo = glm::min(lo, q);
+            hi = glm::max(hi, q);
+        }
+    glm::vec2 offset(0.0f);
+    if (mirror) {
+        garment::mirrorGarment(part, hi.x + 0.015f);   // à droite de l'original
+        for (auto& p : part.panels) p.name += " (miroir)";
+        lo.x += hi.x - lo.x + 0.03f;
+        hi.x += hi.x - lo.x + 0.03f;
+    }
+    if (atMenuPoint) {
+        offset = editor_.menuWorld - (lo + hi) * 0.5f;
+    } else if (!mirror) {
+        ++pasteCount_;
+        offset = glm::vec2(0.03f, -0.03f) * static_cast<float>(pasteCount_);
+    }
+    const auto added = garment::appendPanels(garment_, part, offset);
+    editor_.select(added);
+    commitGarment();
+    setStatus(std::to_string(added.size()) + (mirror ? " pièce(s) collée(s) en miroir." : " pièce(s) collée(s)."), false);
+}
+
+void App::pieceAction(PieceAction a)
+{
+    using A = PieceAction;
+    const int n = static_cast<int>(garment_.panels.size());
+    std::vector<int> t;
+    for (const int p : editor_.targets())
+        if (p >= 0 && p < n) t.push_back(p);
+    const bool needsPieces = !(a == A::SelectAll || a == A::InvertSelection || a == A::Paste || a == A::PasteMirror || a == A::ShowAll);
+    if (needsPieces && t.empty()) return;
+    auto each = [&](auto&& f) {
+        for (const int p : t) f(garment_.panels[static_cast<std::size_t>(p)]);
+    };
+    auto plural = [&](const char* what) { return std::to_string(t.size()) + " pièce(s) " + what; };
+    switch (a) {
+    case A::SelectAll: {
+        std::vector<int> all;
+        for (int p = 0; p < n; ++p) all.push_back(p);
+        editor_.select(all);
+        break;
+    }
+    case A::InvertSelection: {
+        std::vector<int> inv;
+        for (int p = 0; p < n; ++p)
+            if (std::find(t.begin(), t.end(), p) == t.end()) inv.push_back(p);
+        editor_.select(inv);
+        break;
+    }
+    case A::SameColor: editor_.select(garment::panelsLike(garment_, t.back(), garment::SameProperty::Color)); break;
+    case A::SameZone: editor_.select(garment::panelsLike(garment_, t.back(), garment::SameProperty::Zone)); break;
+    case A::SameLink: editor_.select(garment::panelsLike(garment_, t.back(), garment::SameProperty::LinkGroup)); break;
+    case A::NewFabric: {
+        static const glm::vec3 palette[] = {{0.36f, 0.52f, 0.78f}, {0.80f, 0.42f, 0.38f}, {0.42f, 0.66f, 0.44f}, {0.86f, 0.70f, 0.34f},
+                                            {0.62f, 0.48f, 0.78f}, {0.34f, 0.68f, 0.70f}, {0.84f, 0.56f, 0.30f}, {0.56f, 0.56f, 0.60f},
+                                            {0.30f, 0.36f, 0.28f}, {0.72f, 0.36f, 0.56f}};
+        glm::vec3 pick = palette[0];
+        float best = -1.0f;
+        for (const auto& c : palette) {   // la couleur la plus éloignée de celles déjà utilisées
+            float d = 10.0f;
+            for (const auto& p : garment_.panels) d = std::min(d, glm::distance(p.color, c));
+            if (d > best) {
+                best = d;
+                pick = c;
+            }
+        }
+        each([&](garment::Panel& p) { p.color = pick; });
+        commitState();
+        updateClothColors();
+        setStatus(plural("passée(s) dans un nouveau tissu (nouvelle couleur)."), false);
+        break;
+    }
+    case A::Copy:
+        clipboard_ = garment::extractPanels(garment_, t);
+        pasteCount_ = 0;
+        setStatus(plural("copiée(s). Ctrl+V pour coller, Ctrl+R pour coller en miroir."), false);
+        break;
+    case A::Paste: pasteClipboard(false, menuAtPoint_); break;
+    case A::PasteMirror: pasteClipboard(true, menuAtPoint_); break;
+    case A::Delete: {
+        std::sort(t.rbegin(), t.rend());
+        for (const int p : t) garment_.removePanel(p);
+        editor_.clearSelection();
+        commitGarment();
+        setStatus(plural("supprimée(s). Ctrl+Z pour annuler."), false);
+        break;
+    }
+    case A::CloneMirrorSewn:
+    case A::CloneMirror:
+    case A::CloneInstance:
+    case A::CloneOver:
+    case A::CloneUnder: {
+        garment::CloneOptions o;
+        o.mirror = a == A::CloneMirrorSewn || a == A::CloneMirror;
+        o.sewing = a == A::CloneMirrorSewn;
+        o.link = true;
+        o.layer = a == A::CloneOver ? 1 : (a == A::CloneUnder ? -1 : 0);
+        const std::size_t seams = garment_.seams.size();
+        const auto clones = garment::clonePanels(garment_, t, o);
+        editor_.select(clones);
+        commitGarment();
+        std::string msg = std::to_string(clones.size()) + " clone(s) lié(s) créé(s)";
+        if (o.sewing) msg += ", " + std::to_string(garment_.seams.size() - seams) + " couture(s) ajoutée(s)";
+        setStatus(msg + ". Les modifications de forme sont reportées entre clones.", false);
+        break;
+    }
+    case A::Link: {
+        const int linked = garment::linkPanels(garment_, t);
+        if (linked == 0) {
+            setStatus("Impossible de lier : les pièces n'ont pas la même forme (au miroir ou au quart de tour près).", true);
+            break;
+        }
+        commitState();
+        setStatus(std::to_string(linked + 1) + " pièces liées : modifier l'une modifie les autres.", false);
+        break;
+    }
+    case A::Unlink:
+        garment::unlinkPanels(garment_, t);
+        commitState();
+        setStatus(plural("déliée(s)."), false);
+        break;
+    case A::Grow:
+    case A::Shrink:
+    case A::Offset: {
+        const float d = (a == A::Shrink ? -1.0f : 1.0f) * (a == A::Offset ? offsetCm_ : 1.0f) * 0.01f;
+        int done = 0;
+        for (const int p : t) done += garment::offsetPanel(garment_, p, d) ? 1 : 0;
+        if (done == 0) {
+            setStatus("Décalage impossible : la pièce est trop petite.", true);
+            break;
+        }
+        commitGarment();
+        char text[96];
+        std::snprintf(text, sizeof(text), "Contour décalé de %+.1f cm sur %d pièce(s).", static_cast<double>(d * 100.0f), done);
+        setStatus(text, false);
+        break;
+    }
+    case A::Simplify: {
+        int removed = 0;
+        for (const int p : t) removed += garment::simplifyPanel(garment_, p, 0.002f);
+        if (removed > 0) commitGarment();
+        setStatus(removed > 0 ? std::to_string(removed) + " point(s) inutile(s) retiré(s) (les points des coutures sont gardés)."
+                              : std::string("Aucun point à retirer."), false);
+        break;
+    }
+    case A::InnerShape: {
+        std::vector<int> made;
+        for (const int p : t)
+            if (const int k = garment::addInnerShape(garment_, p, 0.02f); k >= 0) made.push_back(k);
+        if (made.empty()) {
+            setStatus("Renfort impossible sur cette pièce (pièce posée, ou trop petite).", true);
+            break;
+        }
+        editor_.select(made);
+        commitGarment();
+        setStatus(std::to_string(made.size()) + " renfort(s) intérieur(s) cousu(s) tout le tour, 2 cm à l'intérieur du bord.", false);
+        break;
+    }
+    case A::Deactivate:
+    case A::DeactivateWithSeams: {
+        each([](garment::Panel& p) { p.active3D = false; });
+        if (a == A::DeactivateWithSeams)
+            for (auto& s : garment_.seams)
+                if (std::find(t.begin(), t.end(), s.a.panel) != t.end() || std::find(t.begin(), t.end(), s.b.panel) != t.end())
+                    s.enabled = false;
+        commitGarment();
+        setStatus(plural(a == A::DeactivateWithSeams ? "désactivée(s) en 3D avec leurs coutures." : "désactivée(s) en 3D."), false);
+        break;
+    }
+    case A::Activate:
+        each([](garment::Panel& p) { p.active3D = true; });
+        commitGarment();
+        setStatus(plural("réactivée(s) en 3D."), false);
+        break;
+    case A::Freeze:
+    case A::Unfreeze:
+        each([&](garment::Panel& p) { p.frozen = a == A::Freeze; });
+        commitState();
+        setStatus(plural(a == A::Freeze ? "figée(s) : elles ne bougent plus." : "libérée(s)."), false);
+        break;
+    case A::Strengthen:
+    case A::Soften:
+        each([&](garment::Panel& p) { p.stiffness = a == A::Strengthen ? 20.0f : 1.0f; });
+        commitState();
+        setStatus(plural(a == A::Strengthen ? "renforcée(s) : plus raides, moins extensibles." : "revenue(s) au tissu normal."), false);
+        break;
+    case A::Hide:
+    case A::Show:
+        each([&](garment::Panel& p) { p.hidden3D = a == A::Hide; });
+        commitState();
+        setStatus(plural(a == A::Hide ? "masquée(s) dans la vue 3D (toujours simulées)." : "affichée(s) en 3D."), false);
+        break;
+    case A::ShowAll:
+        for (auto& p : garment_.panels) p.hidden3D = false;
+        commitState();
+        break;
+    case A::Front:
+    case A::Forward:
+    case A::Backward:
+    case A::Back: {
+        const int move = a == A::Front ? 2 : a == A::Forward ? 1 : a == A::Backward ? -1 : -2;
+        editor_.select(garment::reorderPanels(garment_, t, move));
+        commitGarment();
+        break;
+    }
+    case A::RotateCW:
+    case A::RotateCCW:
+    case A::Rotate180:
+    case A::RotateFree: {
+        const float deg = a == A::RotateCW ? -90.0f : a == A::RotateCCW ? 90.0f : a == A::Rotate180 ? 180.0f : -rotateDeg_;
+        garment::rotatePanels(garment_, t, deg);
+        commitGarment();
+        break;
+    }
+    case A::FlipH:
+    case A::FlipV:
+        garment::flipPanels(garment_, t, a == A::FlipH);
+        commitGarment();
+        break;
+    case A::FrameSelection: editor_.frameParts(garment_, t); break;
+    case A::ExportSelection:
+        if (!clothValid_) {
+            setStatus("Rien à exporter : la vue 3D est vide.", true);
+            break;
+        }
+        exportOnly_ = t;
+        exportGarment();
+        break;
+    }
+}
+
+void App::drawPieceMenu()
+{
+    using A = PieceAction;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8 * uiScale_, 8 * uiScale_));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8 * uiScale_, 5 * uiScale_));
+    if (!ImGui::BeginPopup("##menuPieces")) {
+        ImGui::PopStyleVar(2);
+        return;
+    }
+    const int n = static_cast<int>(garment_.panels.size());
+    std::vector<int> t;
+    if (editor_.menuPanel >= 0)
+        for (const int p : editor_.targets())
+            if (p >= 0 && p < n) t.push_back(p);
+    const bool has = !t.empty();
+    const bool hasClip = !clipboard_.panels.empty();
+    auto all = [&](auto&& test) {
+        return has && std::all_of(t.begin(), t.end(), [&](int p) { return test(garment_.panels[static_cast<std::size_t>(p)]); });
+    };
+    auto any = [&](auto&& test) {
+        return std::any_of(t.begin(), t.end(), [&](int p) { return test(garment_.panels[static_cast<std::size_t>(p)]); });
+    };
+    A chosen{};
+    bool act = false;
+    auto item = [&](const char* label, const char* keys, A action, bool enabled = true) {
+        if (ImGui::MenuItem(label, keys, false, enabled)) {
+            chosen = action;
+            act = true;
+        }
+    };
+
+    // En-tête : la ou les pièces visées
+    if (has) {
+        const std::string title = t.size() == 1 ? garment_.panels[static_cast<std::size_t>(t[0])].name : std::to_string(t.size()) + " pièces";
+        ImGui::TextDisabled("%s", title.c_str());
+    } else {
+        ImGui::TextDisabled("Patron");
+    }
+    ImGui::Separator();
+    if (ImGui::BeginMenu("Sélection")) {
+        item("Tout sélectionner", "Ctrl+A", A::SelectAll, n > 0);
+        item("Inverser la sélection", "Ctrl+Maj+I", A::InvertSelection, n > 0);
+        ImGui::Separator();
+        item("Pièces de la même couleur", nullptr, A::SameColor, has);
+        item("Pièces de la même zone du corps", nullptr, A::SameZone, has);
+        item("Clones liés à cette pièce", nullptr, A::SameLink, has && any([](const garment::Panel& p) { return p.linkGroup > 0; }));
+        ImGui::EndMenu();
+    }
+    item("Nouvelle couleur de tissu", nullptr, A::NewFabric, has);
+    ImGui::Separator();
+    item("Copier", "Ctrl+C", A::Copy, has);
+    item("Coller ici", "Ctrl+V", A::Paste, hasClip);
+    item("Coller en miroir", "Ctrl+R", A::PasteMirror, hasClip);
+    item("Supprimer", "Suppr", A::Delete, has);
+    ImGui::Separator();
+    if (ImGui::BeginMenu("Cloner (édition liée)", has)) {
+        item("Clone symétrique cousu", "Ctrl+D", A::CloneMirrorSewn);
+        item("Clone symétrique", nullptr, A::CloneMirror);
+        item("Clone identique", nullptr, A::CloneInstance);
+        ImGui::Separator();
+        item("Clone par-dessus (couche)", "Ctrl+Maj+V", A::CloneOver);
+        item("Clone en dessous (couche)", "Ctrl+Maj+B", A::CloneUnder);
+        ImGui::EndMenu();
+    }
+    if (ImGui::BeginMenu("Édition liée", has)) {
+        item("Lier les pièces sélectionnées", nullptr, A::Link, t.size() >= 2);
+        item("Délier", nullptr, A::Unlink, any([](const garment::Panel& p) { return p.linkGroup > 0; }));
+        ImGui::EndMenu();
+    }
+    if (ImGui::BeginMenu("Contour", has)) {
+        item("Agrandir de 1 cm", nullptr, A::Grow);
+        item("Réduire de 1 cm", nullptr, A::Shrink);
+        ImGui::SetNextItemWidth(110 * uiScale_);
+        ImGui::DragFloat("##decalage", &offsetCm_, 0.05f, -20.0f, 20.0f, "%+.1f cm");
+        ImGui::SameLine();
+        if (ImGui::Button("Décaler")) {
+            chosen = A::Offset;
+            act = true;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::Separator();
+        item("Simplifier les points", nullptr, A::Simplify);
+        item("Renfort intérieur (2 cm du bord)", nullptr, A::InnerShape);
+        ImGui::EndMenu();
+    }
+    ImGui::Separator();
+    if (ImGui::BeginMenu("Pièce en 3D", has || n > 0)) {
+        const bool inactive = all([](const garment::Panel& p) { return !p.active3D; });
+        if (inactive) item("Réactiver en 3D", nullptr, A::Activate, has);
+        else {
+            item("Désactiver (pièce seule)", "Ctrl+J", A::Deactivate, has);
+            item("Désactiver (pièce et coutures)", nullptr, A::DeactivateWithSeams, has);
+        }
+        ImGui::Separator();
+        if (all([](const garment::Panel& p) { return p.frozen; })) item("Libérer", "Ctrl+K", A::Unfreeze);
+        else item("Figer", "Ctrl+K", A::Freeze, has);
+        if (all([](const garment::Panel& p) { return p.stiffness > 1.0f; })) item("Tissu normal", "Ctrl+H", A::Soften);
+        else item("Renforcer", "Ctrl+H", A::Strengthen, has);
+        ImGui::Separator();
+        if (all([](const garment::Panel& p) { return p.hidden3D; })) item("Afficher en 3D", "Maj+Q", A::Show);
+        else item("Masquer en 3D", "Maj+Q", A::Hide, has);
+        item("Tout afficher en 3D", nullptr, A::ShowAll,
+             std::any_of(garment_.panels.begin(), garment_.panels.end(), [](const garment::Panel& p) { return p.hidden3D; }));
+        ImGui::EndMenu();
+    }
+    if (ImGui::BeginMenu("Ordre", has)) {
+        item("Premier plan", nullptr, A::Front);
+        item("Avancer", nullptr, A::Forward);
+        item("Reculer", nullptr, A::Backward);
+        item("Arrière-plan", nullptr, A::Back);
+        ImGui::EndMenu();
+    }
+    if (ImGui::BeginMenu("Pivoter", has)) {
+        item("90° sens horaire", nullptr, A::RotateCW);
+        item("90° sens inverse", nullptr, A::RotateCCW);
+        item("180°", nullptr, A::Rotate180);
+        ImGui::SetNextItemWidth(110 * uiScale_);
+        ImGui::DragFloat("##angle", &rotateDeg_, 0.5f, -180.0f, 180.0f, "%.0f°");
+        ImGui::SameLine();
+        if (ImGui::Button("Pivoter")) {
+            chosen = A::RotateFree;
+            act = true;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndMenu();
+    }
+    if (ImGui::BeginMenu("Retourner", has)) {
+        item("Gauche - droite", nullptr, A::FlipH);
+        item("Haut - bas", nullptr, A::FlipV);
+        ImGui::EndMenu();
+    }
+    ImGui::Separator();
+    item("Cadrer la sélection", nullptr, A::FrameSelection, has);
+    item("Exporter la sélection en 3D (OBJ)...", nullptr, A::ExportSelection, has && clothValid_);
+    ImGui::EndPopup();
+    ImGui::PopStyleVar(2);
+    if (act) {
+        menuAtPoint_ = true;
+        pieceAction(chosen);
+        menuAtPoint_ = false;
+    }
 }
 
 void App::drawSplitter()
@@ -2257,6 +2770,7 @@ void App::inspectorCombine(int idx)
         const int target = combineTarget_;
         const std::string name = garment_.panels[static_cast<std::size_t>(target)].name;
         const glm::vec2 shapeCentre = garment::centroid(self);
+        const auto targetBefore = garment_.panels[static_cast<std::size_t>(target)].points;
         std::string error;
         if (garment::combinePanels(garment_, target, idx, action == 1, error)) {
             editor_.clearSelection();
@@ -2264,6 +2778,7 @@ void App::inspectorCombine(int idx)
             // Pièce symétrique : l'ajout ou la découpe est reproduit de l'autre côté.
             auto& tp = garment_.panels[static_cast<std::size_t>(editor_.selectedPanel)];
             if (tp.symmetric) garment::symmetrizePanel(garment_, editor_.selectedPanel, shapeCentre.x <= tp.symAxisX);
+            garment::propagateFrom(garment_, editor_.selectedPanel, targetBefore);   // clones liés
             combineFor_ = -1;
             commitGarment();
             setStatus(std::string(action == 1 ? "Forme découpée dans « " : "Forme ajoutée à « ") + name + " ». Ctrl+Z pour annuler.", false);
@@ -2679,6 +3194,13 @@ void App::drawAboutWindow()
             {"Ctrl+O / Ctrl+I", "Importer un avatar / un patron"},
             {"Ctrl+E", "Exporter le vêtement en OBJ"},
             {"Clic droit (3D)", "Saisir et tirer le tissu"},
+            {"Clic droit (patron)", "Menu de la pièce"},
+            {"Ctrl+C / V / R", "Copier / coller / coller en miroir"},
+            {"Ctrl+D", "Clone symétrique cousu (lié)"},
+            {"Ctrl+Maj+V / B", "Clone par-dessus / en dessous"},
+            {"Ctrl+Maj+I", "Inverser la sélection"},
+            {"Ctrl+J / K / H", "Désactiver / figer / renforcer en 3D"},
+            {"Maj+Q", "Masquer en 3D"},
         };
         if (ImGui::BeginTable("##raccourcis", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV)) {
             for (const auto& r : rows) {

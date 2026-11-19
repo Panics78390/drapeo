@@ -20,6 +20,7 @@
 #include "io/ProjectFile.h"
 #include "io/RasterImage.h"
 #include "garment/GarmentMesher.h"
+#include "garment/PatternOps.h"
 #include "geometry/Mannequin.h"
 #include "simulation/Materials.h"
 #include "simulation/SpatialHash.h"
@@ -593,6 +594,92 @@ int main()
         CHECK(garment::combinePanels(g, 0, 2, true, error));
         CHECK(garment::symmetrizePanel(g, 0, true));
         CHECK(std::abs(std::abs(garment::signedArea(g.panels[0].points)) - (0.6f - 2 * 0.01f)) < 1e-4f && has(g.panels[0].points, {0.9f, 0.2f}));
+    });
+
+    run("Menu des pièces : clones liés, miroir, ordre, décalage, simplification", [] {
+        auto near = [](glm::vec2 a, glm::vec2 b) { return glm::distance(a, b) < 1e-4f; };
+        garment::Garment g;
+        garment::Panel a;
+        a.name = "A";
+        a.points = {{0, 0}, {0.4f, 0}, {0.4f, 0.6f}, {0, 0.6f}};
+        garment::Panel b;
+        b.name = "B";
+        b.points = {{-1, 0}, {-0.6f, 0}, {-0.6f, 0.6f}, {-1, 0.6f}};
+        b.symmetric = true;
+        b.symAxisX = -0.8f;
+        g.panels = {a, b};
+        g.seams.push_back({{0, 3}, {1, 3}, false, 1, 1});   // bord gauche de A <-> bord gauche de B (symétrique)
+        // Clone symétrique lié, avec coutures : le clone est cousu sur le bord droit de B
+        garment::CloneOptions o;
+        o.mirror = o.link = o.sewing = true;
+        const auto clones = garment::clonePanels(g, {0}, o);
+        CHECK(clones.size() == 1 && g.panels.size() == 3);
+        CHECK(g.panels[0].linkGroup > 0 && g.panels[2].linkGroup == g.panels[0].linkGroup && g.panels[2].linkMirror);
+        CHECK(g.seams.size() == 2 && g.seams[1].a.panel == 2 && g.seams[1].a.edge == 3 && g.seams[1].b.panel == 1 && g.seams[1].b.edge == 1);
+        // Édition liée : un point tiré sur l'original bouge en miroir sur le clone
+        const garment::Garment before = g;
+        const glm::vec2 c2 = garment::centroid(g.panels[2].points);
+        g.panels[0].points[2] = {0.5f, 0.7f};
+        CHECK(garment::propagateLinkedEdits(before, g) == 1);
+        CHECK(near(g.panels[2].points[2], c2 + glm::vec2(-(0.5f - 0.2f), 0.7f - 0.3f)));
+        CHECK(g.seams.size() == 2);   // coutures sur des bords intacts gardées
+        // Un simple déplacement n'est pas reporté
+        const garment::Garment before2 = g;
+        for (auto& q : g.panels[0].points) q += glm::vec2(0.1f, 0.0f);
+        CHECK(garment::propagateLinkedEdits(before2, g) == 0);
+        // Pivoter de 90° puis l'édition liée suit encore
+        garment::rotatePanels(g, {0}, 90.0f);
+        const garment::Garment before3 = g;
+        const glm::vec2 old0 = g.panels[2].points[0];
+        g.panels[0].points[0] += glm::vec2(0.0f, -0.05f);   // repère pivoté : -y ici = +x dans la forme commune
+        CHECK(garment::propagateLinkedEdits(before3, g) == 1);
+        CHECK(glm::distance(g.panels[2].points[0], old0) > 0.04f);
+        // Retourner deux fois = rien
+        const auto pts = g.panels[1].points;
+        garment::flipPanels(g, {1}, false);
+        garment::flipPanels(g, {1}, false);
+        CHECK(near(g.panels[1].points[1], pts[1]));
+        // Ordre : premier plan, les coutures suivent
+        const auto idx = garment::reorderPanels(g, {0}, 2);
+        CHECK(idx.size() == 1 && idx[0] == 2 && g.panels[2].name == "A" && g.seams[0].a.panel == 2);
+        // Décaler le contour de 5 cm
+        garment::Garment sq;
+        sq.panels.push_back({});
+        sq.panels[0].points = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+        CHECK(garment::offsetPanel(sq, 0, 0.05f));
+        CHECK(std::abs(garment::signedArea(sq.panels[0].points) - 1.21f) < 1e-3f);
+        // Simplifier : les points alignés disparaissent, sauf sur une couture
+        sq.panels[0].points = {{0, 0}, {0.5f, 0.0005f}, {1, 0}, {1, 0.5f}, {1, 1}, {0, 1}};
+        sq.panels.push_back(sq.panels[0]);
+        sq.seams = {{{0, 2}, {1, 0}, false, 1, 1}};   // bord (1,0)-(1,0.5) cousu
+        CHECK(garment::simplifyPanel(sq, 0, 0.002f) == 1 && sq.panels[0].points.size() == 5 && sq.seams.size() == 1);
+        // Renfort intérieur posé tout le tour
+        const int inner = garment::addInnerShape(sq, 1, 0.02f);
+        CHECK(inner == 2 && sq.attachmentOf(2) >= 0);
+        // Lier une copie miroir faite à l'ancienne (points en sens inverse)
+        garment::Garment m;
+        m.panels.push_back({});
+        m.panels[0].points = {{0, 0}, {0.3f, 0}, {0.4f, 0.5f}, {0, 0.6f}};
+        m.addMirrorCopy(0, 0.05f);
+        CHECK(garment::linkPanels(m, {0, 1}) == 1 && m.panels[1].linkMirror);
+        // Sélection par propriété
+        CHECK(garment::panelsLike(m, 0, garment::SameProperty::LinkGroup).size() == 2);
+    });
+
+    run("Pièces désactivées, projet : état 3D conservé", [] {
+        garment::Garment g = garment::makeTankTop();
+        g.panels[1].active3D = false;
+        g.panels[0].frozen = true;
+        g.panels[0].linkGroup = 3;
+        garment::MeshingOptions mo;
+        garment::GarmentMesh gm;
+        std::string error;
+        CHECK(garment::buildGarmentMesh(g, mo, gm, error));
+        CHECK(std::none_of(gm.panelOfVertex.begin(), gm.panelOfVertex.end(), [](int p) { return p == 1; }));
+        CHECK(std::all_of(gm.seamOfPair.begin(), gm.seamOfPair.end(), [&](int s) { return s < static_cast<int>(g.seams.size()); }));
+        garment::Garment back;
+        CHECK(io::parseProject(io::writeProject(g, nullptr), back, error));
+        CHECK(back.panels.size() == 2 && !back.panels[1].active3D && back.panels[0].frozen && back.panels[0].linkGroup == 3);
     });
 
     std::printf("\n%d vérifications, %d échec(s)\n", g_checks, g_failures);

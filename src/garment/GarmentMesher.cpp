@@ -169,6 +169,35 @@ glm::vec2 patchCenter(const Panel& p)
 bool buildGarmentMesh(const Garment& garment, const MeshingOptions& options, GarmentMesh& out, std::string& error)
 {
     out = {};
+    // Pièces désactivées en 3D : on maille le vêtement sans elles, puis on remet les index d'origine.
+    if (std::any_of(garment.panels.begin(), garment.panels.end(), [](const Panel& p) { return !p.active3D; })) {
+        Garment active = garment;
+        std::vector<int> panelMap, seamMap;
+        for (int p = 0; p < static_cast<int>(garment.panels.size()); ++p)
+            if (garment.panels[static_cast<std::size_t>(p)].active3D) panelMap.push_back(p);
+        for (int s = 0; s < static_cast<int>(garment.seams.size()); ++s) {
+            const auto& sm = garment.seams[static_cast<std::size_t>(s)];
+            if (garment.panels[static_cast<std::size_t>(sm.a.panel)].active3D && garment.panels[static_cast<std::size_t>(sm.b.panel)].active3D)
+                seamMap.push_back(s);
+        }
+        for (int p = static_cast<int>(garment.panels.size()) - 1; p >= 0; --p)
+            if (!garment.panels[static_cast<std::size_t>(p)].active3D) active.removePanel(p);
+        for (auto& p : active.panels) p.active3D = true;
+        if (active.panels.empty()) {
+            error = "Toutes les pièces sont désactivées en 3D.";
+            return false;
+        }
+        if (!buildGarmentMesh(active, options, out, error)) return false;
+        for (auto& p : out.panelOfVertex)
+            if (p >= 0 && p < static_cast<int>(panelMap.size())) p = panelMap[static_cast<std::size_t>(p)];
+        for (auto& s : out.seamOfPair)
+            if (s >= 0 && s < static_cast<int>(seamMap.size())) s = seamMap[static_cast<std::size_t>(s)];
+        std::vector<std::vector<glm::vec2>> pts(garment.panels.size());
+        for (std::size_t k = 0; k < panelMap.size() && k < out.panelPoints2D.size(); ++k)
+            pts[static_cast<std::size_t>(panelMap[k])] = out.panelPoints2D[k];
+        out.panelPoints2D = std::move(pts);
+        return true;
+    }
     const float h = std::max(options.spacing, 0.005f);
 
     // --- 1. Nombre de segments par bord (égalisé sur les coutures) ----------

@@ -77,6 +77,22 @@ private:
     void newGarment();
     void exportGarment();
 
+    // --- Menu clic droit des pièces (vue patron) ------------------------------
+    enum class PieceAction {
+        SelectAll, InvertSelection, SameColor, SameZone, SameLink, NewFabric,
+        Copy, Paste, PasteMirror, Delete,
+        CloneMirrorSewn, CloneMirror, CloneInstance, CloneOver, CloneUnder, Link, Unlink,
+        Grow, Shrink, Offset, Simplify, InnerShape,
+        Deactivate, DeactivateWithSeams, Activate, Freeze, Unfreeze, Strengthen, Soften, Hide, Show, ShowAll,
+        Front, Forward, Backward, Back, RotateCW, RotateCCW, Rotate180, RotateFree, FlipH, FlipV,
+        FrameSelection, ExportSelection
+    };
+    void drawPieceMenu();
+    void pieceAction(PieceAction action);
+    void pasteClipboard(bool mirror, bool atMenuPoint);
+    void commitState();      // modification sans remaillage (état 3D des pièces)
+    void apply3DState();     // figer, renforcer, masquer : appliqué au solveur et à l'affichage
+
     // --- Avatar ---------------------------------------------------------------
     bool loadAvatar(const std::string& path);
     void loadDefaultMannequin();
@@ -142,6 +158,11 @@ private:
     float simTime_ = 0.0f;
 
     int sewFor_ = -1, sewBase_ = -1, sewKind_ = 0;
+    garment::Garment clipboard_;                  // pièces copiées (Ctrl+C)
+    int pasteCount_ = 0;
+    bool menuAtPoint_ = false;                    // collage au point du clic droit
+    float offsetCm_ = 1.0f, rotateDeg_ = 15.0f;   // réglages du menu des pièces
+    std::vector<int> exportOnly_;                 // export limité à ces pièces (vide = tout)
     float taperPercent_ = 10.0f;   // « Cintrer » de l'inspecteur
     bool taperWiden_ = false;
     int combineFor_ = -1, combineTarget_ = -1;   // « Ajouter ou découper » de l'inspecteur

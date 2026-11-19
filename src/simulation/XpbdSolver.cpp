@@ -30,6 +30,7 @@ void applyFriction(glm::vec3& x, const glm::vec3& prev, const glm::vec3& normal,
 void XpbdSolver::build(const geometry::ClothMesh& mesh, const FabricMaterial& material)
 {
     const std::size_t n = mesh.vertexCount();
+    stiffness_.clear();
     x_ = mesh.positions;
     rest_ = mesh.positions;
     prev_ = mesh.positions;
@@ -218,7 +219,10 @@ void XpbdSolver::solveDistance(const std::vector<DistanceConstraint>& constraint
         if (len < kEpsilon) continue;
         const glm::vec3 grad = d / len;               // ∇_b C ; ∇_a C = -grad
         const float C = len - c.rest;
-        const float dLambda = -C / (w + alphaTilde);
+        float a = alphaTilde;
+        if (!stiffness_.empty() && c.a < stiffness_.size() && c.b < stiffness_.size())
+            a /= std::max(1e-3f, std::min(stiffness_[c.a], stiffness_[c.b]));
+        const float dLambda = -C / (w + a);
         x_[c.a] -= grad * (dLambda * wa);
         x_[c.b] += grad * (dLambda * wb);
     }

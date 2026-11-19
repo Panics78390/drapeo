@@ -40,6 +40,16 @@ struct Panel {
     float grainDeg = 90.0f;   // droit fil dans le patron (degrés, 90 = vertical)
     bool symmetric = false;   // édition symétrique autour d'un axe vertical
     float symAxisX = 0.0f;    // abscisse de l'axe de symétrie (m)
+    // État de la pièce dans la simulation 3D (menu clic droit de la vue patron)
+    bool active3D = true;     // false : la pièce n'est pas simulée (absente de la vue 3D)
+    bool hidden3D = false;    // simulée mais pas affichée
+    bool frozen = false;      // figée : ses particules ne bougent plus
+    float stiffness = 1.0f;   // > 1 : pièce renforcée (moins extensible, plus raide)
+    // Clones liés : les pièces d'un même groupe (> 0) reçoivent les modifications de forme
+    // des autres. Repère de la pièce par rapport à la forme commune : rotation puis miroir.
+    int linkGroup = 0;
+    bool linkMirror = false;
+    float linkAngle = 0.0f;   // degrés
 };
 
 /// Un bord = le segment entre points[edge] et points[(edge + 1) % n] de la pièce.

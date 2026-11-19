@@ -128,6 +128,37 @@ void PatternEditor::frameAll(const garment::Garment& g)
     zoom_ = std::clamp(zoom_, 40.0f, 4000.0f);
 }
 
+void PatternEditor::frameParts(const garment::Garment& g, const std::vector<int>& ids)
+{
+    glm::vec2 lo(1e9f), hi(-1e9f);
+    for (const int p : ids)
+        if (p >= 0 && p < static_cast<int>(g.panels.size()))
+            for (const auto& q : g.panels[static_cast<std::size_t>(p)].points) {
+                lo = glm::min(lo, q);
+                hi = glm::max(hi, q);
+            }
+    if (lo.x > hi.x) return;
+    center_ = (lo + hi) * 0.5f;
+    const glm::vec2 ext = glm::max(hi - lo, glm::vec2(0.05f));
+    zoom_ = std::clamp(std::min((canvasSize_.x - 80.0f) / ext.x, (canvasSize_.y - 80.0f) / ext.y), 40.0f, 6000.0f);
+}
+
+std::vector<int> PatternEditor::targets() const
+{
+    if (!selection.empty()) return selection;
+    if (selectedPanel >= 0) return {selectedPanel};
+    return {};
+}
+
+void PatternEditor::select(const std::vector<int>& ids)
+{
+    selection.clear();
+    selectedPoint = selectedSeam = -1;
+    selectedPanel = ids.empty() ? -1 : ids.back();
+    if (ids.size() > 1) selection = ids;
+    backdrop.selected = false;
+}
+
 int PatternEditor::pickPoint(const garment::Garment& g, int panel, ImVec2 mouse) const
 {
     const auto& pts = g.panels[static_cast<std::size_t>(panel)].points;
@@ -272,6 +303,7 @@ bool PatternEditor::draw(garment::Garment& g)
     ImGui::InvisibleButton("##canvas", canvasSize_,
                            ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
     const bool hovered = ImGui::IsItemHovered();
+    hovered_ = hovered;
     const ImVec2 mouse = io.MousePos;
     const glm::vec2 mw = toWorld(mouse);
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -326,6 +358,8 @@ bool PatternEditor::draw(garment::Garment& g)
         }
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle) || ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
             drag_ = Drag::Pan;
+            rightPan_ = ImGui::IsMouseClicked(ImGuiMouseButton_Right);
+            rightPress_ = mouse;
         }
 
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
@@ -464,7 +498,18 @@ bool PatternEditor::draw(garment::Garment& g)
     // Glisser
     if (drag_ == Drag::Pan) {
         center_ -= glm::vec2(io.MouseDelta.x, -io.MouseDelta.y) / zoom_;
-        if (!ImGui::IsMouseDown(ImGuiMouseButton_Middle) && !ImGui::IsMouseDown(ImGuiMouseButton_Right)) drag_ = Drag::None;
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Middle) && !ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
+            drag_ = Drag::None;
+            // Clic droit sans glisser : menu de la pièce sous la souris
+            if (rightPan_ && std::hypot(mouse.x - rightPress_.x, mouse.y - rightPress_.y) < 5.0f && tool == Tool::Select) {
+                const int hit = pickPanel(g, toWorld(rightPress_));
+                if (hit >= 0 && !isSelected(hit)) select({hit});
+                menuPanel = hit;
+                menuWorld = toWorld(rightPress_);
+                menuRequested = true;
+            }
+            rightPan_ = false;
+        }
     } else if (drag_ == Drag::Panel && selection.size() > 1) {
         if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
             const glm::vec2 want = mw - dragStart_;
@@ -647,6 +692,28 @@ bool PatternEditor::draw(garment::Garment& g)
         const ImVec2 sc = toScreen(c);
         const ImVec2 ts = ImGui::CalcTextSize(panel.name.c_str());
         dl->AddText({sc.x - ts.x * 0.5f, sc.y - ts.y * 0.5f}, kInk, panel.name.c_str());
+        // État 3D et clones liés : petite étiquette sous le nom
+        std::string tags;
+        auto tag = [&](const char* t) { tags += tags.empty() ? t : std::string(" · ") + t; };
+        if (!panel.active3D) tag("désactivée en 3D");
+        if (panel.hidden3D) tag("masquée");
+        if (panel.frozen) tag("figée");
+        if (panel.stiffness > 1.0f) tag("renforcée");
+        if (panel.linkGroup > 0) tag(("liée " + std::to_string(panel.linkGroup)).c_str());
+        if (!tags.empty()) {
+            const ImVec2 tt = ImGui::CalcTextSize(tags.c_str());
+            dl->AddText({sc.x - tt.x * 0.5f, sc.y + ts.y * 0.5f + 2.0f}, IM_COL32(150, 200, 255, 220), tags.c_str());
+        }
+        if (!panel.active3D) {   // pièce désactivée : contour en tirets gris par-dessus
+            for (std::size_t e = 0; e < scr.size(); ++e) {
+                const ImVec2 a = scr[e], b = scr[(e + 1) % scr.size()];
+                const float len = std::hypot(b.x - a.x, b.y - a.y);
+                const int dashes = std::max(1, static_cast<int>(len / 7.0f));
+                for (int k = 0; k < dashes; k += 2)
+                    dl->AddLine({a.x + (b.x - a.x) * k / dashes, a.y + (b.y - a.y) * k / dashes},
+                                {a.x + (b.x - a.x) * (k + 1) / dashes, a.y + (b.y - a.y) * (k + 1) / dashes}, IM_COL32(20, 20, 24, 220), 2.0f);
+            }
+        }
     }
 
     // --- Axe de symétrie des pièces symétriques -------------------------------------

@@ -84,6 +84,8 @@ public:
 
     // --- Épingles et manipulation ------------------------------------------
     void setPinned(uint32_t particle, bool pinned);
+    /// Raideur par particule (1 = matériau normal, > 1 = renforcé). Vide = partout 1.
+    void setStiffnessScale(std::vector<float> scale) { stiffness_ = std::move(scale); }
     [[nodiscard]] bool isPinned(uint32_t particle) const { return pinned_[particle] != 0; }
     /// Saisie à la souris : la particule devient cinématique et suit `target`.
     void grab(uint32_t particle);
@@ -119,6 +121,7 @@ private:
     std::vector<glm::vec3> x_, prev_, v_, rest_;
     std::vector<float>     invMass_;
     std::vector<uint8_t>   pinned_;
+    std::vector<float>     stiffness_;      // raideur par particule (pièces renforcées)
     std::vector<float>     massPerParticle_;
     std::vector<glm::vec3> contactNormal_;
     std::vector<glm::vec3> velocityDelta_;  // tampons de smoothVelocities
