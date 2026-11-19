@@ -8,7 +8,7 @@ Logiciel original de création de vêtements 3D : on dessine des **patrons 2D**,
 
 ## Télécharger (Windows)
 
-Prenez `drapeo.exe` dans la page [Releases](../../releases) : un seul fichier, aucune installation. Windows SmartScreen peut afficher « Windows a protégé votre ordinateur » (l'exe n'est pas signé) : **Informations complémentaires → Exécuter quand même**.
+[**Télécharger drapeo.exe**](https://github.com/Panics78390/drapeo/raw/main/windows/drapeo.exe) : un seul fichier, aucune installation. Windows SmartScreen peut afficher « Windows a protégé votre ordinateur » (l'exe n'est pas signé) : **Informations complémentaires → Exécuter quand même**.
 
 ## Fonctions
 
