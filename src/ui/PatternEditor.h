@@ -38,6 +38,8 @@ public:
     int selectedPanel = -1;
     int selectedPoint = -1;
     int selectedSeam = -1;
+    std::vector<int> selectedPoints;   // points (de selectedPanel) choisis ensemble : arête, Maj+clic, Ctrl+rectangle
+    int selectedEdge = -1;             // arête choisie (ses deux points sont dans selectedPoints)
     std::vector<int> selection;   // sélection multiple (rectangle, Maj+clic) ; contient selectedPanel
     Backdrop backdrop;
     bool magnet = true;           // aimant : points et pièces s'accrochent aux points et bords voisins
@@ -63,7 +65,14 @@ public:
     bool menuRequested = false;
     int menuPanel = -1;            // pièce sous la souris (-1 : clic dans le vide)
     glm::vec2 menuWorld{0.0f};     // point cliqué (m)
-    void clearSelection() { selectedPanel = selectedPoint = selectedSeam = -1; selection.clear(); pendingSeam_ = {}; drawing_.clear(); }
+    void clearSelection()
+    {
+        selectedPanel = selectedPoint = selectedSeam = selectedEdge = -1;
+        selection.clear();
+        selectedPoints.clear();
+        pendingSeam_ = {};
+        drawing_.clear();
+    }
 
     [[nodiscard]] std::string hint() const;
     [[nodiscard]] static ImU32 seamColor(int index);
@@ -106,7 +115,7 @@ private:
     bool needsFrame_ = true;
 
     // États d'interaction
-    enum class Drag { None, Point, Panel, Pan, Rect, Backdrop, Marquee } drag_ = Drag::None;
+    enum class Drag { None, Point, Points, Panel, Pan, Rect, Backdrop, Marquee } drag_ = Drag::None;
     glm::vec2 dragStart_{0.0f};
     glm::vec2 dragLast_{0.0f};
     std::vector<glm::vec2> drawing_;  // polygone en cours
@@ -114,6 +123,10 @@ private:
     garment::EdgeRef hoverEdge_;
     bool shift_ = false;
     bool hovered_ = false;
+    bool pointMarquee_ = false;   // Ctrl + rectangle : sélection de points
+    [[nodiscard]] bool pointChosen(int panel, int point) const;
+    /// Déplace les points choisis de `d` (aimant / guides compris par l'appelant).
+    void movePoints(garment::Garment& g, glm::vec2 d);
     bool rightPan_ = false;       // glisser commencé au clic droit
     ImVec2 rightPress_{0, 0};
 };

@@ -59,10 +59,16 @@ static glm::vec3 wrapPoint(const Panel& panel, const PanelFrame& f, glm::vec2 p,
     const float R = std::max(panel.placement.radius * options.bodyScale, 0.03f);
     const float u = p.x - f.cx;           // abscisse le long du tour du corps
     const float v = p.y - f.minY;         // hauteur dans la pièce
-    const float a = glm::radians(panel.placement.angleDeg) + u / R;
+    const bool flat = panel.placement.flat;
+    const float a0 = glm::radians(panel.placement.angleDeg);
+    const float a = flat ? a0 : a0 + u / R;
+    // Pièce plate : posée sur le plan tangent au cylindre (devant lui partout), sans courbure.
+    const float along = flat ? u : 0.0f;
     if (panel.placement.zone == BodyZone::Torso) {
         const glm::vec3 tc = glm::vec3(options.axes.torsoCenter.x, 0.0f, options.axes.torsoCenter.z) * options.bodyScale;
-        return options.bodyCenter + tc + glm::vec3(R * std::sin(a), panel.placement.height * options.bodyScale + v, R * std::cos(a));
+        return options.bodyCenter + tc +
+               glm::vec3(R * std::sin(a) + along * std::cos(a), panel.placement.height * options.bodyScale + v,
+                         R * std::cos(a) - along * std::sin(a));
     }
 
     // Membre : cylindre le long de l'axe incliné ; le bas de la pièce est posé à
@@ -77,7 +83,8 @@ static glm::vec3 wrapPoint(const Panel& panel, const PanelFrame& f, glm::vec2 p,
     const glm::vec3 base = bottom + (top - bottom) * t;
     const glm::vec3 front = glm::normalize(glm::vec3(0, 0, 1) - up * up.z);
     const glm::vec3 side = glm::cross(up, front);
-    return options.bodyCenter + base + up * v + R * (std::sin(a) * side + std::cos(a) * front);
+    return options.bodyCenter + base + up * v + R * (std::sin(a) * side + std::cos(a) * front) +
+           along * (std::cos(a) * side - std::sin(a) * front);
 }
 
 glm::vec3 panelPivot(const Panel& panel, const MeshingOptions& options)

@@ -2690,6 +2690,20 @@ void App::inspectorPanel()
     }
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         ImGui::SetTooltip("Partie du corps autour de laquelle la pièce est enroulée\n(manches sur les bras, jambes de pantalon sur les jambes).");
+    label("Forme");
+    {
+        int flat = panel.placement.flat ? 1 : 0;
+        const float hw = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+        if (ImGui::RadioButton("Plate", flat == 1)) flat = 1;
+        ImGui::SameLine(0, hw * 0.4f);
+        if (ImGui::RadioButton("Enroulée", flat == 0)) flat = 0;
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+            ImGui::SetTooltip("Plate : la pièce est posée à plat devant le corps.\nEnroulée : elle est courbée autour du corps (ou du membre).");
+        if ((flat == 1) != panel.placement.flat) {
+            panel.placement.flat = flat == 1;
+            edited = true;
+        }
+    }
     label("Angle");
     ImGui::SliderFloat("##angle", &panel.placement.angleDeg, -180.0f, 180.0f, "%.0f°");
     edited |= ImGui::IsItemDeactivatedAfterEdit();

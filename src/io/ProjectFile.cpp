@@ -26,6 +26,7 @@ std::string writeProject(const garment::Garment& g, const ProjectAvatar* avatar)
         if (p.symmetric) o << "symetrie " << p.symAxisX << "\n";
         if (!p.active3D || p.hidden3D || p.frozen || p.stiffness != 1.0f)   // etat3d <active> <masquée> <figée> <raideur>
             o << "etat3d " << (p.active3D ? 1 : 0) << ' ' << (p.hidden3D ? 1 : 0) << ' ' << (p.frozen ? 1 : 0) << ' ' << p.stiffness << "\n";
+        if (p.placement.flat) o << "plate\n";
         if (p.linkGroup > 0) o << "lien " << p.linkGroup << ' ' << (p.linkMirror ? 1 : 0) << ' ' << p.linkAngle << "\n";
         const auto& pl = p.placement;
         o << "placement " << static_cast<int>(pl.zone) << ' ' << pl.angleDeg << ' ' << pl.height << ' ' << pl.radius << ' '
@@ -81,6 +82,8 @@ bool parseProject(const std::string& text, garment::Garment& out, std::string& e
             pn.hidden3D = hidden != 0;
             pn.frozen = frozen != 0;
             if (!(pn.stiffness > 0.0f)) pn.stiffness = 1.0f;
+        } else if (key == "plate" && !g.panels.empty()) {
+            g.panels.back().placement.flat = true;
         } else if (key == "lien" && !g.panels.empty()) {
             auto& pn = g.panels.back();
             int mirror = 0;

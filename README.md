@@ -115,6 +115,15 @@ Glissez la poche dans le patron pour la déplacer sur sa base ; déplacer la bas
 - La pièce choisie dans la vue patron est mise en évidence dans la vue 3D (teinte et contour jaunes). Un clic sur une
   pièce en 3D la choisit aussi dans le patron ; la glisser la fait tourner autour du corps (la simulation se met en pause).
 
+## Points et arêtes
+
+- Clic sur une arête : elle est choisie (trait orange et longueur) et se glisse d'un bloc, avec les guides d'alignement.
+- Maj + clic sur des points : plusieurs points choisis, à glisser ensemble ou à supprimer (Suppr).
+- Ctrl + rectangle dans le vide : choisit les points de la pièce compris dans le rectangle.
+- Flèches : déplacent les points choisis, le point ou les pièces de 1 mm (Maj : 1 cm).
+- Les pièces tracées (polygone, rectangle) sont posées **à plat** devant le corps ; l'inspecteur (Placement › Forme)
+  permet de choisir « Plate » ou « Enroulée » autour du corps.
+
 ## Menu clic droit des pièces (vue patron)
 
 Un clic droit sans glisser sur une pièce (ou sur une sélection) ouvre son menu ; clic droit glissé = déplacer la vue.

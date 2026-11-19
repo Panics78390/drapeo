@@ -26,6 +26,7 @@ struct Placement {
     float height = 1.0f;     // hauteur du bas de la pièce (m), pour un avatar de 1,75 m
     float radius = 0.24f;    // rayon du cylindre d'enroulement (m)
     BodyZone zone = BodyZone::Torso;   // buste, ou cylindre incliné le long d'un bras / d'une jambe
+    bool flat = false;       // pièce posée à plat (plan tangent au cylindre) au lieu d'être enroulée
     // Réglage libre en 3D (gizmo) appliqué après l'enroulement : rotation autour
     // du centre de la pièce, puis translation (m).
     glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};

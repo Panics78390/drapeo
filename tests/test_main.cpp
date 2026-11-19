@@ -682,6 +682,23 @@ int main()
         CHECK(back.panels.size() == 2 && !back.panels[1].active3D && back.panels[0].frozen && back.panels[0].linkGroup == 3);
     });
 
+    run("Nouvelle pièce plate : posée sur un plan, devant le corps", [] {
+        garment::Panel p;
+        p.points = {{0, 0}, {0.4f, 0}, {0.4f, 0.5f}, {0, 0.5f}};
+        p.placement.flat = true;
+        garment::MeshingOptions mo;
+        const glm::vec3 a = garment::placePoint(p, {0, 0}, mo), b = garment::placePoint(p, {0.4f, 0}, mo),
+                        c = garment::placePoint(p, {0.2f, 0.25f}, mo), d = garment::placePoint(p, {0.4f, 0.5f}, mo);
+        const glm::vec3 n = glm::normalize(glm::cross(b - a, d - a));
+        CHECK(std::abs(glm::dot(c - a, n)) < 1e-5f);                 // tous les points dans un même plan
+        CHECK(std::abs(glm::distance(a, b) - 0.4f) < 1e-4f);         // largeur conservée (pas enroulée)
+        garment::Garment g;
+        g.panels = {p};
+        garment::Garment back;
+        std::string error;
+        CHECK(io::parseProject(io::writeProject(g, nullptr), back, error) && back.panels[0].placement.flat);
+    });
+
     std::printf("\n%d vérifications, %d échec(s)\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

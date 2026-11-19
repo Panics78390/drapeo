@@ -50,6 +50,7 @@ std::vector<glm::vec2> PatternEditor::alignTargets(const garment::Garment& g, co
             hi = glm::max(hi, pts[static_cast<std::size_t>(i)]);
             // Point en cours de glisser (et son miroir) : pas une référence.
             if (drag_ == Drag::Point && p == selectedPanel && (i == selectedPoint || i == symPartner_)) continue;
+            if (drag_ == Drag::Points && pointChosen(p, i)) continue;
             out.push_back(pts[static_cast<std::size_t>(i)]);
         }
         if (!pts.empty()) out.push_back((lo + hi) * 0.5f);   // centre de la pièce
@@ -250,6 +251,19 @@ void PatternEditor::frameParts(const garment::Garment& g, const std::vector<int>
     zoom_ = std::clamp(std::min((canvasSize_.x - 80.0f) / ext.x, (canvasSize_.y - 80.0f) / ext.y), 40.0f, 6000.0f);
 }
 
+bool PatternEditor::pointChosen(int panel, int point) const
+{
+    return panel == selectedPanel && std::find(selectedPoints.begin(), selectedPoints.end(), point) != selectedPoints.end();
+}
+
+void PatternEditor::movePoints(garment::Garment& g, glm::vec2 d)
+{
+    if (selectedPanel < 0 || selectedPanel >= static_cast<int>(g.panels.size())) return;
+    auto& pts = g.panels[static_cast<std::size_t>(selectedPanel)].points;
+    for (const int i : selectedPoints)
+        if (i >= 0 && i < static_cast<int>(pts.size())) pts[static_cast<std::size_t>(i)] += d;
+}
+
 std::vector<int> PatternEditor::targets() const
 {
     if (!selection.empty()) return selection;
@@ -260,7 +274,8 @@ std::vector<int> PatternEditor::targets() const
 void PatternEditor::select(const std::vector<int>& ids)
 {
     selection.clear();
-    selectedPoint = selectedSeam = -1;
+    selectedPoint = selectedSeam = selectedEdge = -1;
+    selectedPoints.clear();
     selectedPanel = ids.empty() ? -1 : ids.back();
     if (ids.size() > 1) selection = ids;
     backdrop.selected = false;
@@ -371,7 +386,11 @@ std::string PatternEditor::hint() const
             return std::to_string(selection.size()) + " pièces sélectionnées : glisser pour les déplacer, Suppr pour les supprimer, Échap pour désélectionner.";
         if (backdrop.selected)
             return "Image de fond sélectionnée : glisser pour la déplacer, Suppr pour la retirer.";
-        return "Sélection : glisser une pièce ou un point, ou tracer un rectangle dans le vide (Maj : ajouter). Double-clic sur un bord : ajouter un point. Suppr : supprimer.";
+        if (selectedEdge >= 0)
+            return "Arête choisie : glisser pour la déplacer, flèches pour l'ajuster (Maj : 1 cm). Double-clic : ajouter un point.";
+        if (selectedPoints.size() > 1)
+            return std::to_string(selectedPoints.size()) + " points choisis : glisser l'un d'eux pour les déplacer, flèches (Maj : 1 cm), Suppr pour les supprimer.";
+        return "Sélection : glisser une pièce, un point ou une arête. Maj+clic : plusieurs points. Ctrl+rectangle : points. Rectangle dans le vide : pièces. Double-clic sur un bord : ajouter un point.";
     case Tool::Polygon:
         return drawing_.empty() ? "Polygone : cliquez pour poser le premier point."
                                 : "Polygone : cliquez pour ajouter des points, cliquez sur le premier (ou Entrée) pour fermer. Échap : annuler.";
@@ -390,7 +409,15 @@ bool PatternEditor::draw(garment::Garment& g)
     ImGuiIO& io = ImGui::GetIO();
     shift_ = io.KeyShift;
     g_ = &g;
-    if (drag_ != Drag::Point && drag_ != Drag::Panel && drag_ != Drag::Rect && tool != Tool::Polygon) guides_.clear();
+    if (drag_ != Drag::Point && drag_ != Drag::Points && drag_ != Drag::Panel && drag_ != Drag::Rect && tool != Tool::Polygon) guides_.clear();
+    // Points choisis périmés (autre pièce, points supprimés) : on les oublie.
+    if (!selectedPoints.empty() && (selectedPanel < 0 || selectedPanel >= static_cast<int>(g.panels.size()) ||
+                                    std::any_of(selectedPoints.begin(), selectedPoints.end(), [&](int i) {
+                                        return i < 0 || i >= static_cast<int>(g.panels[static_cast<std::size_t>(selectedPanel)].points.size());
+                                    }))) {
+        selectedPoints.clear();
+        selectedEdge = -1;
+    }
     // Sélection multiple périmée (pièce choisie ailleurs, pièces supprimées) : on l'oublie.
     if (!selection.empty()) {
         const bool stale = std::find(selection.begin(), selection.end(), selectedPanel) == selection.end() ||
@@ -488,9 +515,29 @@ bool PatternEditor::draw(garment::Garment& g)
                 const bool shift = io.KeyShift;
                 const bool onBackdrop = backdrop.texture != 0 && backdrop.visible && mw.x >= backdrop.min.x &&
                                         mw.x <= backdrop.max.x && mw.y >= backdrop.min.y && mw.y <= backdrop.max.y;
-                if (hitPoint >= 0 && !shift) {
+                if (hitPoint >= 0 && shift) {
+                    // Maj + clic sur un point : l'ajoute ou le retire des points choisis.
+                    if (hitPanel != selectedPanel) selectedPoints.clear();
+                    if (selectedPoints.empty() && selectedPoint >= 0 && hitPanel == selectedPanel) selectedPoints.push_back(selectedPoint);
+                    selectedPanel = hitPanel;
+                    selection.clear();
+                    selectedEdge = -1;
+                    if (const auto it = std::find(selectedPoints.begin(), selectedPoints.end(), hitPoint); it != selectedPoints.end())
+                        selectedPoints.erase(it);
+                    else
+                        selectedPoints.push_back(hitPoint);
+                    selectedPoint = selectedPoints.empty() ? -1 : selectedPoints.back();
+                    backdrop.selected = false;
+                } else if (hitPoint >= 0 && selectedPoints.size() > 1 && pointChosen(hitPanel, hitPoint)) {
+                    // Clic sur un des points choisis : on les déplace tous.
+                    drag_ = Drag::Points;
+                    dragApplied_ = glm::vec2(0.0f);
+                    snapExcludePanel_ = hitPanel;
+                } else if (hitPoint >= 0) {
                     selectedPanel = hitPanel;
                     selectedPoint = hitPoint;
+                    selectedPoints.clear();
+                    selectedEdge = -1;
                     selection.clear();
                     drag_ = Drag::Point;
                     snapExcludePanel_ = hitPanel;
@@ -498,8 +545,25 @@ bool PatternEditor::draw(garment::Garment& g)
                     symPartner_ = garment::symmetricPartner(hp, hitPoint);
                     symOnAxis_ = hp.symmetric && std::abs(hp.points[static_cast<std::size_t>(hitPoint)].x - hp.symAxisX) < 0.0015f;
                     backdrop.selected = false;
+                } else if (hoverEdge_.panel >= 0 && !(shift && selectedPanel != hoverEdge_.panel && selectedPoints.empty() && false)) {
+                    // Clic sur une arête : on la choisit (ses deux points) et on peut la glisser.
+                    const int ep = hoverEdge_.panel, e = hoverEdge_.edge;
+                    const int n = static_cast<int>(g.panels[static_cast<std::size_t>(ep)].points.size());
+                    if (!shift || ep != selectedPanel) selectedPoints.clear();
+                    selectedPanel = ep;
+                    selection.clear();
+                    for (const int i : {e, (e + 1) % n})
+                        if (!pointChosen(ep, i)) selectedPoints.push_back(i);
+                    selectedEdge = shift ? -1 : e;
+                    selectedPoint = -1;
+                    backdrop.selected = false;
+                    drag_ = Drag::Points;
+                    dragApplied_ = glm::vec2(0.0f);
+                    snapExcludePanel_ = ep;
                 } else if (const int p = pickPanel(g, mw); p >= 0) {
                     selectedPoint = -1;
+                    selectedPoints.clear();
+                    selectedEdge = -1;
                     backdrop.selected = false;
                     if (shift) {
                         // Maj + clic : ajoute ou retire la pièce de la sélection.
@@ -521,10 +585,15 @@ bool PatternEditor::draw(garment::Garment& g)
                 } else if (backdrop.selected && onBackdrop && !shift) {
                     drag_ = Drag::Backdrop;   // image déjà sélectionnée : on la glisse
                 } else {
-                    // Clic dans le vide : rectangle de sélection.
-                    if (!shift) {
+                    // Clic dans le vide : rectangle de sélection (Ctrl : points de la pièce choisie).
+                    pointMarquee_ = io.KeyCtrl;
+                    if (!shift && !pointMarquee_) {
                         selectedPanel = selectedPoint = -1;
                         selection.clear();
+                    }
+                    if (!shift) {
+                        selectedPoints.clear();
+                        selectedEdge = -1;
                     }
                     backdrop.selected = false;
                     drag_ = Drag::Marquee;
@@ -538,6 +607,7 @@ bool PatternEditor::draw(garment::Garment& g)
                     if (std::hypot(first.x - mouse.x, first.y - mouse.y) < kPickRadius * 1.5f) {
                         garment::Panel panel;
                         panel.name = "Pièce " + std::to_string(g.panels.size() + 1);
+                        panel.placement.flat = true;   // nouvelle pièce : posée à plat
                         panel.points = drawing_;
                         g.panels.push_back(panel);
                         selectedPanel = static_cast<int>(g.panels.size()) - 1;
@@ -639,6 +709,29 @@ bool PatternEditor::draw(garment::Garment& g)
                 backdrop.selected = backdrop.texture != 0 && backdrop.visible && mw.x >= backdrop.min.x &&
                                     mw.x <= backdrop.max.x && mw.y >= backdrop.min.y && mw.y <= backdrop.max.y &&
                                     selection.empty() && selectedPanel < 0;
+            } else if (pointMarquee_) {
+                // Ctrl + rectangle : points de la pièce choisie (ou de la pièce qui en a le plus dans le rectangle).
+                const glm::vec2 lo = glm::min(dragStart_, dragLast_), hi = glm::max(dragStart_, dragLast_);
+                const auto inside = [&](glm::vec2 q) { return q.x >= lo.x && q.x <= hi.x && q.y >= lo.y && q.y <= hi.y; };
+                int panel = selectedPanel, best = 0;
+                for (int p = 0; p < static_cast<int>(g.panels.size()); ++p) {
+                    int count = 0;
+                    for (const auto& q : g.panels[static_cast<std::size_t>(p)].points) count += inside(q) ? 1 : 0;
+                    if (count > best && (p == selectedPanel || selectedPanel < 0 || panel < 0 || best == 0)) {
+                        best = count;
+                        panel = p;
+                    }
+                }
+                if (panel >= 0 && panel < static_cast<int>(g.panels.size())) {
+                    if (panel != selectedPanel) selectedPoints.clear();
+                    selectedPanel = panel;
+                    selection.clear();
+                    const auto& pts = g.panels[static_cast<std::size_t>(panel)].points;
+                    for (int i = 0; i < static_cast<int>(pts.size()); ++i)
+                        if (inside(pts[static_cast<std::size_t>(i)]) && !pointChosen(panel, i)) selectedPoints.push_back(i);
+                    selectedPoint = selectedPoints.size() == 1 ? selectedPoints[0] : -1;
+                    selectedEdge = -1;
+                }
             } else {
                 const glm::vec2 lo = glm::min(dragStart_, dragLast_), hi = glm::max(dragStart_, dragLast_);
                 const auto inside = [&](glm::vec2 q) { return q.x >= lo.x && q.x <= hi.x && q.y >= lo.y && q.y <= hi.y; };
@@ -653,6 +746,32 @@ bool PatternEditor::draw(garment::Garment& g)
                 if (selection.size() == 1) selection.clear();
                 selectedPoint = -1;
             }
+            drag_ = Drag::None;
+        }
+    } else if (drag_ == Drag::Points) {
+        if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            if (selectedPanel >= 0 && selectedPanel < static_cast<int>(g.panels.size())) {
+                // Points / arête glissés : guides d'alignement avec les autres points.
+                const auto& pts = g.panels[static_cast<std::size_t>(selectedPanel)].points;
+                const glm::vec2 want = mw - dragStart_;
+                glm::vec2 total = want;
+                if (shift_) total = glm::round(want * 100.0f) / 100.0f;   // pas de 1 cm
+                else if (magnet) {
+                    std::vector<glm::vec2> moving;
+                    for (const int i : selectedPoints)
+                        if (i >= 0 && i < static_cast<int>(pts.size())) moving.push_back(pts[static_cast<std::size_t>(i)] - dragApplied_ + want);
+                    total = want + alignTo(moving, alignTargets(g, {}));
+                }
+                movePoints(g, total - dragApplied_);
+                dragApplied_ = total;
+            }
+            dragLast_ = mw;
+        } else {
+            if (glm::length(dragApplied_) > 1e-6f) {
+                committed = true;
+                if (!selectedPoints.empty()) applySymmetry(g, selectedPanel, selectedPoints.front());
+            }
+            snapExcludePanel_ = -1;
             drag_ = Drag::None;
         }
     } else if (drag_ == Drag::Point || drag_ == Drag::Panel) {
@@ -706,6 +825,7 @@ bool PatternEditor::draw(garment::Garment& g)
             if (hi.x - lo.x > 0.02f && hi.y - lo.y > 0.02f) {
                 garment::Panel panel;
                 panel.name = "Pièce " + std::to_string(g.panels.size() + 1);
+                panel.placement.flat = true;   // nouvelle pièce : posée à plat
                 panel.points = {lo, {hi.x, lo.y}, hi, {lo.x, hi.y}};
                 g.panels.push_back(panel);
                 selectedPanel = static_cast<int>(g.panels.size()) - 1;
@@ -727,6 +847,8 @@ bool PatternEditor::draw(garment::Garment& g)
         }
         if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
             if (drawing_.empty() && pendingSeam_.panel < 0) {
+                selectedPoints.clear();
+                selectedEdge = -1;
                 selection.clear();
                 selectedPanel = selectedPoint = -1;
             }
@@ -736,6 +858,7 @@ bool PatternEditor::draw(garment::Garment& g)
         if (ImGui::IsKeyPressed(ImGuiKey_Enter) && drawing_.size() >= 3) {
             garment::Panel panel;
             panel.name = "Pièce " + std::to_string(g.panels.size() + 1);
+            panel.placement.flat = true;   // nouvelle pièce : posée à plat
             panel.points = drawing_;
             g.panels.push_back(panel);
             selectedPanel = static_cast<int>(g.panels.size()) - 1;
@@ -754,6 +877,15 @@ bool PatternEditor::draw(garment::Garment& g)
                 selection.clear();
                 selectedPanel = selectedPoint = -1;
                 committed = true;
+            } else if (selectedPoints.size() > 1 && selectedPanel >= 0 && selectedSeam < 0 &&
+                       g.panels[static_cast<std::size_t>(selectedPanel)].points.size() >= selectedPoints.size() + 3) {
+                // Points choisis : supprimés ensemble (il reste au moins 3 points).
+                std::vector<int> doomed = selectedPoints;
+                std::sort(doomed.rbegin(), doomed.rend());
+                for (const int i : doomed) g.removePoint(selectedPanel, i);
+                selectedPoints.clear();
+                selectedEdge = selectedPoint = -1;
+                committed = true;
             } else if (selectedSeam >= 0 && selectedSeam < static_cast<int>(g.seams.size())) {
                 g.seams.erase(g.seams.begin() + selectedSeam);
                 selectedSeam = -1;
@@ -769,6 +901,27 @@ bool PatternEditor::draw(garment::Garment& g)
             } else if (selectedPanel >= 0 && selectedPanel < static_cast<int>(g.panels.size())) {
                 g.removePanel(selectedPanel);
                 selectedPanel = selectedPoint = -1;
+                committed = true;
+            }
+        }
+        // Flèches : déplacer les points choisis, le point ou les pièces de 1 mm (Maj : 1 cm).
+        if (tool == Tool::Select && drag_ == Drag::None) {
+            glm::vec2 step(0.0f);
+            if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) step.x -= 1.0f;
+            if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) step.x += 1.0f;
+            if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) step.y += 1.0f;
+            if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) step.y -= 1.0f;
+            if (step != glm::vec2(0.0f) && selectedPanel >= 0 && selectedPanel < static_cast<int>(g.panels.size())) {
+                step *= io.KeyShift ? 0.01f : 0.001f;
+                if (!selectedPoints.empty()) {
+                    movePoints(g, step);
+                    applySymmetry(g, selectedPanel, selectedPoints.front());
+                } else if (selectedPoint >= 0 && selectedPoint < static_cast<int>(g.panels[static_cast<std::size_t>(selectedPanel)].points.size())) {
+                    g.panels[static_cast<std::size_t>(selectedPanel)].points[static_cast<std::size_t>(selectedPoint)] += step;
+                    applySymmetry(g, selectedPanel, selectedPoint);
+                } else {
+                    movePanels(g, selection.empty() ? std::vector<int>{selectedPanel} : selection, step);
+                }
                 committed = true;
             }
         }
@@ -933,12 +1086,22 @@ bool PatternEditor::draw(garment::Garment& g)
         const bool sel = static_cast<int>(p) == selectedPanel;
         for (std::size_t i = 0; i < g.panels[p].points.size(); ++i) {
             const ImVec2 s = toScreen(g.panels[p].points[i]);
-            const bool ptSel = sel && static_cast<int>(i) == selectedPoint;
+            const bool ptSel = sel && (static_cast<int>(i) == selectedPoint || pointChosen(static_cast<int>(p), static_cast<int>(i)));
             const float r = ptSel ? 5.0f : 3.5f;
             dl->AddRectFilled({s.x - r, s.y - r}, {s.x + r, s.y + r}, ptSel ? kAccent : (sel ? kInk : kMuted));
         }
     }
 
+    // Arête choisie : trait épais + longueur
+    if (selectedEdge >= 0 && selectedPanel >= 0 && selectedPanel < static_cast<int>(g.panels.size()) &&
+        selectedEdge < static_cast<int>(g.panels[static_cast<std::size_t>(selectedPanel)].points.size())) {
+        const garment::EdgeRef e{selectedPanel, selectedEdge};
+        const ImVec2 a = toScreen(g.edgeStart(e)), b = toScreen(g.edgeEnd(e));
+        dl->AddLine(a, b, kAccent, 4.0f);
+        char text[32];
+        std::snprintf(text, sizeof(text), "%.1f cm", static_cast<double>(g.edgeLength(e) * 100.0f));
+        dl->AddText({(a.x + b.x) * 0.5f + 8, (a.y + b.y) * 0.5f - 18}, kAccent, text);
+    }
     // Bord survolé : surbrillance + cote
     if (hoverEdge_.panel >= 0 && drag_ == Drag::None) {
         const ImVec2 a = toScreen(g.edgeStart(hoverEdge_)), b = toScreen(g.edgeEnd(hoverEdge_));
@@ -979,7 +1142,7 @@ bool PatternEditor::draw(garment::Garment& g)
         }
     }
     // Guides d'alignement (magenta) et distance entre les points alignés
-    if (!guides_.empty() && (drag_ == Drag::Point || drag_ == Drag::Panel || drag_ == Drag::Rect || tool == Tool::Polygon)) {
+    if (!guides_.empty() && (drag_ == Drag::Point || drag_ == Drag::Points || drag_ == Drag::Panel || drag_ == Drag::Rect || tool == Tool::Polygon)) {
         const ImU32 kGuide = IM_COL32(225, 70, 225, 230);
         for (const auto& gd : guides_) {
             const ImVec2 a = toScreen(gd.a), b = toScreen(gd.b);
