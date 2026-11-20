@@ -65,7 +65,21 @@ private:
     void shutdown();
 
     // --- Vêtement -------------------------------------------------------------
-    void resetCloth();                     // remaille le patron et relance la couture
+    /// Drapé à reprendre après un remaillage : coordonnées de patron des sommets et positions 3D.
+    struct ClothSnapshot {
+        std::vector<glm::vec2> uvs;
+        std::vector<glm::vec3> positions;
+        std::vector<int> panelOfVertex;
+    };
+    /// Reprend le drapé `prev` pièce par pièce (même maillage de la pièce, éventuellement déplacée dans le
+    /// patron). Avec `prevGarment`, une pièce dont le placement 3D a changé repart de son placement.
+    void applyDrape(const ClothSnapshot& prev, const garment::Garment* prevGarment);
+    /// Remaille le patron et relance la couture. keepDrape : les sommets dont la pièce n'a pas changé gardent
+    /// leur position drapée (ou celles de `restore`, état enregistré pour Annuler / Rétablir).
+    void resetCloth(bool keepDrape = false, const ClothSnapshot* restore = nullptr);
+    ClothSnapshot clothSnapshot() const;
+    void pushUndo(const ClothSnapshot* cloth = nullptr);   // état validé + drapé (courant par défaut) dans la pile d'annulation
+    ClothSnapshot dragStartCloth_;         // drapé au début d'un déplacement 3D (rendu par Annuler)
     void setGarment(garment::Garment g);   // nouveau patron (modèle, fichier...)
     void commitGarment();                  // une modification est terminée
     void undo();
@@ -160,6 +174,8 @@ private:
     garment::Garment garment_;
     garment::Garment committed_;                 // dernier état validé (pour annuler)
     std::vector<garment::Garment> undoStack_, redoStack_;
+    std::vector<ClothSnapshot> undoCloth_, redoCloth_;   // drapé correspondant à chaque état
+    garment::Garment meshGarment_;               // patron du maillage courant (placements comparés au remaillage)
     garment::GarmentMesh garmentMesh_;
     bool clothValid_ = false;
     ui::PatternEditor editor_;

@@ -637,8 +637,68 @@ void App::dragPanelTo(const glm::vec3& o, const glm::vec3& d)
     dragMoved_ = true;
 }
 
-void App::resetCloth()
+App::ClothSnapshot App::clothSnapshot() const
 {
+    ClothSnapshot s;
+    if (!clothValid_) return s;
+    s.uvs = garmentMesh_.mesh.uvs;
+    s.positions = solver_.positions();
+    s.panelOfVertex = garmentMesh_.panelOfVertex;
+    return s;
+}
+
+void App::applyDrape(const ClothSnapshot& prev, const garment::Garment* prevGarment)
+{
+    const std::size_t np = garment_.panels.size();
+    if (prev.positions.size() != prev.uvs.size() || prev.panelOfVertex.size() != prev.uvs.size()) return;
+    std::vector<std::vector<uint32_t>> oldOf(np), newOf(np);
+    for (std::size_t i = 0; i < prev.panelOfVertex.size(); ++i)
+        if (const int p = prev.panelOfVertex[i]; p >= 0 && static_cast<std::size_t>(p) < np) oldOf[static_cast<std::size_t>(p)].push_back(static_cast<uint32_t>(i));
+    for (std::size_t i = 0; i < garmentMesh_.panelOfVertex.size(); ++i)
+        if (const int p = garmentMesh_.panelOfVertex[i]; p >= 0 && static_cast<std::size_t>(p) < np) newOf[static_cast<std::size_t>(p)].push_back(static_cast<uint32_t>(i));
+    auto samePlacement = [&](int p) {
+        if (prevGarment == nullptr) return true;
+        if (p < 0 || p >= static_cast<int>(np) || p >= static_cast<int>(prevGarment->panels.size())) return false;
+        const auto& a = garment_.panels[static_cast<std::size_t>(p)].placement;
+        const auto& b = prevGarment->panels[static_cast<std::size_t>(p)].placement;
+        return a.zone == b.zone && a.angleDeg == b.angleDeg && a.height == b.height && a.radius == b.radius && a.offset == b.offset &&
+               a.rotation == b.rotation && a.flat == b.flat;
+    };
+    const auto& uvs = garmentMesh_.mesh.uvs;
+    for (std::size_t p = 0; p < np; ++p) {
+        const auto& o = oldOf[p];
+        const auto& n = newOf[p];
+        if (o.empty() || o.size() != n.size()) continue;   // pièce remaillée : elle repart de son placement
+        bool keep = samePlacement(static_cast<int>(p));
+        if (const int ai = garment_.attachmentOf(static_cast<int>(p)); keep && ai >= 0) keep = samePlacement(garment_.attachments[static_cast<std::size_t>(ai)].base);
+        if (!keep) continue;
+        const glm::vec2 shift = uvs[n[0]] - prev.uvs[o[0]];   // pièce simplement déplacée dans le patron
+        bool same = true;
+        for (std::size_t k = 0; k < o.size() && same; ++k) same = glm::length(uvs[n[k]] - prev.uvs[o[k]] - shift) < 1e-5f;
+        if (!same) continue;
+        for (std::size_t k = 0; k < o.size(); ++k) solver_.setParticlePosition(n[k], prev.positions[o[k]]);
+    }
+}
+
+void App::pushUndo(const ClothSnapshot* cloth)
+{
+    undoStack_.push_back(committed_);
+    undoCloth_.push_back(cloth != nullptr ? *cloth : clothSnapshot());
+    if (undoStack_.size() > 100) {
+        undoStack_.erase(undoStack_.begin());
+        undoCloth_.erase(undoCloth_.begin());
+    }
+}
+
+void App::resetCloth(bool keepDrape, const ClothSnapshot* restore)
+{
+    // Drapé courant, pour le reprendre si le maillage ne change pas (même patron, autre placement...).
+    ClothSnapshot previous;
+    garment::Garment previousGarment;
+    if (keepDrape && restore == nullptr && clothValid_) {
+        previous = clothSnapshot();
+        previousGarment = meshGarment_;
+    }
     clothValid_ = false;
     simTime_ = 0.0f;
     solver_.release();
@@ -666,6 +726,9 @@ void App::resetCloth()
     solver_.setSeams(garmentMesh_.seamPairs, sewingSeconds_);
     renderer_.setClothTopology(garmentMesh_.mesh.indices, garmentMesh_.mesh.vertexCount());
     clothValid_ = true;
+    meshGarment_ = garment_;
+    if (restore != nullptr) applyDrape(*restore, nullptr);   // Annuler / Rétablir : le drapé de cet état revient
+    else if (keepDrape) applyDrape(previous, &previousGarment);
     updateClothPattern();
     highlighted_ = {-2};   // recalcul de la mise en évidence au prochain affichage
     selectionEdges_.clear();
@@ -676,8 +739,9 @@ void App::resetCloth()
 void App::setGarment(garment::Garment g)
 {
     if (!garment_.empty()) {
-        undoStack_.push_back(committed_);
+        pushUndo();
         redoStack_.clear();
+        redoCloth_.clear();
     }
     garment_ = std::move(g);
     committed_ = garment_;
@@ -692,33 +756,39 @@ void App::commitGarment()
     // Clones liés : la nouvelle forme d'une pièce est reportée sur ses clones.
     if (const int linked = garment::propagateLinkedEdits(committed_, garment_); linked > 0)
         setStatus("Modification reportée sur " + std::to_string(linked) + " clone(s) lié(s).", false);
-    undoStack_.push_back(committed_);
-    if (undoStack_.size() > 100) undoStack_.erase(undoStack_.begin());
+    pushUndo();
     redoStack_.clear();
+    redoCloth_.clear();
     committed_ = garment_;
-    resetCloth();   // la pause est respectée : on ne relance pas la simulation
+    resetCloth(true);   // la pause est respectée ; les pièces inchangées gardent leur drapé
 }
 
 void App::undo()
 {
     if (undoStack_.empty()) return;
     redoStack_.push_back(garment_);
+    redoCloth_.push_back(clothSnapshot());
     garment_ = undoStack_.back();
     undoStack_.pop_back();
+    const ClothSnapshot snap = undoCloth_.empty() ? ClothSnapshot{} : undoCloth_.back();
+    if (!undoCloth_.empty()) undoCloth_.pop_back();
     committed_ = garment_;
     editor_.clearSelection();
-    resetCloth();
+    resetCloth(true, &snap);   // seul le dernier changement est annulé : le drapé d'avant revient
 }
 
 void App::redo()
 {
     if (redoStack_.empty()) return;
     undoStack_.push_back(garment_);
+    undoCloth_.push_back(clothSnapshot());
     garment_ = redoStack_.back();
     redoStack_.pop_back();
+    const ClothSnapshot snap = redoCloth_.empty() ? ClothSnapshot{} : redoCloth_.back();
+    if (!redoCloth_.empty()) redoCloth_.pop_back();
     committed_ = garment_;
     editor_.clearSelection();
-    resetCloth();
+    resetCloth(true, &snap);
 }
 
 void App::updateClothColors()
@@ -966,8 +1036,9 @@ void App::addImportedPanels(const std::vector<std::vector<glm::vec2>>& outlines,
         setStatus("Aucune pièce exploitable dans ce fichier.", true);
         return;
     }
-    undoStack_.push_back(committed_);
+    pushUndo();
     redoStack_.clear();
+    redoCloth_.clear();
     garment_ = std::move(g);
     committed_ = garment_;
     editor_.clearSelection();
@@ -1127,14 +1198,14 @@ void App::checkWatchedProject()
     // Modifié par un autre programme (assistant via le serveur MCP) : on recharge le vêtement,
     // l'avatar et l'état de la simulation (lecture / pause) ne changent pas.
     const bool countChanged = g.panels.size() != garment_.panels.size();
-    undoStack_.push_back(committed_);
-    if (undoStack_.size() > 100) undoStack_.erase(undoStack_.begin());
+    pushUndo();
     redoStack_.clear();
+    redoCloth_.clear();
     garment_ = std::move(g);
     committed_ = garment_;
     editor_.clearSelection();
     if (countChanged) editor_.frameAll(garment_);
-    resetCloth();
+    resetCloth(true);
     char text[200];
     std::snprintf(text, sizeof(text), "Projet modifié par un autre programme, rechargé : %zu pièce(s), %zu couture(s). (Ctrl+Z pour annuler)",
                   garment_.panels.size(), garment_.seams.size());
@@ -1457,6 +1528,7 @@ void App::handleViewportInput()
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && gizmoVisible() && gizmoHover_ != Gizmo::None) {
             gizmoActive_ = gizmoHover_;
             gizmoMoved_ = false;
+            dragStartCloth_ = clothSnapshot();
             gizmoLastHit_ = glm::vec3(0.0f);
             const glm::vec2 c = projectToScreen(gizmoCenter_);
             gizmoLastAngle_ = std::atan2(mouse.y - c.y, mouse.x - c.x);
@@ -1482,6 +1554,7 @@ void App::handleViewportInput()
                 // Une pièce posée (poche...) suit sa base : on déplace la base.
                 if (const int ai = garment_.attachmentOf(dragPanel_); ai >= 0) dragPanel_ = garment_.attachments[static_cast<std::size_t>(ai)].base;
                 dragMoved_ = false;
+                dragStartCloth_ = clothSnapshot();
                 dragLastHit_ = solver_.positions()[static_cast<std::size_t>(p)];
                 editor_.select({dragPanel_});
                 pickedPanel = true;
@@ -1649,10 +1722,12 @@ void App::refreshPanelParticles(int panel)
 void App::finishPanelEdit(int panel)
 {
     if (panel < 0 || panel >= static_cast<int>(garment_.panels.size())) return;
-    undoStack_.push_back(committed_);
+    pushUndo(dragStartCloth_.positions.empty() ? nullptr : &dragStartCloth_);
+    dragStartCloth_ = {};
     redoStack_.clear();
+    redoCloth_.clear();
     committed_ = garment_;
-    resetCloth();
+    resetCloth(true);   // les autres pièces gardent leur drapé
     playing_ = false;   // on reste en pause pour continuer la mise en place
     const auto& pl = garment_.panels[static_cast<std::size_t>(panel)].placement;
     char text[220];
@@ -1983,8 +2058,9 @@ void App::drawSeams3D()
 void App::toggleSeam(int seam)
 {
     if (seam < 0 || seam >= static_cast<int>(garment_.seams.size())) return;
-    undoStack_.push_back(committed_);
+    pushUndo();
     redoStack_.clear();
+    redoCloth_.clear();
     auto& sm = garment_.seams[static_cast<std::size_t>(seam)];
     sm.enabled = !sm.enabled;
     committed_ = garment_;
@@ -2366,9 +2442,9 @@ void App::drawPatternPane()
 
 void App::commitState()
 {
-    undoStack_.push_back(committed_);
-    if (undoStack_.size() > 100) undoStack_.erase(undoStack_.begin());
+    pushUndo();
     redoStack_.clear();
+    redoCloth_.clear();
     committed_ = garment_;
     apply3DState();
 }
@@ -3119,14 +3195,14 @@ void App::inspectorPrints(int idx)
         ImGui::PopID();
     }
     if (removeAt >= 0) {
-        undoStack_.push_back(committed_);
+        pushUndo();
         panel.prints.erase(panel.prints.begin() + removeAt);
         committed_ = garment_;
         updateClothPattern();
     }
     if (changed) updateClothPattern();
     if (done) {
-        undoStack_.push_back(committed_);
+        pushUndo();
         committed_ = garment_;
     }
     if (ImGui::Button("Ajouter une image...", ImVec2(-1, 0))) {
@@ -3137,7 +3213,7 @@ void App::inspectorPrints(int idx)
             garment::Print pr;
             pr.image = path;
             pr.width = 0.10f;
-            undoStack_.push_back(committed_);
+            pushUndo();
             garment_.panels[static_cast<std::size_t>(idx)].prints.push_back(pr);
             committed_ = garment_;
             printMissing_.erase(path);
@@ -3176,7 +3252,7 @@ void App::inspectorPanel()
         for (int k = 0; k < garment::kFabricFinishCount; ++k) finishes[k] = garment::fabricFinishName(static_cast<garment::FabricFinish>(k));
         ImGui::SetNextItemWidth(-1);
         if (ImGui::Combo("##aspect", &finish, finishes, garment::kFabricFinishCount)) {
-            undoStack_.push_back(committed_);
+            pushUndo();
             panel.finish = static_cast<garment::FabricFinish>(finish);
             committed_ = garment_;
             updateClothPattern();
