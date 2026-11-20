@@ -1224,8 +1224,53 @@ int main()
             CHECK(g3.panels.size() == before + 4);
             CHECK(g3.panels[0].folds.size() == 1 && std::abs(g3.panels[0].folds[0].angleDeg + 120.0f) < 1e-3f);
         }
+        {   // calque d'une pièce par l'outil
+            call("modifier_piece", R"({"piece":0,"calque":"Veste"})");
+            garment::Garment g4;
+            CHECK(io::loadProject(path, g4, error));
+            CHECK(g4.groups.size() == 1 && g4.groups[0].name == "Veste" && g4.panels[0].group == 0);
+            call("modifier_piece", R"({"piece":0,"calque":""})");
+            CHECK(io::loadProject(path, g4, error) && g4.panels[0].group == -1);
+        }
         std::filesystem::remove(path);
         std::filesystem::remove(obj);
+    });
+
+    run("Calques : objets séparés, masqués (non simulés), verrouillés, enregistrés", [] {
+        garment::Garment g;
+        for (int k = 0; k < 3; ++k) {
+            g.panels.push_back({});
+            g.panels[static_cast<std::size_t>(k)].name = "P" + std::to_string(k);
+            g.panels[static_cast<std::size_t>(k)].points = {{0.5f * k, 0}, {0.5f * k + 0.3f, 0}, {0.5f * k + 0.3f, 0.3f}, {0.5f * k, 0.3f}};
+            g.panels[static_cast<std::size_t>(k)].placement.flat = true;
+        }
+        g.groups = {{"Veste", true, false}, {"Pantalon", true, false}};
+        g.panels[0].group = 0;
+        g.panels[1].group = 1;
+        CHECK(g.panelVisible(0) && g.panelEditable(1) && g.panelVisible(2) && g.groupOf(2) == nullptr);
+        garment::GarmentMesh all, part;
+        std::string error;
+        CHECK(garment::buildGarmentMesh(g, {}, all, error));
+        g.groups[1].visible = false;   // pantalon masqué : pas simulé
+        CHECK(!g.panelVisible(1) && !g.panelEditable(1));
+        CHECK(garment::buildGarmentMesh(g, {}, part, error));
+        bool noHidden = true;
+        for (const int p : part.panelOfVertex) noHidden = noHidden && p != 1;
+        CHECK(noHidden && part.mesh.vertexCount() < all.mesh.vertexCount());
+        g.groups[0].locked = true;
+        CHECK(g.panelVisible(0) && !g.panelEditable(0));
+        // Enregistrement
+        garment::Garment back;
+        CHECK(io::parseProject(io::writeProject(g), back, error));
+        CHECK(back.groups.size() == 2 && back.groups[0].name == "Veste" && back.groups[0].locked && !back.groups[1].visible &&
+              back.panels[0].group == 0 && back.panels[1].group == 1 && back.panels[2].group == -1);
+        // Ordre et suppression : les pièces restent dans leur calque
+        g.moveGroup(0, 1);
+        CHECK(g.groups[0].name == "Pantalon" && g.panels[0].group == 1 && g.panels[1].group == 0);
+        g.removeGroup(0);
+        CHECK(g.groups.size() == 1 && g.panels[1].group == -1 && g.panels[0].group == 0);
+        // Index invalide dans un fichier : pièce sans calque
+        CHECK(io::parseProject("drapeo-projet 1\npiece\ngroupe 7\npoints 3\n0 0\n0.1 0\n0 0.1\n", back, error) && back.panels[0].group == -1);
     });
 
     std::printf("\n%d vérifications, %d échec(s)\n", g_checks, g_failures);

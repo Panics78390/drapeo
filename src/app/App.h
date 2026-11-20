@@ -154,6 +154,15 @@ private:
     void inspectorAvatar();
     void inspectorSimulation();
     void inspectorDisplay();
+    // Calques (colonne de droite, au-dessus des propriétés) : objets séparés (veste, pantalon...).
+    void drawLayers();
+    void moveSelectionToGroup(int group);   // -1 : sans calque
+    int activeGroup_ = -1;                  // calque choisi dans le panneau
+    int renameGroup_ = -1;                  // calque en cours de renommage
+    char renameBuf_[96] = {};
+    float layersHeight_ = -1.0f;            // hauteur du panneau des calques (px)
+    std::vector<char> groupOpen_;           // calques dépliés (liste des pièces)
+    bool looseOpen_ = false;                // « Sans calque » déplié
     void setStatus(const std::string& text, bool error);
     void openAvatarDialog();
     void openPatternDialog();

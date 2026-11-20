@@ -850,8 +850,8 @@ void App::updateClothPattern()
     for (std::size_t k = 0; k < garment_.panels.size(); ++k) {
         const auto& p = garment_.panels[k];
         if (p.prints.empty() && !showStitches_ && p.finish != garment::FabricFinish::Zipper) continue;
-        std::snprintf(buf, sizeof(buf), "#%zu:%.3f,%.3f,%.3f,%d,%d:", k, p.color.r, p.color.g, p.color.b, garment_.attachmentOf(static_cast<int>(k)),
-                      static_cast<int>(p.finish));
+        std::snprintf(buf, sizeof(buf), "#%zu:%.3f,%.3f,%.3f,%d,%d,%d:", k, p.color.r, p.color.g, p.color.b, garment_.attachmentOf(static_cast<int>(k)),
+                      static_cast<int>(p.finish), garment_.panelVisible(static_cast<int>(k)) ? 1 : 0);
         sig += buf;
         for (const auto& q : p.points) {
             std::snprintf(buf, sizeof(buf), "%.5f,%.5f;", q.x, q.y);
@@ -2606,7 +2606,8 @@ void App::pieceAction(PieceAction a)
     switch (a) {
     case A::SelectAll: {
         std::vector<int> all;
-        for (int p = 0; p < n; ++p) all.push_back(p);
+        for (int p = 0; p < n; ++p)
+            if (garment_.panelEditable(p)) all.push_back(p);   // calques masqués ou verrouillés exclus
         editor_.select(all);
         break;
     }
@@ -3041,6 +3042,24 @@ void App::drawPieceMenu()
         ImGui::EndMenu();
     }
     item("Nouvelle couleur de tissu", nullptr, A::NewFabric, has);
+    if (ImGui::BeginMenu("Calque", has)) {
+        int target = -2;
+        for (int k = 0; k < static_cast<int>(garment_.groups.size()); ++k) {
+            const bool inIt = all([&](const garment::Panel& p) { return p.group == k; });
+            if (ImGui::MenuItem((garment_.groups[static_cast<std::size_t>(k)].name + "##c" + std::to_string(k)).c_str(), nullptr, inIt)) target = k;
+        }
+        if (!garment_.groups.empty()) ImGui::Separator();
+        if (ImGui::MenuItem("Nouveau calque avec la sélection")) {
+            garment::PieceGroup gr;
+            gr.name = "Calque " + std::to_string(garment_.groups.size() + 1);
+            garment_.groups.push_back(gr);
+            target = static_cast<int>(garment_.groups.size()) - 1;
+            activeGroup_ = target;
+        }
+        if (ImGui::MenuItem("Sans calque", nullptr, false, any([](const garment::Panel& p) { return p.group >= 0; }))) target = -1;
+        ImGui::EndMenu();
+        if (target != -2) moveSelectionToGroup(target);
+    }
     ImGui::Separator();
     item("Copier", "Ctrl+C", A::Copy, has);
     item("Coller ici", "Ctrl+V", A::Paste, hasClip);
@@ -3242,8 +3261,10 @@ void App::drawInspector()
         const ImVec2 p = ImGui::GetWindowPos();
         ImGui::GetWindowDrawList()->AddLine(p, {p.x, p.y + viewSize_.y}, ImGui::GetColorU32(kBg0), 2.0f);
     }
+    drawLayers();
     paneTitle("PROPRIÉTÉS", fontBold_);
     ImGui::Spacing();
+    ImGui::BeginChild("##proprietes", ImVec2(0, 0), ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8 * uiScale_, 5 * uiScale_));
     inspectorBackdrop();
     inspectorPanel();
@@ -3253,7 +3274,321 @@ void App::drawInspector()
     inspectorSimulation();
     inspectorDisplay();
     ImGui::PopStyleVar();
+    ImGui::EndChild();
     ImGui::End();
+}
+
+void App::moveSelectionToGroup(int group)
+{
+    const auto t = editor_.targets();
+    if (t.empty()) {
+        setStatus("Sélectionne d'abord des pièces dans le patron.", true);
+        return;
+    }
+    int moved = 0;
+    for (const int p : t) {
+        if (p < 0 || p >= static_cast<int>(garment_.panels.size())) continue;
+        // Une pièce posée (poche, rabat...) suit sa pièce de base : on range aussi les pièces posées dessus.
+        auto put = [&](int q) {
+            if (garment_.panels[static_cast<std::size_t>(q)].group != group) {
+                garment_.panels[static_cast<std::size_t>(q)].group = group;
+                ++moved;
+            }
+        };
+        put(p);
+        for (const auto& a : garment_.attachments)
+            if (a.base == p) put(a.patch);
+    }
+    if (moved == 0) return;
+    commitGarment();
+    const std::string where = group >= 0 ? "« " + garment_.groups[static_cast<std::size_t>(group)].name + " »" : "« Sans calque »";
+    setStatus(std::to_string(moved) + " pièce(s) rangée(s) dans " + where + ".", false);
+}
+
+void App::drawLayers()
+{
+    auto& groups = garment_.groups;
+    const int ng = static_cast<int>(groups.size());
+    const int np = static_cast<int>(garment_.panels.size());
+    if (activeGroup_ >= ng) activeGroup_ = ng - 1;
+    if (renameGroup_ >= ng) renameGroup_ = -1;
+    groupOpen_.resize(static_cast<std::size_t>(ng), 0);
+    if (layersHeight_ < 0.0f) layersHeight_ = std::round(200.0f * uiScale_);
+    layersHeight_ = std::clamp(layersHeight_, 90.0f * uiScale_, std::max(90.0f * uiScale_, viewSize_.y * 0.7f));
+
+    paneTitle("CALQUES", fontBold_);
+    // Barre d'outils du panneau
+    const auto sel = editor_.targets();
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6 * uiScale_, 3 * uiScale_));
+    if (ImGui::SmallButton("+ Nouveau")) {
+        garment::PieceGroup gr;
+        gr.name = "Calque " + std::to_string(ng + 1);
+        groups.push_back(gr);
+        activeGroup_ = ng;
+        groupOpen_.push_back(1);
+        if (!sel.empty()) moveSelectionToGroup(activeGroup_);   // la sélection va dans le nouveau calque
+        else commitGarment();
+        renameGroup_ = activeGroup_;
+        std::snprintf(renameBuf_, sizeof(renameBuf_), "%s", gr.name.c_str());
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Nouveau calque (les pièces sélectionnées y sont rangées)");
+    ImGui::SameLine();
+    ImGui::BeginDisabled(sel.empty() || activeGroup_ < 0);
+    if (ImGui::SmallButton("Ranger ici")) moveSelectionToGroup(activeGroup_);
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("Range les pièces sélectionnées dans le calque choisi (avec leurs poches et renforts)");
+    ImGui::SameLine();
+    ImGui::BeginDisabled(activeGroup_ < 0);
+    if (ImGui::SmallButton("Supprimer")) {
+        garment_.removeGroup(activeGroup_);
+        groupOpen_.erase(groupOpen_.begin() + activeGroup_);
+        activeGroup_ = -1;
+        commitGarment();
+        setStatus("Calque supprimé : ses pièces sont gardées, « sans calque ».", false);
+    }
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Supprime le calque choisi (les pièces sont gardées)");
+    ImGui::PopStyleVar();
+
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, kBg0);
+    ImGui::BeginChild("##calques", ImVec2(0, layersHeight_), ImGuiChildFlags_Borders);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float rowH = ImGui::GetFrameHeight();
+    const float icon = rowH;
+    const ImU32 on = ImGui::GetColorU32(kText), off = ImGui::GetColorU32(kTextDim), accent = kAccentU32;
+    bool changedGeometry = false, changedState = false;
+
+    // Œil : visible (simulé et affiché) ou masqué.
+    auto eyeButton = [&](const char* id, bool visible) {
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        const bool clicked = ImGui::InvisibleButton(id, ImVec2(icon, rowH));
+        const bool hot = ImGui::IsItemHovered();
+        const ImVec2 c(p.x + icon * 0.5f, p.y + rowH * 0.5f);
+        const float rx = icon * 0.32f, ry = rowH * 0.2f;
+        const ImU32 col = hot ? accent : (visible ? on : off);
+        // amande dessinée par deux arcs
+        dl->PathArcTo({c.x, c.y + ry * 1.6f}, ry * 2.6f, -kPi * 0.5f - 0.95f, -kPi * 0.5f + 0.95f, 10);
+        dl->PathStroke(col, 0, 1.4f);
+        dl->PathArcTo({c.x, c.y - ry * 1.6f}, ry * 2.6f, kPi * 0.5f - 0.95f, kPi * 0.5f + 0.95f, 10);
+        dl->PathStroke(col, 0, 1.4f);
+        if (visible) dl->AddCircleFilled(c, ry * 0.75f, col);
+        else dl->AddLine({c.x - rx, c.y + ry * 1.3f}, {c.x + rx, c.y - ry * 1.3f}, col, 1.4f);
+        if (hot) ImGui::SetTooltip(visible ? "Masquer le calque (ni affiché ni simulé)" : "Afficher le calque");
+        return clicked;
+    };
+    // Cadenas : verrouillé (affiché mais non modifiable dans le patron).
+    auto lockButton = [&](const char* id, bool locked) {
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        const bool clicked = ImGui::InvisibleButton(id, ImVec2(icon, rowH));
+        const bool hot = ImGui::IsItemHovered();
+        const ImVec2 c(p.x + icon * 0.5f, p.y + rowH * 0.56f);
+        const float w = icon * 0.26f, h = rowH * 0.22f;
+        const ImU32 col = hot ? accent : (locked ? on : IM_COL32(110, 112, 118, 120));
+        dl->AddRectFilled({c.x - w, c.y - h * 0.3f}, {c.x + w, c.y + h * 1.3f}, col, 1.5f);
+        dl->PathArcTo({c.x, c.y - h * 0.3f}, w * 0.68f, kPi, locked ? 2.0f * kPi : 1.75f * kPi, 8);
+        dl->PathStroke(col, 0, 1.5f);
+        if (hot) ImGui::SetTooltip(locked ? "Déverrouiller" : "Verrouiller (pièces non modifiables dans le patron)");
+        return clicked;
+    };
+    auto pieceRow = [&](int p) {
+        const auto& pn = garment_.panels[static_cast<std::size_t>(p)];
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + icon * 2.0f + 14.0f * uiScale_);
+        const bool editable = garment_.panelEditable(p);
+        const bool selected = editor_.isSelected(p);
+        ImGui::PushID(p);
+        // pastille de couleur du tissu
+        const ImVec2 sp = ImGui::GetCursorScreenPos();
+        dl->AddRectFilled({sp.x, sp.y + rowH * 0.3f}, {sp.x + rowH * 0.4f, sp.y + rowH * 0.7f},
+                          ImGui::GetColorU32(ImVec4(pn.color.r, pn.color.g, pn.color.b, 1.0f)), 2.0f);
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + rowH * 0.55f);
+        ImGui::PushStyleColor(ImGuiCol_Text, editable ? kText : kTextDim);
+        const std::string label = pn.name + (garment_.attachmentOf(p) >= 0 ? "  (posée)" : "");
+        if (ImGui::Selectable(label.c_str(), selected, editable ? 0 : ImGuiSelectableFlags_Disabled, ImVec2(0, rowH))) {
+            if (ImGui::GetIO().KeyCtrl) {
+                auto t = editor_.targets();
+                const auto it = std::find(t.begin(), t.end(), p);
+                if (it == t.end()) t.push_back(p);
+                else t.erase(it);
+                editor_.select(t);
+            } else {
+                editor_.select({p});
+            }
+        }
+        ImGui::PopStyleColor();
+        ImGui::PopID();
+    };
+    auto countIn = [&](int group) {
+        int c = 0;
+        for (const auto& pn : garment_.panels) c += pn.group == group ? 1 : 0;
+        return c;
+    };
+    auto selectGroup = [&](int group) {
+        std::vector<int> ids;
+        for (int p = 0; p < np; ++p)
+            if (garment_.panels[static_cast<std::size_t>(p)].group == group && garment_.panelEditable(p)) ids.push_back(p);
+        editor_.select(ids);
+    };
+    // Une pièce sélectionnée qui devient masquée ou verrouillée sort de la sélection.
+    auto dropHiddenSelection = [&]() {
+        auto t = editor_.targets();
+        const auto before = t.size();
+        std::erase_if(t, [&](int p) { return p < 0 || p >= np || !garment_.panelEditable(p); });
+        if (t.size() != before) editor_.select(t);
+    };
+
+    int moveFrom = -1, moveTo = -1, removeAt = -1;
+    for (int k = 0; k < ng; ++k) {
+        auto& gr = groups[static_cast<std::size_t>(k)];
+        ImGui::PushID(k);
+        const ImVec2 rowMin = ImGui::GetCursorScreenPos();
+        if (k == activeGroup_)
+            dl->AddRectFilled(rowMin, {rowMin.x + ImGui::GetContentRegionAvail().x, rowMin.y + rowH}, ImGui::GetColorU32(kBg2), 3.0f);
+        if (eyeButton("##oeil", gr.visible)) {
+            // Alt+clic : n'afficher que ce calque
+            if (ImGui::GetIO().KeyAlt) {
+                for (auto& o : groups) o.visible = false;
+                gr.visible = true;
+            } else {
+                gr.visible = !gr.visible;
+            }
+            changedGeometry = true;
+        }
+        ImGui::SameLine(0, 0);
+        if (lockButton("##verrou", gr.locked)) {
+            gr.locked = !gr.locked;
+            changedState = true;
+        }
+        ImGui::SameLine(0, 4.0f * uiScale_);
+        char& open = groupOpen_[static_cast<std::size_t>(k)];
+        if (ImGui::ArrowButton("##ouvrir", open != 0 ? ImGuiDir_Down : ImGuiDir_Right)) open = open != 0 ? 0 : 1;
+        ImGui::SameLine(0, 6.0f * uiScale_);
+        if (renameGroup_ == k) {
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::IsWindowAppearing() || !ImGui::IsAnyItemActive()) ImGui::SetKeyboardFocusHere();
+            if (ImGui::InputText("##nom", renameBuf_, sizeof(renameBuf_), ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll) ||
+                ImGui::IsItemDeactivated()) {
+                if (renameBuf_[0] != '\0' && gr.name != renameBuf_) {
+                    gr.name = renameBuf_;
+                    changedState = true;
+                }
+                renameGroup_ = -1;
+            }
+        } else {
+            const int count = countIn(k);
+            const std::string label = gr.name + "##g";
+            ImGui::PushStyleColor(ImGuiCol_Text, gr.visible ? kText : kTextDim);
+            if (ImGui::Selectable(label.c_str(), false, ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_AllowOverlap, ImVec2(0, rowH))) {
+                activeGroup_ = k;
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    renameGroup_ = k;
+                    std::snprintf(renameBuf_, sizeof(renameBuf_), "%s", gr.name.c_str());
+                } else if (gr.visible && !gr.locked) {
+                    selectGroup(k);
+                }
+            }
+            ImGui::PopStyleColor();
+            // nombre de pièces, aligné à droite
+            const std::string n = std::to_string(count);
+            const ImVec2 ts = ImGui::CalcTextSize(n.c_str());
+            const ImVec2 r = ImGui::GetItemRectMax();
+            dl->AddText({r.x - ts.x - 4.0f, rowMin.y + (rowH - ts.y) * 0.5f}, off, n.c_str());
+            if (ImGui::BeginPopupContextItem("##menu")) {
+                activeGroup_ = k;
+                if (ImGui::MenuItem("Renommer")) {
+                    renameGroup_ = k;
+                    std::snprintf(renameBuf_, sizeof(renameBuf_), "%s", gr.name.c_str());
+                }
+                if (ImGui::MenuItem("Sélectionner ses pièces", nullptr, false, gr.visible && !gr.locked)) selectGroup(k);
+                if (ImGui::MenuItem("Ranger la sélection ici", nullptr, false, !sel.empty())) moveSelectionToGroup(k);
+                ImGui::Separator();
+                if (ImGui::MenuItem("Afficher seulement ce calque")) {
+                    for (auto& o : groups) o.visible = false;
+                    gr.visible = true;
+                    changedGeometry = true;
+                }
+                if (ImGui::MenuItem("Tout afficher", nullptr, false,
+                                    std::any_of(groups.begin(), groups.end(), [](const garment::PieceGroup& o) { return !o.visible; }))) {
+                    for (auto& o : groups) o.visible = true;
+                    changedGeometry = true;
+                }
+                ImGui::Separator();
+                if (ImGui::MenuItem("Monter", nullptr, false, k > 0)) {
+                    moveFrom = k;
+                    moveTo = k - 1;
+                }
+                if (ImGui::MenuItem("Descendre", nullptr, false, k + 1 < ng)) {
+                    moveFrom = k;
+                    moveTo = k + 1;
+                }
+                ImGui::Separator();
+                if (ImGui::MenuItem("Supprimer le calque")) removeAt = k;
+                ImGui::EndPopup();
+            }
+        }
+        if (open != 0)
+            for (int p = 0; p < np; ++p)
+                if (garment_.panels[static_cast<std::size_t>(p)].group == k) pieceRow(p);
+        ImGui::PopID();
+    }
+    // Pièces sans calque
+    {
+        const int loose = countIn(-1);
+        if (loose > 0 || ng == 0) {
+            if (ng > 0) ImGui::Separator();
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + icon * 2.0f + 4.0f * uiScale_);
+            if (ImGui::ArrowButton("##ouvrirLibres", looseOpen_ ? ImGuiDir_Down : ImGuiDir_Right)) looseOpen_ = !looseOpen_;
+            ImGui::SameLine(0, 6.0f * uiScale_);
+            ImGui::PushStyleColor(ImGuiCol_Text, kTextDim);
+            const std::string label = "Sans calque (" + std::to_string(loose) + ")##libres";
+            if (ImGui::Selectable(label.c_str(), false, 0, ImVec2(0, rowH))) {
+                activeGroup_ = -1;
+                selectGroup(-1);
+            }
+            ImGui::PopStyleColor();
+            if (looseOpen_)
+                for (int p = 0; p < np; ++p)
+                    if (garment_.panels[static_cast<std::size_t>(p)].group < 0) pieceRow(p);
+            if (ng == 0) {
+                ImGui::Spacing();
+                ImGui::PushStyleColor(ImGuiCol_Text, kTextDim);
+                ImGui::TextWrapped("Sélectionne des pièces puis « + Nouveau » pour en faire un objet séparé (veste, pantalon...).");
+                ImGui::PopStyleColor();
+            }
+        }
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+    // Poignée : glisser pour agrandir ou réduire le panneau des calques.
+    {
+        ImGui::InvisibleButton("##tailleCalques", ImVec2(-1, 6.0f * uiScale_));
+        const bool hot = ImGui::IsItemHovered() || ImGui::IsItemActive();
+        if (hot) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+        if (ImGui::IsItemActive()) layersHeight_ += ImGui::GetIO().MouseDelta.y;
+        const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+        const float cy = (a.y + b.y) * 0.5f, cx = (a.x + b.x) * 0.5f;
+        ImGui::GetWindowDrawList()->AddLine({cx - 14, cy}, {cx + 14, cy}, ImGui::GetColorU32(hot ? kAccent : kLine), 2.0f);
+    }
+
+    if (moveFrom >= 0) {
+        garment_.moveGroup(moveFrom, moveTo);
+        std::swap(groupOpen_[static_cast<std::size_t>(moveFrom)], groupOpen_[static_cast<std::size_t>(moveTo)]);
+        activeGroup_ = moveTo;
+        changedState = true;
+    }
+    if (removeAt >= 0) {
+        garment_.removeGroup(removeAt);
+        groupOpen_.erase(groupOpen_.begin() + removeAt);
+        activeGroup_ = -1;
+        changedGeometry = true;
+    }
+    if (changedGeometry) {   // calque masqué / affiché : la simulation est refaite sans (ou avec) ses pièces
+        dropHiddenSelection();
+        commitGarment();
+    } else if (changedState) {
+        dropHiddenSelection();
+        commitState();
+    }
 }
 
 void App::inspectorPrints(int idx)

@@ -382,6 +382,7 @@ void PatternEditor::select(const std::vector<int>& ids)
 
 int PatternEditor::pickPoint(const garment::Garment& g, int panel, ImVec2 mouse) const
 {
+    if (!g.panelEditable(panel)) return -1;   // calque masqué ou verrouillé
     const auto& pts = g.panels[static_cast<std::size_t>(panel)].points;
     for (std::size_t i = 0; i < pts.size(); ++i) {
         const ImVec2 s = toScreen(pts[i]);
@@ -393,7 +394,7 @@ int PatternEditor::pickPoint(const garment::Garment& g, int panel, ImVec2 mouse)
 int PatternEditor::pickPanel(const garment::Garment& g, glm::vec2 w) const
 {
     for (int p = static_cast<int>(g.panels.size()) - 1; p >= 0; --p)
-        if (garment::pointInPolygon(g.panels[static_cast<std::size_t>(p)].points, w)) return p;
+        if (g.panelEditable(p) && garment::pointInPolygon(g.panels[static_cast<std::size_t>(p)].points, w)) return p;
     return -1;
 }
 
@@ -402,6 +403,7 @@ garment::EdgeRef PatternEditor::pickEdge(const garment::Garment& g, ImVec2 mouse
     garment::EdgeRef best;
     float bestD = kPickRadius;
     for (std::size_t p = 0; p < g.panels.size(); ++p) {
+        if (!g.panelEditable(static_cast<int>(p))) continue;
         const auto& pts = g.panels[p].points;
         for (std::size_t e = 0; e < pts.size(); ++e) {
             const ImVec2 a = toScreen(pts[e]), b = toScreen(pts[(e + 1) % pts.size()]);
@@ -785,6 +787,7 @@ bool PatternEditor::draw(garment::Garment& g)
                 // Clic sur une ligne de pli : on la choisit ; sinon on commence à en tracer une.
                 foldPanel = foldIndex = -1;
                 for (int p = 0; p < static_cast<int>(g.panels.size()) && foldPanel < 0; ++p) {
+                    if (!g.panelEditable(p)) continue;
                     const auto& pn = g.panels[static_cast<std::size_t>(p)];
                     const glm::vec2 c = garment::panelBoxCenter(pn);
                     for (int k = 0; k < static_cast<int>(pn.folds.size()); ++k) {
@@ -1146,6 +1149,7 @@ bool PatternEditor::draw(garment::Garment& g)
                 // Points de la pièce choisie (ou de la pièce qui en a le plus dans le rectangle).
                 int panel = selectedPanel, best = 0;
                 for (int p = 0; p < static_cast<int>(g.panels.size()); ++p) {
+                    if (!g.panelEditable(p)) continue;
                     int count = 0;
                     for (const auto& q : g.panels[static_cast<std::size_t>(p)].points) count += inside(q) ? 1 : 0;
                     if (count > best && (p == selectedPanel || selectedPanel < 0 || panel < 0 || best == 0)) {
@@ -1167,7 +1171,7 @@ bool PatternEditor::draw(garment::Garment& g)
                 if (selection.empty() && selectedPanel >= 0) selection.push_back(selectedPanel);
                 for (int p = 0; p < static_cast<int>(g.panels.size()); ++p) {
                     const auto& pts = g.panels[static_cast<std::size_t>(p)].points;
-                    const bool hit = !pts.empty() && std::all_of(pts.begin(), pts.end(), inside);
+                    const bool hit = g.panelEditable(p) && !pts.empty() && std::all_of(pts.begin(), pts.end(), inside);
                     if (hit && !isSelected(p)) selection.push_back(p);
                 }
                 if (!selection.empty()) selectedPanel = selection.back();
@@ -1393,6 +1397,7 @@ bool PatternEditor::draw(garment::Garment& g)
             // Pinceau : chaque point sous le pinceau se rapproche du milieu de ses voisins.
             const float radius = 28.0f / zoom_;
             for (std::size_t p = 0; p < g.panels.size(); ++p) {
+                if (!g.panelEditable(static_cast<int>(p))) continue;
                 auto& pts = g.panels[p].points;
                 const std::size_t n = pts.size();
                 if (n < 4) continue;
@@ -1511,8 +1516,9 @@ bool PatternEditor::draw(garment::Garment& g)
     if (hovered || ImGui::IsItemActive()) {
         if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A, false) && tool == Tool::Select && !g.panels.empty()) {
             selection.clear();
-            for (int p = 0; p < static_cast<int>(g.panels.size()); ++p) selection.push_back(p);
-            selectedPanel = selection.back();
+            for (int p = 0; p < static_cast<int>(g.panels.size()); ++p)
+                if (g.panelEditable(p)) selection.push_back(p);
+            selectedPanel = selection.empty() ? -1 : selection.back();
             selectedPoint = selectedSeam = -1;
             if (selection.size() == 1) selection.clear();
         }
@@ -1635,6 +1641,7 @@ bool PatternEditor::draw(garment::Garment& g)
         dl->AddImage(prints.texture, toScreen({prints.min.x, prints.max.y}), toScreen({prints.max.x, prints.min.y}), ImVec2(0, 1), ImVec2(1, 0));
     std::vector<ImVec2> scr;
     for (std::size_t p = 0; p < g.panels.size(); ++p) {
+        if (!g.panelVisible(static_cast<int>(p))) continue;   // calque masqué
         const auto& panel = g.panels[p];
         scr.clear();
         for (const auto& q : panel.points) scr.push_back(toScreen(q));
@@ -1656,6 +1663,7 @@ bool PatternEditor::draw(garment::Garment& g)
         if (panel.frozen) tag("figée");
         if (panel.stiffness > 1.0f) tag("renforcée");
         if (panel.linkGroup > 0) tag(("liée " + std::to_string(panel.linkGroup)).c_str());
+        if (!g.panelEditable(static_cast<int>(p))) tag("verrouillée");
         if (!tags.empty()) {
             const ImVec2 tt = ImGui::CalcTextSize(tags.c_str());
             dl->AddText({sc.x - tt.x * 0.5f, sc.y + ts.y * 0.5f + 2.0f}, IM_COL32(150, 200, 255, 220), tags.c_str());
@@ -1675,7 +1683,7 @@ bool PatternEditor::draw(garment::Garment& g)
     // --- Axe de symétrie des pièces symétriques -------------------------------------
     for (std::size_t p = 0; p < g.panels.size(); ++p) {
         const auto& pn = g.panels[p];
-        if (!pn.symmetric || pn.points.size() < 3) continue;
+        if (!pn.symmetric || pn.points.size() < 3 || !g.panelVisible(static_cast<int>(p))) continue;
         float y0 = 1e9f, y1 = -1e9f;
         for (const auto& q : pn.points) {
             y0 = std::min(y0, q.y);
@@ -1695,6 +1703,7 @@ bool PatternEditor::draw(garment::Garment& g)
     if (tool != Tool::Fold) foldPanel = foldIndex = -1;
     for (std::size_t p = 0; p < g.panels.size(); ++p) {
         const auto& pn = g.panels[p];
+        if (!g.panelVisible(static_cast<int>(p))) continue;
         const glm::vec2 c = garment::panelBoxCenter(pn);
         for (std::size_t k = 0; k < pn.folds.size(); ++k) {
             const auto& f = pn.folds[k];
@@ -1714,7 +1723,7 @@ bool PatternEditor::draw(garment::Garment& g)
 
     // --- Droit fil : flèche à deux pointes sur chaque pièce -----------------------
     for (std::size_t p = 0; p < g.panels.size(); ++p) {
-        if (g.panels[p].points.size() < 3) continue;
+        if (g.panels[p].points.size() < 3 || !g.panelVisible(static_cast<int>(p))) continue;
         glm::vec2 wa, wb;
         garment::grainLine(g.panels[p], wa, wb);
         const ImVec2 a = toScreen(wa), b = toScreen(wb);
@@ -1735,6 +1744,7 @@ bool PatternEditor::draw(garment::Garment& g)
     for (const auto& at : g.attachments) {
         if (at.patch < 0 || at.base < 0 || at.patch >= static_cast<int>(g.panels.size()) || at.base >= static_cast<int>(g.panels.size()))
             continue;
+        if (!g.panelVisible(at.patch) || !g.panelVisible(at.base)) continue;
         const auto& pp = g.panels[static_cast<std::size_t>(at.patch)].points;
         glm::vec2 lo(1e9f), hi(-1e9f);
         for (const auto& q : pp) {
@@ -1760,6 +1770,7 @@ bool PatternEditor::draw(garment::Garment& g)
     for (std::size_t s = 0; s < g.seams.size(); ++s) {
         const auto& seam = g.seams[s];
         if (seam.a.panel >= static_cast<int>(g.panels.size()) || seam.b.panel >= static_cast<int>(g.panels.size())) continue;
+        if (!g.panelVisible(seam.a.panel) || !g.panelVisible(seam.b.panel)) continue;
         const ImU32 col = seam.enabled ? seamColor(static_cast<int>(s)) : IM_COL32(125, 125, 130, 200);
         const float w = static_cast<int>(s) == selectedSeam ? 5.0f : 3.5f;
         // Chaque côté peut couvrir plusieurs bords (courbe) : on les trace tous,
@@ -1802,6 +1813,7 @@ bool PatternEditor::draw(garment::Garment& g)
 
     // Points (pièce sélectionnée, ou toutes en zoom suffisant)
     for (std::size_t p = 0; p < g.panels.size(); ++p) {
+        if (!g.panelEditable(static_cast<int>(p))) continue;
         const bool sel = static_cast<int>(p) == selectedPanel;
         for (std::size_t i = 0; i < g.panels[p].points.size(); ++i) {
             const ImVec2 s = toScreen(g.panels[p].points[i]);

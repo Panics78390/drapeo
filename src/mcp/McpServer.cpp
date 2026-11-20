@@ -289,6 +289,7 @@ Json describe(const Garment& g, const std::string& path)
         if (p.stiffness != 1.0f) o["raideur"] = round2(p.stiffness);
         if (p.particleDistance > 0.0f) o["espacement_mm"] = round2(p.particleDistance * 1000.0);
         if (p.layer != 0) o["couche"] = p.layer;
+        if (const auto* gr = g.groupOf(static_cast<int>(i))) o["calque"] = gr->name;
         if (p.shrinkWeft != 1.0f) o["retrait_trame"] = round2(p.shrinkWeft * 100.0);
         if (p.shrinkWarp != 1.0f) o["retrait_chaine"] = round2(p.shrinkWarp * 100.0);
         if (p.thickCollision > 0.0f) o["epaisseur_contact_mm"] = round2(p.thickCollision * 1000.0);
@@ -355,6 +356,17 @@ Json describe(const Garment& g, const std::string& path)
         pieces.push(std::move(o));
     }
     root["pieces"] = std::move(pieces);
+    if (!g.groups.empty()) {
+        Json calques = Json::array();
+        for (const auto& gr : g.groups) {
+            Json c = Json::object();
+            c["nom"] = gr.name;
+            if (!gr.visible) c["masque"] = true;
+            if (gr.locked) c["verrouille"] = true;
+            calques.push(std::move(c));
+        }
+        root["calques"] = std::move(calques);
+    }
 
     Json seams = Json::array();
     for (std::size_t s = 0; s < g.seams.size(); ++s) {
@@ -506,6 +518,7 @@ const std::vector<ToolDef>& toolDefs()
                  {"raideur", "number", "1 = normal, > 1 = pièce renforcée."},
                  {"espacement_mm", "number", "Distance entre particules (mm, 0 = celle du vêtement, 20 par défaut)."},
                  {"couche", "integer", "Couche : 1, 2... = posée par-dessus les autres."},
+                 {"calque", "string", "Calque (objet séparé : « Veste », « Pantalon »...) ; créé s'il n'existe pas ; \"\" = sans calque."},
                  {"retrait_trame", "number", "Retrait trame en % (100 = aucun, 90 = 10 % plus étroit)."},
                  {"retrait_chaine", "number", "Retrait chaîne en % (100 = aucun)."},
                  {"epaisseur_contact_mm", "number", "Épaisseur ajoutée pour les contacts (mm)."},
@@ -985,6 +998,19 @@ bool Server::callTool(const std::string& name, const Json& argsIn, std::string& 
                 p.particleDistance = d <= 0.0f ? 0.0f : std::clamp(d, 5.0f, 100.0f) / 1000.0f;
             }
             if (args.has("couche")) p.layer = std::clamp(static_cast<int>(std::lround(num(args, "couche", 0.0))), 0, 10);
+            if (args.has("calque")) {
+                const std::string cname = str(args, "calque", "");
+                int k = -1;
+                for (int j = 0; j < static_cast<int>(g.groups.size()) && !cname.empty(); ++j)
+                    if (g.groups[static_cast<std::size_t>(j)].name == cname) k = j;
+                if (!cname.empty() && k < 0) {
+                    garment::PieceGroup gr;
+                    gr.name = cname;
+                    g.groups.push_back(gr);
+                    k = static_cast<int>(g.groups.size()) - 1;
+                }
+                p.group = k;
+            }
             if (args.has("retrait_trame")) p.shrinkWeft = std::clamp(static_cast<float>(num(args, "retrait_trame", 100.0)), 50.0f, 150.0f) / 100.0f;
             if (args.has("retrait_chaine")) p.shrinkWarp = std::clamp(static_cast<float>(num(args, "retrait_chaine", 100.0)), 50.0f, 150.0f) / 100.0f;
             if (args.has("epaisseur_contact_mm"))

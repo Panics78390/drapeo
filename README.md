@@ -53,7 +53,7 @@ Redémarrer Claude Desktop. Sans `--projet`, le serveur travaille sur `Documents
 | `projet_info` | Pièces (points, bords, longueurs), coutures — en cm |
 | `nouveau_projet`, `ouvrir_projet`, `enregistrer_sous` | Projet vide ou modèle (débardeur, jupe, robe), changer de fichier |
 | `ajouter_piece`, `ajouter_rectangle`, `dupliquer_piece`, `supprimer_piece` | Pièces de patron et leur placement autour du corps |
-| `modifier_piece`, `deplacer_piece` | Nom, couleur, aspect du tissu, zone, angle, hauteur, droit fil, symétrie, état 3D, propriétés de simulation |
+| `modifier_piece`, `deplacer_piece` | Nom, couleur, aspect du tissu, zone, angle, hauteur, droit fil, symétrie, état 3D, propriétés de simulation, calque |
 | `poser_piece` | Pose une poche, un rabat, un renfort ou une bande sur une autre pièce |
 | `ajouter_impression`, `supprimer_impression` | Logo, inscription, drapeau ou bande imprimés sur une pièce |
 | `allonger_piece` | Allonge ou raccourcit une pièce à une hauteur donnée (poses et impressions suivent) |
@@ -216,6 +216,24 @@ endroit du corps en 3D. Affichage › « Ombre de l'avatar dans le patron » pou
   fait faire un demi-tour à la pièce sur elle-même.
 - Les pièces tracées (polygone, rectangle) sont posées **à plat** devant le corps ; l'inspecteur (Placement › Forme)
   permet de choisir « Plate » ou « Enroulée » autour du corps.
+
+## Calques (objets séparés)
+
+En haut de la colonne de droite, le panneau **CALQUES** range les pièces en objets séparés (par exemple
+« Veste » et « Pantalon ») pour les travailler chacun de son côté :
+
+- **+ Nouveau** crée un calque et y range les pièces sélectionnées ; **Ranger ici** range la sélection dans le
+  calque choisi ; **Supprimer** retire le calque (ses pièces sont gardées, « sans calque »). Les pièces posées
+  (poches, rabats, renforts) suivent leur pièce de base.
+- **Œil** : masque le calque. Ses pièces ne sont plus affichées dans le patron ni simulées en 3D (les autres
+  gardent leur drapé). Alt+clic sur l'œil : n'afficher que ce calque.
+- **Cadenas** : verrouille le calque. Ses pièces restent affichées et simulées, mais ne peuvent plus être
+  sélectionnées ni modifiées dans le patron.
+- Clic sur un calque : sélectionne ses pièces ; double-clic : le renommer ; flèche : déplier la liste de ses
+  pièces (clic sur une pièce pour la sélectionner, Ctrl+clic pour l'ajouter) ; clic droit : renommer, afficher
+  seulement ce calque, tout afficher, monter / descendre, supprimer.
+- Le menu clic droit des pièces a aussi un sous-menu **Calque** (ranger la sélection dans un calque).
+- La poignée sous le panneau règle sa hauteur. Les calques sont enregistrés dans le projet.
 
 ## Menu clic droit des pièces (vue patron)
 

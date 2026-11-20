@@ -176,22 +176,26 @@ glm::vec2 patchCenter(const Panel& p)
 bool buildGarmentMesh(const Garment& garment, const MeshingOptions& options, GarmentMesh& out, std::string& error)
 {
     out = {};
-    // Pièces désactivées en 3D : on maille le vêtement sans elles, puis on remet les index d'origine.
-    if (std::any_of(garment.panels.begin(), garment.panels.end(), [](const Panel& p) { return !p.active3D; })) {
+    // Pièces désactivées en 3D (ou de calques masqués) : on maille le vêtement sans elles, puis on remet les index d'origine.
+    auto on = [&](int p) { return garment.panels[static_cast<std::size_t>(p)].active3D && garment.panelVisible(p); };
+    bool anyOff = false;
+    for (int p = 0; p < static_cast<int>(garment.panels.size()); ++p) anyOff = anyOff || !on(p);
+    if (anyOff) {
         Garment active = garment;
         std::vector<int> panelMap, seamMap;
         for (int p = 0; p < static_cast<int>(garment.panels.size()); ++p)
-            if (garment.panels[static_cast<std::size_t>(p)].active3D) panelMap.push_back(p);
+            if (on(p)) panelMap.push_back(p);
         for (int s = 0; s < static_cast<int>(garment.seams.size()); ++s) {
             const auto& sm = garment.seams[static_cast<std::size_t>(s)];
-            if (garment.panels[static_cast<std::size_t>(sm.a.panel)].active3D && garment.panels[static_cast<std::size_t>(sm.b.panel)].active3D)
-                seamMap.push_back(s);
+            if (on(sm.a.panel) && on(sm.b.panel)) seamMap.push_back(s);
         }
         for (int p = static_cast<int>(garment.panels.size()) - 1; p >= 0; --p)
-            if (!garment.panels[static_cast<std::size_t>(p)].active3D) active.removePanel(p);
+            if (!on(p)) active.removePanel(p);
         for (auto& p : active.panels) p.active3D = true;
+        active.groups.clear();
+        for (auto& p : active.panels) p.group = -1;
         if (active.panels.empty()) {
-            error = "Toutes les pièces sont désactivées en 3D.";
+            error = "Toutes les pièces sont désactivées en 3D (ou leurs calques masqués).";
             return false;
         }
         if (!buildGarmentMesh(active, options, out, error)) return false;

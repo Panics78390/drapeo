@@ -19,6 +19,8 @@ std::string writeProject(const garment::Garment& g, const ProjectAvatar* avatar)
     o << "drapeo-projet 1\n";
     if (avatar != nullptr)   // avatar <taille> <rotation> <chemin, vide = mannequin intégré>
         o << "avatar " << avatar->height << ' ' << avatar->rotationDeg << ' ' << avatar->path << "\n";
+    for (const auto& gr : g.groups)   // calque <visible> <verrouillé> <nom>
+        o << "calque " << (gr.visible ? 1 : 0) << ' ' << (gr.locked ? 1 : 0) << ' ' << gr.name << "\n";
     for (const auto& p : g.panels) {
         o << "piece\n";
         o << "nom " << p.name << "\n";
@@ -38,6 +40,7 @@ std::string writeProject(const garment::Garment& g, const ProjectAvatar* avatar)
             p.thickRender != 0.0f || p.pressure != 0.0f)   // simu <espacement> <couche> <trame> <chaîne> <ép. contact> <ép. affichage> <pression>
             o << "simu " << p.particleDistance << ' ' << p.layer << ' ' << p.shrinkWeft << ' ' << p.shrinkWarp << ' ' << p.thickCollision << ' '
               << p.thickRender << ' ' << p.pressure << "\n";
+        if (p.group >= 0) o << "groupe " << p.group << "\n";
         if (p.linkGroup > 0) o << "lien " << p.linkGroup << ' ' << (p.linkMirror ? 1 : 0) << ' ' << p.linkAngle << "\n";
         const auto& pl = p.placement;
         o << "placement " << static_cast<int>(pl.zone) << ' ' << pl.angleDeg << ' ' << pl.height << ' ' << pl.radius << ' '
@@ -75,6 +78,19 @@ bool parseProject(const std::string& text, garment::Garment& out, std::string& e
             std::getline(ls, rest);
             const auto first = rest.find_first_not_of(' ');
             avatar->path = first == std::string::npos ? "" : rest.substr(first);
+        } else if (key == "calque") {
+            garment::PieceGroup gr;
+            int visible = 1, locked = 0;
+            ls >> visible >> locked;
+            std::string rest;
+            std::getline(ls, rest);
+            const auto first = rest.find_first_not_of(' ');
+            gr.name = first == std::string::npos ? "Calque" : rest.substr(first);
+            gr.visible = visible != 0;
+            gr.locked = locked != 0;
+            g.groups.push_back(gr);
+        } else if (key == "groupe" && !g.panels.empty()) {
+            ls >> g.panels.back().group;
         } else if (key == "piece") {
             g.panels.emplace_back();
         } else if (key == "nom" && !g.panels.empty()) {
@@ -188,6 +204,8 @@ bool parseProject(const std::string& text, garment::Garment& out, std::string& e
         const int n = static_cast<int>(g.panels.size());
         return a.patch < 0 || a.patch >= n || a.base < 0 || a.base >= n || a.patch == a.base;
     });
+    for (auto& p : g.panels)
+        if (p.group < -1 || p.group >= static_cast<int>(g.groups.size())) p.group = -1;
     out = std::move(g);
     return true;
 }

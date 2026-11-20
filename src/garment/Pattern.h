@@ -85,6 +85,16 @@ struct Panel {
     FabricFinish finish = FabricFinish::Plain;   // aspect du tissu
     std::vector<Print> prints;       // impressions posées sur la pièce
     std::vector<FoldLine> folds;     // lignes de pli
+    int group = -1;                  // calque (index dans Garment::groups) ; -1 = sans calque
+};
+
+/// Calque : regroupe des pièces en un objet (veste, pantalon...) qu'on peut masquer ou verrouiller.
+/// Un calque masqué n'est ni affiché dans le patron ni simulé ; un calque verrouillé est affiché mais
+/// ses pièces ne peuvent pas être sélectionnées ni modifiées.
+struct PieceGroup {
+    std::string name;
+    bool visible = true;
+    bool locked = false;
 };
 
 /// Centre du cadre (boîte englobante) d'une pièce : repère des impressions.
@@ -127,8 +137,32 @@ struct Garment {
     std::vector<Panel> panels;
     std::vector<Seam> seams;
     std::vector<Attachment> attachments;
+    std::vector<PieceGroup> groups;
 
     [[nodiscard]] bool empty() const { return panels.empty(); }
+    /// Calque d'une pièce (nullptr : sans calque, ou index invalide).
+    [[nodiscard]] const PieceGroup* groupOf(int panel) const
+    {
+        if (panel < 0 || panel >= static_cast<int>(panels.size())) return nullptr;
+        const int k = panels[static_cast<std::size_t>(panel)].group;
+        return k >= 0 && k < static_cast<int>(groups.size()) ? &groups[static_cast<std::size_t>(k)] : nullptr;
+    }
+    /// Pièce affichée et simulée (son calque n'est pas masqué).
+    [[nodiscard]] bool panelVisible(int panel) const
+    {
+        const PieceGroup* gr = groupOf(panel);
+        return gr == nullptr || gr->visible;
+    }
+    /// Pièce modifiable dans le patron (calque visible et non verrouillé).
+    [[nodiscard]] bool panelEditable(int panel) const
+    {
+        const PieceGroup* gr = groupOf(panel);
+        return gr == nullptr || (gr->visible && !gr->locked);
+    }
+    /// Supprime un calque : ses pièces passent « sans calque », les index suivants sont décalés.
+    void removeGroup(int group);
+    /// Déplace un calque (from -> to) en gardant les pièces dans leur calque.
+    void moveGroup(int from, int to);
     [[nodiscard]] glm::vec2 edgeStart(const EdgeRef& e) const;
     [[nodiscard]] glm::vec2 edgeEnd(const EdgeRef& e) const;
     [[nodiscard]] float edgeLength(const EdgeRef& e) const;

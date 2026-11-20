@@ -137,6 +137,30 @@ void remapSeams(Garment& g, int panel, int oldN, int newN, Map map)
 }
 } // namespace
 
+void Garment::removeGroup(int group)
+{
+    if (group < 0 || group >= static_cast<int>(groups.size())) return;
+    groups.erase(groups.begin() + group);
+    for (auto& p : panels) {
+        if (p.group == group) p.group = -1;
+        else if (p.group > group) --p.group;
+    }
+}
+
+void Garment::moveGroup(int from, int to)
+{
+    const int n = static_cast<int>(groups.size());
+    if (from < 0 || from >= n || to < 0 || to >= n || from == to) return;
+    const PieceGroup moved = groups[static_cast<std::size_t>(from)];
+    groups.erase(groups.begin() + from);
+    groups.insert(groups.begin() + to, moved);
+    for (auto& p : panels) {
+        if (p.group == from) p.group = to;
+        else if (from < to && p.group > from && p.group <= to) --p.group;
+        else if (to < from && p.group >= to && p.group < from) ++p.group;
+    }
+}
+
 void taperPanel(Garment& g, int panel, float amount, TaperMode mode, TaperAnchor anchor)
 {
     if (panel < 0 || panel >= static_cast<int>(g.panels.size())) return;

@@ -105,8 +105,9 @@ bool buildPatternTexture(const Garment& g, const PrintImageLoader& load, const P
     std::vector<float> xs;
     // Fond : couleur et aspect de chaque pièce (export), avec une marge pour le filtrage aux bords.
     if (options.fillPanels) {
-        for (const auto& p : g.panels) {
-            if (p.points.size() < 3) continue;
+        for (std::size_t pv = 0; pv < g.panels.size(); ++pv) {
+            const auto& p = g.panels[pv];
+            if (p.points.size() < 3 || !g.panelVisible(static_cast<int>(pv))) continue;   // calque masqué
             std::vector<glm::vec2> poly = p.points;
             glm::vec2 plo(1e9f), phi(-1e9f);
             for (const auto& q : poly) {
@@ -153,7 +154,7 @@ bool buildPatternTexture(const Garment& g, const PrintImageLoader& load, const P
         for (std::size_t pi = 0; pi < g.panels.size(); ++pi) {
             const auto& p = g.panels[pi];
             const std::size_t n = p.points.size();
-            if (n < 3) continue;
+            if (n < 3 || !g.panelVisible(static_cast<int>(pi))) continue;
             const bool patch = g.attachmentOf(static_cast<int>(pi)) >= 0;
             const float orient = signedArea(p.points) > 0.0f ? 1.0f : -1.0f;
             const glm::vec3 dark = p.color * 0.45f, thread = glm::min(p.color * 1.9f + 0.06f, glm::vec3(1.0f));
@@ -185,8 +186,9 @@ bool buildPatternTexture(const Garment& g, const PrintImageLoader& load, const P
     }
 
     // Fermetures éclair : ruban tissé, deux rangées de dents qui s'emboîtent au milieu, piqûres le long des bords.
-    for (const auto& p : g.panels) {
-        if (p.finish != FabricFinish::Zipper || p.points.size() < 3) continue;
+    for (std::size_t pz = 0; pz < g.panels.size(); ++pz) {
+        const auto& p = g.panels[pz];
+        if (p.finish != FabricFinish::Zipper || p.points.size() < 3 || !g.panelVisible(static_cast<int>(pz))) continue;
         const std::size_t n = p.points.size();
         glm::vec2 d(1.0f, 0.0f);
         float longest = 0.0f;
@@ -235,7 +237,9 @@ bool buildPatternTexture(const Garment& g, const PrintImageLoader& load, const P
     }
 
     // Impressions, découpées au contour de leur pièce.
-    for (const auto& p : g.panels) {
+    for (std::size_t pp = 0; pp < g.panels.size(); ++pp) {
+        const auto& p = g.panels[pp];
+        if (!g.panelVisible(static_cast<int>(pp))) continue;
         for (const auto& pr : p.prints) {
             const io::RasterImage* img = load ? load(pr.image) : nullptr;
             if (img == nullptr || img->width <= 0 || img->height <= 0) continue;
