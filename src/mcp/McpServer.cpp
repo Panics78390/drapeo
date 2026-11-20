@@ -646,6 +646,16 @@ const std::vector<ToolDef>& toolDefs()
           {"x2_cm", "number", "Bout de la fermeture, côté curseur (cm).", true},
           {"y2_cm", "number", "Bout (cm).", true},
           {"largeur_cm", "number", "Largeur de la bande (cm, défaut 2,5)."}}},
+        {"ajouter_poche",
+         "Trace une poche directement sur une pièce (rectangle centré en x, y) et la coud à sa place : poche ouverte en haut, "
+         "rabat cousu en haut, ou renfort cousu tout le tour. Option : rabat ajouté au-dessus de l'ouverture.",
+         {{"piece", "piece", "Pièce qui reçoit la poche (index ou nom).", true},
+          {"x_cm", "number", "Centre de la poche (cm, coordonnées du patron de la pièce).", true},
+          {"y_cm", "number", "Centre (cm).", true},
+          {"largeur_cm", "number", "Largeur de la poche (cm).", true},
+          {"hauteur_cm", "number", "Hauteur de la poche (cm).", true},
+          {"type", "string", "« poche » (défaut), « rabat » ou « tout_le_tour »."},
+          {"avec_rabat", "boolean", "Poche seulement : ajoute un rabat au-dessus (défaut false)."}}},
         {"agrandir_piece", "Agrandit (distance > 0) ou rétrécit (< 0) tout le contour d'une pièce. Les coutures sont gardées.",
          {{"piece", "piece", "Index ou nom de la pièce.", true}, {"distance_cm", "number", "Décalage du contour (cm).", true}}},
         {"simuler",
@@ -1308,6 +1318,22 @@ bool Server::callTool(const std::string& name, const Json& argsIn, std::string& 
             const int puller = static_cast<int>(g.panels.size()) - 1;
             save("Fermeture éclair posée sur « " + P(i).name + " » : bande = pièce " + std::to_string(zi) +
                  (puller != zi ? ", curseur = pièce " + std::to_string(puller) : std::string()) + ".");
+            return true;
+        }
+        if (name == "ajouter_poche") {
+            const int i = panelRef(g, args);
+            const glm::vec2 c(static_cast<float>(numRequired(args, "x_cm") / 100.0), static_cast<float>(numRequired(args, "y_cm") / 100.0));
+            const glm::vec2 h(static_cast<float>(numRequired(args, "largeur_cm") / 200.0), static_cast<float>(numRequired(args, "hauteur_cm") / 200.0));
+            const std::string type = str(args, "type", "poche");
+            garment::AttachKind kind = garment::AttachKind::Pocket;
+            if (type == "rabat") kind = garment::AttachKind::Flap;
+            else if (type == "tout_le_tour") kind = garment::AttachKind::AllRound;
+            else if (type != "poche") fail("type : « poche », « rabat » ou « tout_le_tour ».");
+            std::string err;
+            const int pi = garment::addPocket(g, i, c - glm::abs(h), c + glm::abs(h), kind, args.get("avec_rabat").asBool(false), err);
+            if (pi < 0) fail(err);
+            const int last = static_cast<int>(g.panels.size()) - 1;
+            save("Poche cousue sur « " + P(i).name + " » : pièce " + std::to_string(pi) + (last != pi ? ", rabat = pièce " + std::to_string(last) : std::string()) + ".");
             return true;
         }
         if (name == "ajouter_pli") {

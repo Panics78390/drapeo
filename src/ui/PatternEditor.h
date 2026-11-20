@@ -19,7 +19,7 @@
 
 namespace drapeo::ui {
 
-enum class Tool { Select, Transform, CurvePoint, Curvature, Smooth, AddPoint, Slash, CutPanel, Fold, Zipper, Polygon, Rectangle, Seam, FreeSeam, Gusset };
+enum class Tool { Select, Transform, CurvePoint, Curvature, Smooth, AddPoint, Slash, CutPanel, Fold, Zipper, Pocket, Polygon, Rectangle, Seam, FreeSeam, Gusset };
 
 /// Outils d'édition du patron (menu de la barre d'outils) : nom, raccourci, aide.
 struct ToolInfo {
@@ -45,7 +45,7 @@ inline constexpr ToolInfo kEditTools[] = {
 };
 [[nodiscard]] inline bool isEditTool(Tool t)
 {
-    return t != Tool::Polygon && t != Tool::Rectangle && t != Tool::Seam && t != Tool::FreeSeam && t != Tool::Gusset;
+    return t != Tool::Polygon && t != Tool::Rectangle && t != Tool::Pocket && t != Tool::Seam && t != Tool::FreeSeam && t != Tool::Gusset;
 }
 /// Outils de couture (liste déroulante du bouton Couture)
 inline constexpr ToolInfo kSeamTools[] = {
@@ -94,7 +94,9 @@ public:
     bool magnet = true;           // aimant : points et pièces s'accrochent aux points et bords voisins
     float spreadDeg = 15.0f;
     float gussetWidth = 0.03f;
-    float zipperWidth = 0.025f;   // « Fermeture éclair » : largeur de la bande (m)
+    float zipperWidth = 0.025f;
+    int pocketKind = 0;           // « Poche » : 0 poche ouverte en haut, 1 rabat, 2 tout le tour
+    bool pocketFlap = true;       // « Poche » : ajouter un rabat au-dessus de l'ouverture   // « Fermeture éclair » : largeur de la bande (m)
     float foldAngle = 90.0f;      // « Ligne de pli » : angle des nouvelles lignes (> 0 vers l'endroit)
     float foldStrength = 0.8f;
     int foldPanel = -1, foldIndex = -1;   // ligne de pli choisie    // « Bande de soufflet » : largeur de la bande (m)      // « Fendre et écarter » : angle d'ouverture
@@ -181,7 +183,7 @@ private:
     bool needsFrame_ = true;
 
     // États d'interaction
-    enum class Drag { None, Point, Points, Panel, Pan, Rect, Backdrop, Marquee, Scale, Rotate, Move, Curve, Smooth, Round, CutLine, FoldLine, ZipLine } drag_ = Drag::None;
+    enum class Drag { None, Point, Points, Panel, Pan, Rect, Backdrop, Marquee, Scale, Rotate, Move, Curve, Smooth, Round, CutLine, FoldLine, ZipLine, PocketRect } drag_ = Drag::None;
     glm::vec2 dragStart_{0.0f};
     glm::vec2 dragLast_{0.0f};
     std::vector<glm::vec2> drawing_;  // polygone en cours

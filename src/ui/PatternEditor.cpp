@@ -507,6 +507,9 @@ std::string PatternEditor::hint() const
                                : "Fendre et écarter : cliquez maintenant le point charnière (la pièce pivote autour de lui).";
     case Tool::Zipper:
         return "Fermeture éclair : tracez la fermeture sur une pièce, en finissant du côté du curseur (Maj : droite ou à 45°).";
+    case Tool::Pocket:
+        return "Poche : tracez un rectangle sur une pièce, la poche y est cousue tout de suite (type et rabat dans la barre d'outils). "
+               "Glissez-la ensuite pour la placer.";
     case Tool::Fold:
         return foldPanel >= 0 ? "Ligne de pli choisie : réglez son angle et sa force dans la barre d'outils, Suppr pour la retirer."
                               : "Ligne de pli : tracez une ligne sur une pièce (Maj : droite ou à 45°). Clic sur une ligne de pli pour la choisir.";
@@ -811,6 +814,10 @@ bool PatternEditor::draw(garment::Garment& g)
             }
             case Tool::Zipper:
                 drag_ = Drag::ZipLine;
+                dragStart_ = cutEnd_ = mw;
+                break;
+            case Tool::Pocket:
+                drag_ = Drag::PocketRect;
                 dragStart_ = cutEnd_ = mw;
                 break;
             case Tool::CutPanel:
@@ -1304,6 +1311,41 @@ bool PatternEditor::draw(garment::Garment& g)
                 }
             }
         }
+    } else if (drag_ == Drag::PocketRect) {
+        cutEnd_ = mw;
+        if (shift_) {   // Maj : carrée
+            const glm::vec2 d = mw - dragStart_;
+            const float m = std::max(std::abs(d.x), std::abs(d.y));
+            cutEnd_ = dragStart_ + glm::vec2(d.x < 0 ? -m : m, d.y < 0 ? -m : m);
+        }
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            drag_ = Drag::None;
+            const glm::vec2 c = 0.5f * (dragStart_ + cutEnd_);
+            // Pièce sous le centre : la première qui n'est pas elle-même une poche.
+            int base = -1;
+            for (int p = static_cast<int>(g.panels.size()) - 1; p >= 0 && base < 0; --p)
+                if (g.panelEditable(p) && g.attachmentOf(p) < 0 && garment::pointInPolygon(g.panels[static_cast<std::size_t>(p)].points, c)) base = p;
+            if (glm::distance(dragStart_, cutEnd_) * zoom_ > 6.0f) {
+                std::string error;
+                const int pi = garment::addPocket(g, base, dragStart_, cutEnd_, static_cast<garment::AttachKind>(pocketKind),
+                                                  pocketFlap && pocketKind == 0, error);
+                if (pi >= 0) {
+                    selectedPanel = pi;
+                    selection.clear();
+                    committed = true;
+                    const glm::vec2 sz = glm::abs(cutEnd_ - dragStart_) * 100.0f;
+                    char text[160];
+                    std::snprintf(text, sizeof(text), "Poche de %.1f x %.1f cm cousue sur « %s »%s. Glissez-la pour la placer.", static_cast<double>(sz.x),
+                                  static_cast<double>(sz.y), g.panels[static_cast<std::size_t>(base)].name.c_str(),
+                                  pocketFlap && pocketKind == 0 ? ", avec son rabat" : "");
+                    notice = text;
+                    noticeError = false;
+                } else {
+                    notice = error;
+                    noticeError = true;
+                }
+            }
+        }
     } else if (drag_ == Drag::FoldLine) {
         glm::vec2 e = mw;
         if (shift_) {
@@ -1622,6 +1664,7 @@ bool PatternEditor::draw(garment::Garment& g)
             if (ImGui::IsKeyPressed(ImGuiKey_X)) tool = Tool::CutPanel;
             if (ImGui::IsKeyPressed(ImGuiKey_K)) tool = Tool::Fold;
             if (ImGui::IsKeyPressed(ImGuiKey_J)) tool = Tool::Zipper;
+            if (ImGui::IsKeyPressed(ImGuiKey_O)) tool = Tool::Pocket;
             if (ImGui::IsKeyPressed(ImGuiKey_I)) traceRequested = true;
             if (ImGui::IsKeyPressed(ImGuiKey_P)) tool = Tool::Polygon;
             if (ImGui::IsKeyPressed(ImGuiKey_B)) tool = Tool::Rectangle;
@@ -2037,6 +2080,19 @@ bool PatternEditor::draw(garment::Garment& g)
         dl->AddCircleFilled(b, 5.0f, IM_COL32(200, 200, 205, 255), 12);
     }
     if (drag_ == Drag::FoldLine) dl->AddLine(toScreen(dragStart_), toScreen(cutEnd_), IM_COL32(120, 230, 160, 230), 2.0f);
+    if (drag_ == Drag::PocketRect) {   // aperçu de la poche (et de son rabat) avec ses cotes
+        const glm::vec2 a = glm::min(dragStart_, cutEnd_), b = glm::max(dragStart_, cutEnd_);
+        dl->AddRectFilled(toScreen({a.x, b.y}), toScreen({b.x, a.y}), IM_COL32(230, 200, 120, 40));
+        dl->AddRect(toScreen({a.x, b.y}), toScreen({b.x, a.y}), IM_COL32(230, 200, 120, 230), 0.0f, 0, 1.6f);
+        if (pocketFlap && pocketKind == 0) {
+            const float fh = std::clamp((b.y - a.y) * 0.35f, 0.03f, 0.07f);
+            dl->AddRect(toScreen({a.x - 0.005f, b.y + 0.012f}), toScreen({b.x + 0.005f, b.y + 0.012f - fh}), IM_COL32(230, 200, 120, 150), 0.0f, 0, 1.0f);
+        }
+        char t[48];
+        std::snprintf(t, sizeof(t), "%.1f x %.1f cm", static_cast<double>((b.x - a.x) * 100.0f), static_cast<double>((b.y - a.y) * 100.0f));
+        const ImVec2 sp = toScreen({b.x, a.y});
+        dl->AddText({sp.x + 6, sp.y + 2}, IM_COL32(230, 200, 120, 255), t);
+    }
     // Outil Couper la pièce : ligne tracée et points de coupe
     if (drag_ == Drag::CutLine) {
         const ImU32 red = IM_COL32(255, 90, 90, 240);

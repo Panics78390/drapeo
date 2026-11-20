@@ -132,7 +132,7 @@ void label(const char* text)
 }
 
 // --- Icônes dessinées (aucune ressource externe) ---------------------------
-enum class Icon { Select, Polygon, Rectangle, Seam, Magnet, Symmetry, Play, Pause, Step, Reset, Frame };
+enum class Icon { Select, Polygon, Rectangle, Pocket, Seam, Magnet, Symmetry, Play, Pause, Step, Reset, Frame };
 
 void drawIcon(ImDrawList* dl, Icon icon, ImVec2 c, float r, ImU32 col)
 {
@@ -159,6 +159,23 @@ void drawIcon(ImDrawList* dl, Icon icon, ImVec2 c, float r, ImU32 col)
         dl->AddRect(P(-0.75f, -0.6f), P(0.75f, 0.6f), col, 0.0f, 0, t);
         for (const ImVec2 p : {P(-0.75f, -0.6f), P(0.75f, -0.6f), P(0.75f, 0.6f), P(-0.75f, 0.6f)})
             dl->AddRectFilled({p.x - t * 1.2f, p.y - t * 1.2f}, {p.x + t * 1.2f, p.y + t * 1.2f}, col);
+        break;
+    }
+    case Icon::Pocket: {   // poche plaquée : fond arrondi, surpiqûre en tirets, rabat en pointe
+        dl->PathLineTo(P(-0.7f, -0.35f));
+        dl->PathLineTo(P(-0.7f, 0.55f));
+        dl->PathLineTo(P(-0.45f, 0.8f));
+        dl->PathLineTo(P(0.45f, 0.8f));
+        dl->PathLineTo(P(0.7f, 0.55f));
+        dl->PathLineTo(P(0.7f, -0.35f));
+        dl->PathStroke(col, 0, t);
+        dl->PathLineTo(P(-0.8f, -0.8f));
+        dl->PathLineTo(P(0.8f, -0.8f));
+        dl->PathLineTo(P(0.8f, -0.35f));
+        dl->PathLineTo(P(0.0f, -0.05f));
+        dl->PathLineTo(P(-0.8f, -0.35f));
+        dl->PathStroke(col, ImDrawFlags_Closed, t);
+        for (int i = 0; i < 3; ++i) dl->AddLine(P(-0.42f + 0.32f * i, 0.5f), P(-0.26f + 0.32f * i, 0.5f), col, t * 0.8f);
         break;
     }
     case Icon::Seam: {
@@ -2190,6 +2207,7 @@ void App::drawMenuBar()
         ImGui::Separator();
         if (ImGui::MenuItem("Polygone", "P", editor_.tool == Tool::Polygon)) editor_.tool = Tool::Polygon;
         if (ImGui::MenuItem("Rectangle", "B", editor_.tool == Tool::Rectangle)) editor_.tool = Tool::Rectangle;
+        if (ImGui::MenuItem("Poche", "O", editor_.tool == Tool::Pocket)) editor_.tool = Tool::Pocket;
         for (const auto& t : ui::kSeamTools)
             if (ImGui::MenuItem(t.name, t.key, editor_.tool == t.tool)) editor_.tool = t.tool;
         ImGui::EndMenu();
@@ -2287,6 +2305,17 @@ void App::drawToolbar()
             ImGui::DragFloat("##spread", &editor_.spreadDeg, 0.5f, -90.0f, 90.0f, "Écart %.1f°");
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Angle d'ouverture de « Fendre et écarter »");
         }
+        if (editor_.tool == Tool::Pocket) {
+            ImGui::SameLine(0, 6);
+            ImGui::SetCursorPosY(y + (b - ImGui::GetFrameHeight()) * 0.5f);
+            ImGui::SetNextItemWidth(std::round(170.0f * uiScale_));
+            static const char* const kPocketKinds[] = {"Poche (ouverte en haut)", "Rabat (cousu en haut)", "Tout le tour (renfort)"};
+            ImGui::Combo("##pochetype", &editor_.pocketKind, kPocketKinds, IM_ARRAYSIZE(kPocketKinds));
+            if (editor_.pocketKind == 0) {
+                ImGui::SameLine(0, 6);
+                ImGui::Checkbox("Avec rabat", &editor_.pocketFlap);
+            }
+        }
         if (editor_.tool == Tool::Zipper) {
             ImGui::SameLine(0, 6);
             ImGui::SetCursorPosY(y + (b - ImGui::GetFrameHeight()) * 0.5f);
@@ -2340,6 +2369,9 @@ void App::drawToolbar()
     ImGui::SameLine(0, 2);
     if (iconButton("rect", Icon::Rectangle, "Rectangle (B)\nTracer une pièce rectangulaire", editor_.tool == Tool::Rectangle, b))
         editor_.tool = Tool::Rectangle;
+    ImGui::SameLine(0, 2);
+    if (iconButton("poche", Icon::Pocket, "Poche (O)\nTracer un rectangle sur une pièce : la poche y est cousue directement", editor_.tool == Tool::Pocket, b))
+        editor_.tool = Tool::Pocket;
     ImGui::SameLine(0, 2);
     {
         // Bouton de l'outil de couture courant + liste déroulante (bord à bord, libre)
@@ -3042,6 +3074,48 @@ void App::drawPieceMenu()
         ImGui::EndMenu();
     }
     item("Nouvelle couleur de tissu", nullptr, A::NewFabric, has);
+    // Poche : coudre la pièce sur celle qui est dessous dans le patron, ou la découdre.
+    if (t.size() == 1) {
+        const int p = t[0];
+        const int at = garment_.attachmentOf(p);
+        bool isBase = false;
+        for (const auto& a : garment_.attachments) isBase = isBase || a.base == p;
+        if (at >= 0) {
+            const int base = garment_.attachments[static_cast<std::size_t>(at)].base;
+            if (ImGui::MenuItem(("Découdre de « " + garment_.panels[static_cast<std::size_t>(base)].name + " »").c_str())) {
+                garment_.attachments.erase(garment_.attachments.begin() + at);
+                commitGarment();
+                setStatus("Pièce décousue : elle redevient une pièce libre.", false);
+            }
+        } else if (!isBase) {
+            const auto& self = garment_.panels[static_cast<std::size_t>(p)].points;
+            glm::vec2 lo(1e9f), hi(-1e9f);
+            for (const auto& q : self) {
+                lo = glm::min(lo, q);
+                hi = glm::max(hi, q);
+            }
+            const glm::vec2 c = (lo + hi) * 0.5f;
+            int under = -1;
+            for (int q = n - 1; q >= 0 && under < 0; --q)
+                if (q != p && garment_.attachmentOf(q) < 0 && garment_.panelEditable(q) &&
+                    garment::pointInPolygon(garment_.panels[static_cast<std::size_t>(q)].points, c))
+                    under = q;
+            if (under >= 0 && ImGui::BeginMenu(("Coudre sur « " + garment_.panels[static_cast<std::size_t>(under)].name + " »").c_str())) {
+                int kind = -1;
+                if (ImGui::MenuItem("Poche (ouverte en haut)")) kind = 0;
+                if (ImGui::MenuItem("Rabat (cousu en haut)")) kind = 1;
+                if (ImGui::MenuItem("Tout le tour (renfort, écusson)")) kind = 2;
+                ImGui::EndMenu();
+                if (kind >= 0 && garment_.attachPatch(p, under, c, static_cast<garment::AttachKind>(kind)) >= 0) {
+                    auto& col = garment_.panels[static_cast<std::size_t>(p)].color;
+                    const glm::vec3 baseCol = garment_.panels[static_cast<std::size_t>(under)].color;
+                    if (glm::distance(col, baseCol) < 0.1f) col = baseCol * 0.82f;
+                    commitGarment();
+                    setStatus("Pièce cousue à sa place. Glissez-la pour la déplacer sur « " + garment_.panels[static_cast<std::size_t>(under)].name + " ».", false);
+                }
+            }
+        }
+    }
     if (ImGui::BeginMenu("Calque", has)) {
         int target = -2;
         for (int k = 0; k < static_cast<int>(garment_.groups.size()); ++k) {

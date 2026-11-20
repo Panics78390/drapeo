@@ -1224,6 +1224,15 @@ int main()
             CHECK(g3.panels.size() == before + 4);
             CHECK(g3.panels[0].folds.size() == 1 && std::abs(g3.panels[0].folds[0].angleDeg + 120.0f) < 1e-3f);
         }
+        {   // poche tracée directement sur une pièce
+            garment::Garment g5;
+            CHECK(io::loadProject(path, g5, error));
+            const std::size_t before = g5.panels.size();
+            call("ajouter_poche", R"({"piece":0,"x_cm":0,"y_cm":5,"largeur_cm":4,"hauteur_cm":4,"avec_rabat":true})");
+            call("ajouter_poche", R"({"piece":0,"x_cm":900,"y_cm":900,"largeur_cm":4,"hauteur_cm":4})", false);   // hors de la pièce
+            call("ajouter_poche", R"({"piece":0,"x_cm":0,"y_cm":5,"largeur_cm":4,"hauteur_cm":4,"type":"autre"})", false);
+            CHECK(io::loadProject(path, g5, error) && g5.panels.size() == before + 2);
+        }
         {   // calque d'une pièce par l'outil
             call("modifier_piece", R"({"piece":0,"calque":"Veste"})");
             garment::Garment g4;
@@ -1234,6 +1243,26 @@ int main()
         }
         std::filesystem::remove(path);
         std::filesystem::remove(obj);
+    });
+
+    run("Poche tracée sur le patron : cousue à sa place, rabat au-dessus, refus hors pièce", [] {
+        garment::Garment g;
+        g.panels.push_back({});
+        g.panels[0].name = "Jambe";
+        g.panels[0].points = {{0, 0}, {0.3f, 0}, {0.3f, 0.6f}, {0, 0.6f}};
+        g.panels[0].color = {0.2f, 0.3f, 0.6f};
+        std::string error;
+        const int pi = garment::addPocket(g, 0, {0.05f, 0.2f}, {0.2f, 0.36f}, garment::AttachKind::Pocket, true, error);
+        CHECK(pi == 1 && g.panels.size() == 3 && g.attachments.size() == 2);
+        const auto& a = g.attachments[static_cast<std::size_t>(g.attachmentOf(pi))];
+        CHECK(a.base == 0 && glm::distance(a.at, glm::vec2(0.125f, 0.28f)) < 1e-5f && g.attachKind(a) == garment::AttachKind::Pocket);
+        // Dessinée à sa place sur la jambe (pas rangée ailleurs) ; ouverte en haut : 3 bords cousus.
+        CHECK(garment::pointInPolygon(g.panels[0].points, garment::centroid(g.panels[1].points)) && g.attachedEdges(a).size() == 3);
+        const auto& f = g.attachments[static_cast<std::size_t>(g.attachmentOf(2))];
+        CHECK(g.attachKind(f) == garment::AttachKind::Flap && f.at.y > a.at.y);
+        CHECK(garment::addPocket(g, 0, {0.5f, 0.5f}, {0.6f, 0.6f}, garment::AttachKind::Pocket, false, error) < 0);   // hors de la pièce
+        CHECK(garment::addPocket(g, pi, {0.1f, 0.25f}, {0.15f, 0.3f}, garment::AttachKind::Pocket, false, error) < 0);   // sur une poche
+        CHECK(garment::addPocket(g, 0, {0.1f, 0.1f}, {0.105f, 0.2f}, garment::AttachKind::Pocket, false, error) < 0);    // trop étroite
     });
 
     run("Calques : objets séparés, masqués (non simulés), verrouillés, enregistrés", [] {

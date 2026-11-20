@@ -1629,4 +1629,62 @@ int addZipper(Garment& g, int base, glm::vec2 a, glm::vec2 b, float width, std::
     return zi;
 }
 
+int addPocket(Garment& g, int base, glm::vec2 lo, glm::vec2 hi, AttachKind kind, bool withFlap, std::string& error)
+{
+    if (base < 0 || base >= static_cast<int>(g.panels.size())) {
+        error = "Tracez la poche sur une pièce du patron.";
+        return -1;
+    }
+    if (g.attachmentOf(base) >= 0) {
+        error = "Une poche se pose sur une pièce ordinaire, pas sur une autre poche.";
+        return -1;
+    }
+    const glm::vec2 a = glm::min(lo, hi), b = glm::max(lo, hi);
+    const glm::vec2 size = b - a, c = 0.5f * (a + b);
+    if (size.x < 0.01f || size.y < 0.01f) {
+        error = "Poche trop petite (1 cm au moins de chaque côté).";
+        return -1;
+    }
+    const Panel& bp = g.panels[static_cast<std::size_t>(base)];
+    if (!pointInPolygon(bp.points, c)) {
+        error = "Le centre de la poche doit être sur la pièce.";
+        return -1;
+    }
+    int pockets = 0;
+    for (const auto& at : g.attachments) pockets += at.base == base ? 1 : 0;
+    const std::string suffix = " " + std::to_string(pockets + 1) + " (" + bp.name + ")";
+    auto makePatch = [&](const char* name, glm::vec2 p0, glm::vec2 p1, float shade) {
+        Panel p;
+        p.name = std::string(name) + suffix;
+        p.points = {p0, {p1.x, p0.y}, p1, {p0.x, p1.y}};   // sens trigonométrique, bord 2 = haut
+        p.color = bp.color * shade;
+        p.finish = bp.finish;
+        p.placement = bp.placement;
+        p.layer = bp.layer;
+        p.group = bp.group;
+        return p;
+    };
+    const char* label = kind == AttachKind::Flap ? "Rabat" : kind == AttachKind::AllRound ? "Renfort" : "Poche";
+    Panel pocket = makePatch(label, a, b, 0.82f);
+    pocket.thickRender = 0.002f;   // affichée juste au-dessus de la base
+    g.panels.push_back(pocket);
+    const int pi = static_cast<int>(g.panels.size()) - 1;
+    if (g.attachPatch(pi, base, c, kind) < 0) {
+        g.panels.pop_back();
+        error = "La poche n'a pas pu être cousue sur la pièce.";
+        return -1;
+    }
+    if (withFlap && kind == AttachKind::Pocket) {
+        // Rabat : un peu plus large que la poche, recouvre son ouverture, cousu par le haut 1,2 cm au-dessus.
+        const float fh = std::clamp(size.y * 0.35f, 0.03f, 0.07f);
+        const glm::vec2 f0(a.x - 0.005f, b.y + 0.012f - fh), f1(b.x + 0.005f, b.y + 0.012f);
+        Panel flap = makePatch("Rabat", f0, f1, 0.72f);
+        flap.thickRender = 0.004f;   // affiché par-dessus la poche
+        g.panels.push_back(flap);
+        const int fi = static_cast<int>(g.panels.size()) - 1;
+        if (g.attachPatch(fi, base, 0.5f * (f0 + f1), AttachKind::Flap) < 0) g.removePanel(fi);
+    }
+    return pi;
+}
+
 } // namespace drapeo::garment

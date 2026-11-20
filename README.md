@@ -53,6 +53,7 @@ Redémarrer Claude Desktop. Sans `--projet`, le serveur travaille sur `Documents
 | `projet_info` | Pièces (points, bords, longueurs), coutures — en cm |
 | `nouveau_projet`, `ouvrir_projet`, `enregistrer_sous` | Projet vide ou modèle (débardeur, jupe, robe), changer de fichier |
 | `ajouter_piece`, `ajouter_rectangle`, `dupliquer_piece`, `supprimer_piece` | Pièces de patron et leur placement autour du corps |
+| `ajouter_poche` | Poche tracée directement sur une pièce (rectangle), cousue à sa place, rabat en option |
 | `modifier_piece`, `deplacer_piece` | Nom, couleur, aspect du tissu, zone, angle, hauteur, droit fil, symétrie, état 3D, propriétés de simulation, calque |
 | `poser_piece` | Pose une poche, un rabat, un renfort ou une bande sur une autre pièce |
 | `ajouter_impression`, `supprimer_impression` | Logo, inscription, drapeau ou bande imprimés sur une pièce |
@@ -216,6 +217,20 @@ endroit du corps en 3D. Affichage › « Ombre de l'avatar dans le patron » pou
   fait faire un demi-tour à la pièce sur elle-même.
 - Les pièces tracées (polygone, rectangle) sont posées **à plat** devant le corps ; l'inspecteur (Placement › Forme)
   permet de choisir « Plate » ou « Enroulée » autour du corps.
+
+## Poches tracées sur le patron
+
+L'outil **Poche** (bouton à côté du Rectangle, touche **O**) pose une poche en un geste :
+
+1. Choisir à côté du bouton le type : **Poche** (ouverte en haut), **Rabat** (cousu en haut) ou **Tout le tour**
+   (renfort, écusson), et cocher **Avec rabat** pour ajouter un rabat au-dessus de l'ouverture.
+2. Tracer un rectangle directement sur la pièce (Maj : carré). La poche est cousue tout de suite, à cet endroit,
+   et reste dessinée sur la pièce ; ses cotes s'affichent pendant le tracé.
+3. La glisser ensuite (outil Z) pour la placer : elle glisse sur sa pièce.
+
+Une pièce déjà dessinée (forme libre) se coud aussi sans passer par les propriétés : la poser sur la pièce
+dans le patron, puis clic droit › **Coudre sur « … »** › type. Clic droit › **Découdre** la rend libre.
+L'assistant dispose de l'outil `ajouter_poche`.
 
 ## Calques (objets séparés)
 

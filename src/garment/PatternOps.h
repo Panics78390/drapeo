@@ -130,6 +130,12 @@ int sewGussetTop(Garment& g, int strip, int panel, float s0, float len);
 /// et un curseur avec sa tirette au bout `b`, cousu par le haut. Renvoie l'index de la bande, ou -1 (et `error`).
 int addZipper(Garment& g, int base, glm::vec2 a, glm::vec2 b, float width, std::string& error);
 
+/// Poche tracée directement sur `base` : rectangle [lo, hi] (coordonnées du patron, centre sur la pièce),
+/// cousu selon `kind` (poche ouverte en haut, rabat, tout le tour) et dessiné à sa place, par-dessus la base.
+/// `withFlap` ajoute un rabat cousu en haut, au-dessus de l'ouverture. Renvoie l'index de la poche
+/// (le rabat, s'il y en a un, suit), ou -1 (et `error`).
+int addPocket(Garment& g, int base, glm::vec2 lo, glm::vec2 hi, AttachKind kind, bool withFlap, std::string& error);
+
 /// Propriété commune pour « sélectionner les pièces semblables ».
 enum class SameProperty { Color, Zone, LinkGroup };
 std::vector<int> panelsLike(const Garment& g, int panel, SameProperty property);
