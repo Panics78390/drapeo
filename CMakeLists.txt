@@ -55,6 +55,7 @@ add_library(drapeo_core STATIC
   src/io/PdfImport.cpp
   src/io/ProjectFile.cpp
   src/io/Settings.cpp
+  src/io/ViewCapture.cpp
   src/garment/BodyAxes.cpp
   src/geometry/Mannequin.cpp
   src/garment/Pattern.cpp

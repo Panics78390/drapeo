@@ -22,6 +22,7 @@
 #include "io/PdfImport.h"
 #include "io/ProjectFile.h"
 #include "io/RasterImage.h"
+#include "io/ViewCapture.h"
 #include "garment/GarmentMesher.h"
 #include "garment/PatternOps.h"
 #include "garment/PrintAtlas.h"
@@ -1189,6 +1190,44 @@ int main()
         mcp::Json sim;
         CHECK(mcp::Json::parse(call("simuler", R"({"secondes":0.5,"exporter_obj":")" + obj + R"("})"), sim, error));
         CHECK(sim.get("particules").asNumber() > 100 && sim.has("encombrement") && std::filesystem::exists(obj));
+        // Capture de la vue 3D : PNG lisible, image jointe à la réponse MCP.
+        const std::string png = (std::filesystem::temp_directory_path() / "drapeo_test_vue.png").string();
+        std::filesystem::remove(png);
+        mcp::Json cap;
+        CHECK(mcp::Json::parse(call("capture_vue", R"({"angle":"toutes","secondes":0.3,"largeur_px":600,"chemin_png":")" + png + R"("})"), cap, error));
+        CHECK(cap.get("vues").size() == 3 && std::filesystem::exists(png) && !server.lastImage().empty());
+        {
+            io::RasterImage img;
+            CHECK(io::loadRasterImage(png, img, error));
+            CHECK(img.width == 600 && img.height == 280);
+        }
+        call("capture_vue", R"({"angle":"en_haut"})", false);
+        CHECK(server.lastImage().empty());
+        {
+            mcp::Json resp;
+            CHECK(mcp::Json::parse(server.handleLine(R"({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"capture_vue","arguments":{"angle":90,"secondes":0.2,"largeur_px":200}}})"), resp, error));
+            const auto& content = resp.get("result").get("content");
+            CHECK(content.size() == 2 && content.at(1).get("type").asString() == "image" &&
+                  content.at(1).get("data").asString().rfind("iVBORw0KGgo", 0) == 0);
+        }
+        // Rendu seul : un triangle rouge devant un fond gris.
+        {
+            std::vector<glm::vec3> pos{{-1, 0, 0}, {1, 0, 0}, {0, 2, 0}};
+            std::vector<uint32_t> idx{0, 1, 2};
+            io::CaptureMesh m;
+            m.positions = &pos;
+            m.indices = &idx;
+            m.color = glm::vec3(1, 0, 0);
+            io::CaptureOptions o;
+            o.width = 100;
+            int w = 0, h = 0;
+            std::vector<uint8_t> rgb;
+            io::renderView({m}, o, w, h, rgb);
+            const std::size_t c = (static_cast<std::size_t>(h / 2) * w + w / 2) * 3;
+            CHECK(w == 100 && h == 140 && rgb[c] > 120 && rgb[c + 1] < 40);
+            CHECK(rgb[0] > 200 && rgb[1] > 200);   // coin : fond
+            CHECK(io::base64({'M', 'a', 'n'}) == "TWFu" && io::base64({'M'}) == "TQ==");
+        }
         // Outils ajoutés : aspect, impression, pose d'une pièce, allongement.
         call("modifier_piece", R"({"piece":0,"aspect":"ripstop"})");
         call("modifier_piece", R"({"piece":0,"aspect":"velours"})", false);

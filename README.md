@@ -66,6 +66,7 @@ Redémarrer Claude Desktop. Sans `--projet`, le serveur travaille sur `Documents
 | `coudre`, `inverser_couture`, `supprimer_couture` | Coutures bord à bord (sur plusieurs bords si besoin) |
 | `arrondir_coin`, `couper_bord`, `ajouter_pince`, `deplier`, `agrandir_piece` | Opérations de forme |
 | `simuler` | Drapé sur l'avatar du projet, bilan (coutures ouvertes, étirement, pièces tombées) et export OBJ |
+| `capture_vue` | Image PNG de la vue 3D simulée (face, profil, dos, trois quarts, angle en degrés, ou « toutes » côte à côte), jointe à la réponse pour que l'assistant voie le résultat ; `chemin_png` pour l'enregistrer |
 | `ouvrir_dans_drapeo` | Ouvre le projet dans Drapeo |
 
 **En direct** : quand Drapeo a ouvert (ou enregistré) un projet, il le **recharge tout seul** dès qu'un autre programme le modifie ; on voit donc les changements de l'assistant au fur et à mesure (Ctrl+Z annule un rechargement). Dans l'autre sens, enregistrez (Ctrl+S) pour que l'assistant voie vos modifications.

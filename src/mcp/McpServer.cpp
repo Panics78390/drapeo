@@ -19,6 +19,7 @@
 #include "io/MeshImport.h"
 #include "io/ProjectFile.h"
 #include "io/RasterImage.h"
+#include "io/ViewCapture.h"
 #include "simulation/GarmentSetup.h"
 #include "simulation/Materials.h"
 #include "simulation/XpbdSolver.h"
@@ -664,6 +665,18 @@ const std::vector<ToolDef>& toolDefs()
          {{"secondes", "number", "Durée simulée (défaut 4, max 30)."},
           {"matiere", "string", "Coton (défaut), Soie, Denim ou Cuir."},
           {"exporter_obj", "string", "Chemin d'un fichier .obj où enregistrer le vêtement drapé (facultatif)."}}},
+        {"capture_vue",
+         "Simule le drapé puis renvoie une image PNG de la vue 3D (vêtement sur l'avatar) : face, profil, dos, trois quarts "
+         "ou un angle en degrés ; « toutes » met face, profil et dos côte à côte. L'image est jointe à la réponse et peut "
+         "être enregistrée.",
+         {{"angle", "string", "face (défaut), profil, dos, profil_droit, trois_quarts, trois_quarts_dos, toutes, ou degrés (0 = face, 90 = profil gauche, 180 = dos)."},
+          {"chemin_png", "string", "Fichier .png où enregistrer l'image (facultatif)."},
+          {"secondes", "number", "Durée simulée avant la capture (défaut 4, max 30)."},
+          {"matiere", "string", "Coton (défaut), Soie, Denim ou Cuir."},
+          {"largeur_px", "number", "Largeur totale de l'image (défaut 600 pour une vue, 1200 pour plusieurs ; max 2400)."},
+          {"cadrage", "string", "« avatar » (défaut) ou « vetement » (zoom sur le vêtement)."},
+          {"avec_avatar", "boolean", "Afficher l'avatar (défaut true)."},
+          {"plongee", "number", "Inclinaison de la caméra vers le bas, en degrés (défaut 0)."}}},
         {"ouvrir_dans_drapeo",
          "Ouvre le projet dans la fenêtre de Drapeo. Ensuite, chaque modification faite par les outils s'affiche en direct.", {}},
     };
@@ -671,8 +684,18 @@ const std::vector<ToolDef>& toolDefs()
 }
 
 // --- Simulation hors écran ---------------------------------------------------------
+/// Résultat géométrique d'une simulation (pour capture_vue).
+struct SimScene {
+    std::vector<glm::vec3> cloth;
+    std::vector<uint32_t> clothIndices;
+    std::vector<glm::vec3> clothColors;
+    std::vector<int> clothParts;
+    std::vector<glm::vec3> body;
+    std::vector<uint32_t> bodyIndices;
+};
+
 std::string simulate(const Garment& g, const io::ProjectAvatar& av, const std::string& projectPath, double seconds,
-                     const std::string& materialName, const std::string& objPath)
+                     const std::string& materialName, const std::string& objPath, SimScene* scene = nullptr)
 {
     if (g.empty()) fail("Le projet est vide : ajoutez des pièces d'abord.");
     // Avatar : celui du projet, sinon le mannequin intégré.
@@ -818,6 +841,118 @@ std::string simulate(const Garment& g, const io::ProjectAvatar& av, const std::s
         r["obj"] = objPath;
     }
     if (!note.empty()) r["remarque"] = note;
+    if (scene) {
+        scene->cloth = x;
+        scene->clothIndices = solver.indices();
+        scene->clothColors.assign(x.size(), glm::vec3(0.8f));
+        for (std::size_t v = 0; v < x.size() && v < gm.panelOfVertex.size(); ++v) {
+            const int p = gm.panelOfVertex[v];
+            if (p >= 0 && p < static_cast<int>(g.panels.size())) scene->clothColors[v] = g.panels[static_cast<std::size_t>(p)].color;
+        }
+        scene->clothParts = gm.panelOfVertex;
+        scene->body = std::move(body.positions);
+        scene->bodyIndices = std::move(body.indices);
+    }
+    return r.dump();
+}
+
+// --- Capture de la vue 3D ---------------------------------------------------------
+float angleOf(const std::string& name)
+{
+    const std::string a = lower(name);
+    if (a.empty() || a == "face" || a == "devant") return 0.0f;
+    if (a == "profil" || a == "profil_gauche" || a == "gauche") return 90.0f;
+    if (a == "dos" || a == "derriere" || a == "derrière") return 180.0f;
+    if (a == "profil_droit" || a == "droite") return 270.0f;
+    if (a == "3/4" || a == "trois_quarts") return 35.0f;
+    if (a == "3/4_dos" || a == "trois_quarts_dos") return 145.0f;
+    char* end = nullptr;
+    const double v = std::strtod(a.c_str(), &end);
+    if (end && end != a.c_str() && *end == '\0') return static_cast<float>(v);
+    fail("angle : face, profil, dos, profil_droit, trois_quarts, trois_quarts_dos, toutes, ou un nombre de degrés.");
+}
+
+std::string captureView(const Garment& g, const io::ProjectAvatar& av, const std::string& projectPath, const Json& args,
+                        std::vector<uint8_t>& png)
+{
+    // angle : texte, nombre, ou liste ; « toutes » = face + profil + dos côte à côte.
+    std::vector<float> angles;
+    std::vector<std::string> names;
+    const Json& a = args.get("angle");
+    auto addOne = [&](const Json& v) {
+        if (v.isNumber()) {
+            angles.push_back(static_cast<float>(v.asNumber()));
+            names.push_back(std::to_string(static_cast<int>(std::lround(v.asNumber()))) + "°");
+        } else if (lower(v.asString()) == "toutes" || lower(v.asString()) == "tout") {
+            for (const char* n : {"face", "profil", "dos"}) {
+                angles.push_back(angleOf(n));
+                names.push_back(n);
+            }
+        } else {
+            angles.push_back(angleOf(v.asString()));
+            names.push_back(v.asString().empty() ? std::string("face") : v.asString());
+        }
+    };
+    if (a.isArray()) for (const Json& v : a.items()) addOne(v);
+    else addOne(a);
+    if (angles.empty()) addOne(Json("face"));
+    if (angles.size() > 4) fail("4 angles au plus par capture.");
+
+    SimScene scene;
+    const std::string report = simulate(g, av, projectPath, num(args, "secondes", 4.0), str(args, "matiere"), {}, &scene);
+    const bool withBody = args.get("avec_avatar").asBool(true);
+    const std::string frame = lower(str(args, "cadrage", "avatar"));
+    if (frame != "avatar" && frame != "vetement" && frame != "vêtement") fail("cadrage : « avatar » ou « vetement ».");
+
+    std::vector<io::CaptureMesh> meshes;
+    io::CaptureMesh body;
+    body.positions = &scene.body;
+    body.indices = &scene.bodyIndices;
+    body.color = glm::vec3(0.62f, 0.60f, 0.58f);
+    body.frame = frame == "avatar";
+    if (withBody) meshes.push_back(body);
+    io::CaptureMesh cloth;
+    cloth.positions = &scene.cloth;
+    cloth.indices = &scene.clothIndices;
+    cloth.vertexColors = &scene.clothColors;
+    cloth.partOfVertex = &scene.clothParts;
+    cloth.depthBias = 0.002f;
+    meshes.push_back(cloth);
+
+    const int total = std::clamp(static_cast<int>(num(args, "largeur_px", angles.size() > 1 ? 1200.0 : 600.0)), 200, 2400);
+    io::CaptureOptions opt;
+    opt.width = std::max(160, total / static_cast<int>(angles.size()));
+    opt.pitchDeg = static_cast<float>(num(args, "plongee", 0.0));
+    std::vector<std::vector<uint8_t>> images;
+    std::vector<int> widths;
+    int w = 0, h = 0;
+    for (const float ang : angles) {
+        opt.yawDeg = ang;
+        images.emplace_back();
+        io::renderView(meshes, opt, w, h, images.back());
+        widths.push_back(w);
+    }
+    std::vector<uint8_t> rgb;
+    int width = 0;
+    io::joinSideBySide(images, widths, h, rgb, width);
+    if (!io::encodePng(rgb, width, h, png)) fail("Encodage PNG impossible.");
+
+    Json r = Json::object();
+    Json views = Json::array();
+    for (const auto& n : names) views.push(n);
+    r["vues"] = std::move(views);
+    r["image_px"] = std::to_string(width) + " x " + std::to_string(h);
+    const std::string path = str(args, "chemin_png");
+    if (!path.empty()) {
+        std::string err;
+        if (!io::writeBytes(path, png, err)) fail(err);
+        r["png"] = path;
+    }
+    Json sim;
+    std::string e;
+    if (Json::parse(report, sim, e)) r["simulation"] = std::move(sim);
+    r["lecture"] = "Vues côte à côte de gauche à droite, dans l'ordre de « vues ». Profil = côté gauche du personnage. "
+                   "Tissu aux couleurs des pièces (envers plus sombre), avatar en gris, traits sombres = bords des pièces. Les impressions (logos) ne sont pas dessinées.";
     return r.dump();
 }
 
@@ -892,6 +1027,7 @@ Json Server::toolList()
 
 bool Server::callTool(const std::string& name, const Json& argsIn, std::string& text, std::string& error)
 {
+    image_.clear();
     const Json args = argsIn.isObject() ? argsIn : Json::object();
     try {
         // Projet courant (vide s'il n'existe pas encore).
@@ -1370,6 +1506,10 @@ bool Server::callTool(const std::string& name, const Json& argsIn, std::string& 
             text = simulate(g, av, projectPath_, num(args, "secondes", 4.0), str(args, "matiere"), str(args, "exporter_obj"));
             return true;
         }
+        if (name == "capture_vue") {
+            text = captureView(g, av, projectPath_, args, image_);
+            return true;
+        }
         if (name == "ouvrir_dans_drapeo") {
             if (!fileExists(projectPath_)) save("");
             std::string err;
@@ -1440,6 +1580,13 @@ bool Server::handle(const Json& msg, Json& response)
         item["type"] = "text";
         item["text"] = ok ? text : error;
         content.push(std::move(item));
+        if (ok && !image_.empty()) {
+            Json img = Json::object();
+            img["type"] = "image";
+            img["data"] = io::base64(image_);
+            img["mimeType"] = "image/png";
+            content.push(std::move(img));
+        }
         result["content"] = std::move(content);
         if (!ok) result["isError"] = true;
     } else if (method == "resources/list") {

@@ -12,7 +12,9 @@
 // =============================================================================
 #pragma once
 
+#include <cstdint>
 #include <string>
+#include <vector>
 
 #include "mcp/Json.h"
 
@@ -34,9 +36,13 @@ public:
     /// Appelle un outil. Renvoie false (et `error`) si l'outil échoue.
     bool callTool(const std::string& name, const Json& args, std::string& text, std::string& error);
 
+    /// Image PNG produite par le dernier appel d'outil (capture_vue), vide sinon.
+    [[nodiscard]] const std::vector<uint8_t>& lastImage() const { return image_; }
+
 private:
     std::string projectPath_;
     std::string drapeoExe_;
+    std::vector<uint8_t> image_;   // image PNG jointe à la réponse du dernier outil (capture_vue)
 };
 
 /// Projet par défaut : Documents/Drapeo/mcp.drapeo (le dossier est créé si besoin).
