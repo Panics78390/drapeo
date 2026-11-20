@@ -227,12 +227,23 @@ bool buildGarmentMesh(const Garment& garment, const MeshingOptions& options, Gar
     }
     // Couture : les deux côtés reçoivent le même nombre total de segments, répartis
     // sur les bords de chaque côté au prorata de leur longueur.
+    // Un bord peut appartenir à plusieurs coutures (patte cousue sur une couture de milieu devant) : on
+    // recommence tant qu'un nombre change, chaque couture gardant au moins les points déjà donnés à ses côtés.
+    for (int pass = 0; pass < 6; ++pass) {
+    bool changed = false;
     for (const auto& s : garment.seams) {
         const auto A = garment.seamEdges(s, 0), B = garment.seamEdges(s, 1);
         if (A.empty() || B.empty()) continue;
         const float len = std::max(garment.seamLength(s, 0), garment.seamLength(s, 1));
         const float h = std::min(spacingOf(static_cast<std::size_t>(A.front().panel)), spacingOf(static_cast<std::size_t>(B.front().panel)));
-        const int m = std::max({static_cast<int>(std::lround(len / h)), static_cast<int>(A.size()), static_cast<int>(B.size()), 1});
+        int m = std::max({static_cast<int>(std::lround(len / h)), static_cast<int>(A.size()), static_cast<int>(B.size()), 1});
+        if (pass > 0) {
+            int sa = 0, sb = 0;
+            for (const auto& e : A) sa += segments[{e.panel, e.edge}];
+            for (const auto& e : B) sb += segments[{e.panel, e.edge}];
+            if (sa == sb && sa >= m) continue;   // déjà d'accord
+            m = std::max({m, sa, sb});
+        }
         for (const auto* chain : {&A, &B}) {
             float total = 0.0f;
             for (const auto& e : *chain) total += garment.edgeLength(e);
@@ -248,8 +259,14 @@ bool buildGarmentMesh(const Garment& garment, const MeshingOptions& options, Gar
             }
             std::sort(rest.begin(), rest.end(), [](const auto& x, const auto& y) { return x.first > y.first; });
             for (std::size_t k = 0; used < m; k = (k + 1) % rest.size(), ++used) ++segs[rest[k].second];
-            for (std::size_t k = 0; k < chain->size(); ++k) segments[{(*chain)[k].panel, (*chain)[k].edge}] = segs[k];
+            for (std::size_t k = 0; k < chain->size(); ++k) {
+                int& cur = segments[{(*chain)[k].panel, (*chain)[k].edge}];
+                if (cur != segs[k]) changed = true;
+                cur = segs[k];
+            }
         }
+    }
+    if (!changed) break;
     }
 
     // Sommets (indices globaux) de chaque bord, du début à la fin.
