@@ -83,11 +83,12 @@ public:
         ImTextureID texture = 0;
         glm::vec2 min{0.0f}, max{0.0f};   // coins bas-gauche et haut-droit (m)
     } prints;
-    /// Silhouette de l'avatar vu de face, sous le patron (coordonnées 2D = mètres du monde, pieds à y = 0).
+    /// Silhouette de l'avatar (de face, de profil ou du dessus), sous le patron (coordonnées 2D = mètres du monde, pieds à y = 0).
     struct Silhouette {
         ImTextureID texture = 0;
         glm::vec2 min{0.0f}, max{0.0f};
         bool visible = true;
+        int view = 0;   // 0 face (x, y), 1 profil (z, y : devant à droite), 2 dessus (x, z : devant en haut)
     } silhouette;
     float bodyScale = 1.0f;     // hauteur de l'avatar / 1,75 m
     float torsoCenterX = 0.0f;  // abscisse du centre du buste (avatar de 1,75 m)

@@ -1367,7 +1367,8 @@ bool App::loadAvatar(const std::string& path)
 
 void App::buildSilhouette()
 {
-    // Projection de face (x, y) des triangles de l'avatar dans une image : l'ombre du corps sous le patron.
+    // Projection des triangles de l'avatar dans une image : l'ombre du corps sous le patron,
+    // vue de face (x, y), de profil (z, y : devant à droite) ou du dessus (x, z : devant en haut).
     if (silhouetteTex_ != 0) {
         const gl::GLuint t = silhouetteTex_;
         gl::DeleteTextures(1, &t);
@@ -1377,17 +1378,26 @@ void App::buildSilhouette()
     const auto& pos = avatarPositions_;
     const auto& idx = avatarSource_.indices;
     if (pos.empty() || idx.size() < 3) return;
+    const int view = editor_.silhouette.view;
+    auto project = [view](const glm::vec3& p) {
+        if (view == 1) return glm::vec2(p.z, p.y);
+        if (view == 2) return glm::vec2(p.x, p.z);
+        return glm::vec2(p.x, p.y);
+    };
     glm::vec2 lo(1e9f), hi(-1e9f);
     for (const auto& p : pos) {
-        lo = glm::min(lo, glm::vec2(p.x, p.y));
-        hi = glm::max(hi, glm::vec2(p.x, p.y));
+        lo = glm::min(lo, project(p));
+        hi = glm::max(hi, project(p));
     }
     const float ppm = 400.0f;   // pixels par mètre
     const int w = std::clamp(static_cast<int>((hi.x - lo.x) * ppm) + 4, 8, 2048);
     const int h = std::clamp(static_cast<int>((hi.y - lo.y) * ppm) + 4, 8, 2048);
     const float sx = static_cast<float>(w - 4) / std::max(hi.x - lo.x, 1e-3f), sy = static_cast<float>(h - 4) / std::max(hi.y - lo.y, 1e-3f);
     std::vector<unsigned char> mask(static_cast<std::size_t>(w) * static_cast<std::size_t>(h), 0);
-    auto toPx = [&](const glm::vec3& p) { return glm::vec2((p.x - lo.x) * sx + 2.0f, (hi.y - p.y) * sy + 2.0f); };
+    auto toPx = [&](const glm::vec3& p3) {
+        const glm::vec2 p = project(p3);
+        return glm::vec2((p.x - lo.x) * sx + 2.0f, (hi.y - p.y) * sy + 2.0f);
+    };
     for (std::size_t t = 0; t + 2 < idx.size(); t += 3) {
         if (idx[t] >= pos.size() || idx[t + 1] >= pos.size() || idx[t + 2] >= pos.size()) continue;
         const glm::vec2 a = toPx(pos[idx[t]]), b = toPx(pos[idx[t + 1]]), c = toPx(pos[idx[t + 2]]);
@@ -2237,6 +2247,15 @@ void App::drawMenuBar()
         ImGui::MenuItem("Carte de tension", nullptr, &appearance_.showStrain);
         ImGui::MenuItem("Envers du tissu en bleu", nullptr, &appearance_.showBackSide);
         ImGui::MenuItem("Ombre de l'avatar dans le patron", nullptr, &editor_.silhouette.visible);
+        if (ImGui::BeginMenu("Ombre vue de", editor_.silhouette.visible)) {
+            static const char* const kViews[] = {"Face", "Profil", "Dessus"};
+            for (int v = 0; v < 3; ++v)
+                if (ImGui::MenuItem(kViews[v], nullptr, editor_.silhouette.view == v) && editor_.silhouette.view != v) {
+                    editor_.silhouette.view = v;
+                    buildSilhouette();
+                }
+            ImGui::EndMenu();
+        }
         if (ImGui::MenuItem("Avatar visible", nullptr, &showAvatar_)) applyAvatarTransform();
         ImGui::Separator();
         if (ImGui::MenuItem("Cadrer l'avatar", "F")) frameCamera();
@@ -2510,6 +2529,44 @@ void App::drawPatternPane()
         paneTitle("PATRON 2D", fontBold_);
         ImGui::SameLine();
         ImGui::TextDisabled("  %zu pièce(s), %zu couture(s)", garment_.panels.size(), garment_.seams.size());
+        // Ombre de l'avatar : face / profil / dessus (à droite de l'en-tête)
+        if (editor_.silhouette.texture != 0 || !editor_.silhouette.visible) {
+            static const char* const kViews[] = {"Face", "Profil", "Dessus"};
+            float bw = 0.0f;
+            for (const char* v : kViews) bw += ImGui::CalcTextSize(v).x + 12 * uiScale_;
+            const float eye = ImGui::CalcTextSize("Ombre").x + 14 * uiScale_;
+            const float x0 = leftWidth_ - bw - eye - 10 * uiScale_;
+            if (x0 > ImGui::GetCursorPosX() + 20 * uiScale_) {
+                ImGui::SameLine();
+                const float by = (h - ImGui::GetFrameHeight()) * 0.5f;
+                ImGui::SetCursorPos({x0, by});
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6 * uiScale_, ImGui::GetStyle().FramePadding.y));
+                ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+                ImGui::PushStyleColor(ImGuiCol_Button, editor_.silhouette.visible ? kBg2 : kBg1);
+                if (ImGui::Button("Ombre")) editor_.silhouette.visible = !editor_.silhouette.visible;
+                ImGui::PopStyleColor();
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip(editor_.silhouette.visible ? "Masquer l'ombre de l'avatar" : "Afficher l'ombre de l'avatar");
+                ImGui::SameLine(0, 4 * uiScale_);
+                for (int v = 0; v < 3; ++v) {
+                    ImGui::SetCursorPosY(by);
+                    const bool on = editor_.silhouette.view == v;
+                    ImGui::PushStyleColor(ImGuiCol_Button, on ? kAccentDim : kBg2);
+                    ImGui::BeginDisabled(!editor_.silhouette.visible);
+                    if (ImGui::Button(kViews[v]) && !on) {
+                        editor_.silhouette.view = v;
+                        buildSilhouette();
+                    }
+                    ImGui::EndDisabled();
+                    ImGui::PopStyleColor();
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip(v == 0 ? "Ombre de l'avatar vu de face (une pièce tracée dessus est posée à cet endroit du corps)"
+                                                 : v == 1 ? "Ombre de l'avatar vu de profil (devant à droite)"
+                                                          : "Ombre de l'avatar vu du dessus (devant en haut)");
+                    if (v < 2) ImGui::SameLine(0, 0);
+                }
+                ImGui::PopStyleVar(2);
+            }
+        }
         ImGui::SetCursorPos({0, h});
     }
     editor_.bodyScale = avatarHeight_ / 1.75f;

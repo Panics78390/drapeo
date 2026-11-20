@@ -345,9 +345,11 @@ void PatternEditor::placeNewPanel(garment::Panel& panel) const
         hi = glm::max(hi, q);
     }
     // La silhouette est à l'échelle réelle (pieds à y = 0) : la pièce tracée devant le buste y est posée en 3D.
+    // De profil, seule la hauteur se lit sur l'ombre ; du dessus, rien.
+    if (silhouette.view == 2) return;
     const float scale = std::max(bodyScale, 0.1f);
     panel.placement.height = lo.y / scale;
-    panel.placement.offset.x = (lo.x + hi.x) * 0.5f - torsoCenterX * scale;
+    if (silhouette.view == 0) panel.placement.offset.x = (lo.x + hi.x) * 0.5f - torsoCenterX * scale;
 }
 
 bool PatternEditor::pointChosen(int panel, int point) const
@@ -600,7 +602,7 @@ bool PatternEditor::draw(garment::Garment& g)
     if (zoom_ * 0.01f > 7.0f) gridLines(0.01f, IM_COL32(255, 255, 255, 8));
     gridLines(0.1f, IM_COL32(255, 255, 255, 18));
     gridLines(0.5f, IM_COL32(255, 255, 255, 34));
-    // Silhouette de l'avatar (ombre de face) sous tout le reste
+    // Silhouette de l'avatar (ombre de face, de profil ou du dessus) sous tout le reste
     if (silhouette.texture != 0 && silhouette.visible) {
         dl->AddImage(silhouette.texture, toScreen({silhouette.min.x, silhouette.max.y}), toScreen({silhouette.max.x, silhouette.min.y}),
                      ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, 255));

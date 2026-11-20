@@ -204,7 +204,7 @@ Les outils de la vue patron permettent de monter une poche comme un vrai sac (de
 
 Au lancement, seul l'avatar est chargé (aucune pièce). La vue patron montre l'ombre de l'avatar vu de face, à
 l'échelle réelle ; elle suit l'avatar importé (taille, rotation). Une pièce tracée sur l'ombre est posée à cet
-endroit du corps en 3D. Affichage › « Ombre de l'avatar dans le patron » pour la masquer.
+endroit du corps en 3D. Affichage › « Ombre de l'avatar dans le patron » pour la masquer. Les boutons **Ombre / Face / Profil / Dessus** en haut à droite de la vue patron (ou Affichage › « Ombre vue de ») affichent ou masquent l'ombre et la tournent : de face, de profil (devant à droite) ou du dessus (devant en haut). Une pièce tracée sur l'ombre de face est posée à cet endroit du corps ; de profil, seule la hauteur est reprise.
 
 ## Points et arêtes
 
