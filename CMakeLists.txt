@@ -59,6 +59,7 @@ add_library(drapeo_core STATIC
   src/geometry/Mannequin.cpp
   src/garment/Pattern.cpp
   src/garment/PatternOps.cpp
+  src/garment/PrintAtlas.cpp
   src/garment/GarmentMesher.cpp
   src/simulation/SpatialHash.cpp
   src/simulation/XpbdSolver.cpp

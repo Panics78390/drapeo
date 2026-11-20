@@ -28,6 +28,10 @@ std::string writeProject(const garment::Garment& g, const ProjectAvatar* avatar)
         if (!p.active3D || p.hidden3D || p.frozen || p.stiffness != 1.0f)   // etat3d <active> <masquée> <figée> <raideur>
             o << "etat3d " << (p.active3D ? 1 : 0) << ' ' << (p.hidden3D ? 1 : 0) << ' ' << (p.frozen ? 1 : 0) << ' ' << p.stiffness << "\n";
         if (p.placement.flat) o << "plate\n";
+        if (p.finish != garment::FabricFinish::Plain) o << "fini " << static_cast<int>(p.finish) << "\n";
+        for (const auto& pr : p.prints)   // impression <dx> <dy> <largeur> <hauteur> <angle> <image>
+            o << "impression " << pr.offset.x << ' ' << pr.offset.y << ' ' << pr.width << ' ' << pr.height << ' ' << pr.angleDeg << ' '
+              << pr.image << "\n";
         if (p.particleDistance != 0.0f || p.layer != 0 || p.shrinkWeft != 1.0f || p.shrinkWarp != 1.0f || p.thickCollision != 0.0f ||
             p.thickRender != 0.0f || p.pressure != 0.0f)   // simu <espacement> <couche> <trame> <chaîne> <ép. contact> <ép. affichage> <pression>
             o << "simu " << p.particleDistance << ' ' << p.layer << ' ' << p.shrinkWeft << ' ' << p.shrinkWarp << ' ' << p.thickCollision << ' '
@@ -97,6 +101,20 @@ bool parseProject(const std::string& text, garment::Garment& out, std::string& e
             pn.thickCollision = std::clamp(pn.thickCollision, 0.0f, 0.05f);
             pn.thickRender = std::clamp(pn.thickRender, 0.0f, 0.05f);
             pn.pressure = std::clamp(pn.pressure, -1000.0f, 1000.0f);
+        } else if (key == "fini" && !g.panels.empty()) {
+            int f = 0;
+            ls >> f;
+            if (f >= 0 && f < garment::kFabricFinishCount) g.panels.back().finish = static_cast<garment::FabricFinish>(f);
+        } else if (key == "impression" && !g.panels.empty()) {
+            garment::Print pr;
+            ls >> pr.offset.x >> pr.offset.y >> pr.width >> pr.height >> pr.angleDeg;
+            std::string rest;
+            std::getline(ls, rest);
+            const auto first = rest.find_first_not_of(' ');
+            pr.image = first == std::string::npos ? "" : rest.substr(first);
+            pr.width = std::clamp(pr.width, 0.002f, 3.0f);
+            pr.height = std::clamp(pr.height, 0.0f, 3.0f);
+            if (!pr.image.empty()) g.panels.back().prints.push_back(pr);
         } else if (key == "plate" && !g.panels.empty()) {
             g.panels.back().placement.flat = true;
         } else if (key == "lien" && !g.panels.empty()) {

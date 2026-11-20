@@ -17,10 +17,12 @@
 
 #include <array>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <glm/glm.hpp>
 
+#include "garment/PrintAtlas.h"
 #include "garment/GarmentMesher.h"
 #include "garment/Pattern.h"
 #include "geometry/TriangleBvh.h"
@@ -47,6 +49,8 @@ struct AppOptions {
     bool acceptImport = false;    // valide directement la fenêtre d'import d'image
     bool startPaused = false;     // démarre simulation en pause (mise en place, captures)
     std::string avatarPath;       // avatar à charger au démarrage (.fbx / .obj)
+    float yawDeg = -1000.0f;      // captures : angle de vue (degrés, 0 = de face), sinon vue par défaut
+    float zoom = 1.0f;            // captures : > 1 rapproche la caméra
 };
 
 class App {
@@ -67,6 +71,9 @@ private:
     void undo();
     void redo();
     void updateClothColors();
+    void updateClothPattern();   // coordonnées du patron, aspect du tissu et texture des impressions
+    std::string projectDirectory() const;
+    void inspectorPrints(int idx);
     void importPattern(const std::string& path);
     void addImportedPanels(const std::vector<std::vector<glm::vec2>>& outlines, bool arrange,
                            const std::vector<std::string>& names = {});
@@ -202,6 +209,11 @@ private:
     std::string watchedProject_;                 // projet .drapeo surveillé (rechargement automatique)
     long long watchedStamp_ = 0;                 // date + taille du fichier au dernier chargement
     double watchCheckTime_ = 0.0;
+    // Impressions (logos, inscriptions) : images chargées et texture du patron
+    std::unordered_map<std::string, io::RasterImage> printImages_;
+    std::unordered_map<std::string, bool> printMissing_;
+    std::string printSignature_;
+    garment::PatternTexture printAtlas_;
     garment::BodyAxes bodyAxes_;                 // axes du buste et des membres de l'avatar
     float avatarRotation_ = 0.0f;
 

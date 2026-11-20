@@ -54,6 +54,12 @@ public:
                      const std::vector<float>& strain);
     /// Couleur par sommet du tissu (couleur de chaque pièce) ; vide = couleur unique.
     void setClothColors(const std::vector<glm::vec3>& colors);
+    /// Coordonnées du patron (m) et aspect du tissu (FabricFinish) de chaque sommet.
+    void setClothPattern(const std::vector<glm::vec2>& uvs, const std::vector<float>& finish);
+    /// Texture des impressions, plaquée selon les coordonnées du patron (lignes du bas en premier).
+    /// `origin` = coin inférieur gauche (m), `size` = taille couverte (m). Une image vide retire la texture.
+    [[nodiscard]] unsigned int printTexture() const { return printTexture_; }
+    void setPrintTexture(int width, int height, const unsigned char* rgba, glm::vec2 origin, glm::vec2 size);
 
     /// Avatar importé (statique). Appeler clearAvatar() pour le retirer.
     void setAvatarMesh(const std::vector<glm::vec3>& positions, const std::vector<glm::vec3>& normals,
@@ -64,7 +70,7 @@ public:
 
 private:
     struct GpuMesh {
-        gl::GLuint vao = 0, position = 0, normal = 0, scalar = 0, color = 0, index = 0;
+        gl::GLuint vao = 0, position = 0, normal = 0, scalar = 0, color = 0, uv = 0, finish = 0, index = 0;
         gl::GLsizei indexCount = 0;
         std::size_t vertexCount = 0;
     };
@@ -78,6 +84,8 @@ private:
     Shader shader_;
     GpuMesh cloth_, sphere_, ground_, avatar_;
     bool clothHasColors_ = false;
+    gl::GLuint printTexture_ = 0;
+    glm::vec2 printOrigin_{0.0f}, printSize_{1.0f};
 };
 
 } // namespace drapeo::rendering

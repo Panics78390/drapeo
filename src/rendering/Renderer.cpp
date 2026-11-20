@@ -16,6 +16,8 @@ layout(location = 0) in vec3 aPosition;
 layout(location = 1) in vec3 aNormal;
 layout(location = 2) in float aScalar;     // étirement (tissu) ; 0 ailleurs
 layout(location = 3) in vec3 aColor;       // couleur de la pièce (sRGB)
+layout(location = 4) in vec2 aUv;          // coordonnées du patron (m)
+layout(location = 5) in float aFinish;     // aspect du tissu (0 uni, 1 ripstop, 2 sergé, 3 réfléchissant)
 
 uniform mat4 uModel;
 uniform mat4 uViewProj;
@@ -24,9 +26,13 @@ out vec3 vWorldPos;
 out vec3 vNormal;
 out float vScalar;
 out vec3 vColor;
+out vec2 vUv;
+out float vFinish;
 
 void main() {
     vColor = aColor;
+    vUv = aUv;
+    vFinish = aFinish;
     vec4 world = uModel * vec4(aPosition, 1.0);
     vWorldPos = world.xyz;
     vNormal = mat3(uModel) * aNormal;      // échelle uniforme uniquement
@@ -41,7 +47,13 @@ in vec3 vWorldPos;
 in vec3 vNormal;
 in float vScalar;
 in vec3 vColor;
+in vec2 vUv;
+in float vFinish;
 out vec4 fragColor;
+uniform sampler2D uPrints;
+uniform int   uHasPrints;
+uniform vec2  uPrintOrigin;
+uniform vec2  uPrintSize;
 uniform int   uVertexColor;   // 1 = couleur par sommet
 
 uniform int   uMode;          // 0 = tissu, 1 = obstacle, 2 = sol
@@ -99,21 +111,53 @@ void main() {
         float dist = length(toC - L * t);
         shadow = mix(0.35, 1.0, smoothstep(uSphereRadius * 0.6, uSphereRadius * 1.25, dist));
     }
+    float roughness = uRoughness;
+    float sheenAmount = uSheen;
+    vec3 F0 = vec3(0.04);
+    if (uMode == 0 && uShowStrain == 0) {
+        // Aspect du tissu, dessiné à partir des coordonnées du patron (en mètres).
+        int finish = int(vFinish + 0.5);
+        float aa = max(max(fwidth(vUv.x), fwidth(vUv.y)), 1e-6);   // taille d'un pixel sur le tissu
+        if (finish == 1) {
+            // Ripstop : quadrillage de renfort tous les 6 mm + armure fine.
+            vec2 g = abs(fract(vUv / 0.006 + 0.5) - 0.5) * 0.006;
+            float line = 1.0 - smoothstep(0.00035, 0.00035 + aa, min(g.x, g.y));
+            float fade = 1.0 - smoothstep(0.0012, 0.0035, aa);
+            float weave = sin(vUv.x * 7853.98) * sin(vUv.y * 7853.98);
+            float fadeW = 1.0 - smoothstep(0.0002, 0.0006, aa);
+            albedo *= 1.0 + (0.14 * line) * fade + 0.05 * weave * fadeW;
+        } else if (finish == 2) {
+            // Sergé : côtes en diagonale.
+            float d = sin((vUv.x + vUv.y) * 2221.44);
+            float fade = 1.0 - smoothstep(0.0006, 0.0018, aa);
+            albedo *= 1.0 + 0.08 * d * fade;
+        } else if (finish == 3) {
+            // Réfléchissant : gris argenté, brillant.
+            albedo = mix(albedo, vec3(0.80, 0.82, 0.85), 0.75);
+            roughness = 0.28;
+            F0 = vec3(0.30);
+            sheenAmount = 0.0;
+        }
+        if (uHasPrints == 1 && gl_FrontFacing) {
+            vec4 p = texture(uPrints, (vUv - uPrintOrigin) / uPrintSize);
+            albedo = mix(albedo, p.rgb, p.a);
+        }
+    }
     if (uMode == 0 && uShowStrain == 1) albedo = heatmap(vScalar / uStrainScale);
     // Envers du tissu (face tournée vers le corps) : plus sombre et bleuté, pour reconnaître l'endroit.
     if (uMode == 0 && uBackSide == 1 && !gl_FrontFacing) albedo = mix(albedo * 0.55, vec3(0.22, 0.30, 0.46), 0.45);
 
     vec3 base = pow(albedo, vec3(2.2));                 // sRGB -> linéaire
-    float a = max(uRoughness * uRoughness, 0.03);
+    float a = max(roughness * roughness, 0.03);
     float NoL = max(dot(N, L), 0.0);
     float NoV = max(dot(N, V), 1e-3);
     float NoH = max(dot(N, H), 0.0);
     float VoH = max(dot(V, H), 0.0);
 
-    vec3 F = fresnelSchlick(VoH, vec3(0.04));
+    vec3 F = fresnelSchlick(VoH, F0);
     vec3 specular = distributionGGX(NoH, a) * visibilitySmith(NoV, NoL, a) * F;
     vec3 diffuse = (1.0 - F) * base / PI;
-    vec3 sheen = uSheen * base * pow(1.0 - NoV, 3.0);   // reflet rasant des fibres
+    vec3 sheen = sheenAmount * base * pow(1.0 - NoV, 3.0);   // reflet rasant des fibres
 
     vec3 sun = vec3(3.2, 3.05, 2.85);
     vec3 color = (diffuse + specular) * sun * NoL * shadow;
@@ -141,6 +185,7 @@ Renderer::~Renderer()
     destroyMesh(sphere_);
     destroyMesh(ground_);
     destroyMesh(avatar_);
+    if (printTexture_ != 0) gl::DeleteTextures(1, &printTexture_);
 }
 
 void Renderer::setAvatarMesh(const std::vector<glm::vec3>& positions, const std::vector<glm::vec3>& normals,
@@ -190,6 +235,9 @@ void Renderer::createMesh(GpuMesh& mesh, const std::vector<glm::vec3>& positions
     attribute(mesh.scalar, 2, 1, zeros.data(), zeros.size() * sizeof(float));
     const std::vector<glm::vec3> white(positions.size(), glm::vec3(0.8f));
     attribute(mesh.color, 3, 3, white.data(), white.size() * sizeof(glm::vec3));
+    const std::vector<glm::vec2> uv0(positions.size(), glm::vec2(0.0f));
+    attribute(mesh.uv, 4, 2, uv0.data(), uv0.size() * sizeof(glm::vec2));
+    attribute(mesh.finish, 5, 1, zeros.data(), zeros.size() * sizeof(float));
 
     gl::GenBuffers(1, &mesh.index);
     gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, mesh.index);
@@ -201,8 +249,8 @@ void Renderer::createMesh(GpuMesh& mesh, const std::vector<glm::vec3>& positions
 void Renderer::destroyMesh(GpuMesh& mesh)
 {
     if (mesh.vao == 0) return;
-    const gl::GLuint buffers[] = {mesh.position, mesh.normal, mesh.scalar, mesh.color, mesh.index};
-    gl::DeleteBuffers(5, buffers);
+    const gl::GLuint buffers[] = {mesh.position, mesh.normal, mesh.scalar, mesh.color, mesh.uv, mesh.finish, mesh.index};
+    gl::DeleteBuffers(7, buffers);
     gl::DeleteVertexArrays(1, &mesh.vao);
     mesh = {};
 }
@@ -226,6 +274,40 @@ void Renderer::setClothColors(const std::vector<glm::vec3>& colors)
     if (!clothHasColors_) return;
     gl::BindBuffer(gl::ARRAY_BUFFER, cloth_.color);
     gl::BufferSubData(gl::ARRAY_BUFFER, 0, static_cast<gl::GLsizeiptr>(colors.size() * sizeof(glm::vec3)), colors.data());
+}
+
+void Renderer::setClothPattern(const std::vector<glm::vec2>& uvs, const std::vector<float>& finish)
+{
+    if (cloth_.vao == 0) return;
+    if (uvs.size() == cloth_.vertexCount) {
+        gl::BindBuffer(gl::ARRAY_BUFFER, cloth_.uv);
+        gl::BufferSubData(gl::ARRAY_BUFFER, 0, static_cast<gl::GLsizeiptr>(uvs.size() * sizeof(glm::vec2)), uvs.data());
+    }
+    if (finish.size() == cloth_.vertexCount) {
+        gl::BindBuffer(gl::ARRAY_BUFFER, cloth_.finish);
+        gl::BufferSubData(gl::ARRAY_BUFFER, 0, static_cast<gl::GLsizeiptr>(finish.size() * sizeof(float)), finish.data());
+    }
+}
+
+void Renderer::setPrintTexture(int width, int height, const unsigned char* rgba, glm::vec2 origin, glm::vec2 size)
+{
+    if (width <= 0 || height <= 0 || rgba == nullptr) {
+        if (printTexture_ != 0) gl::DeleteTextures(1, &printTexture_);
+        printTexture_ = 0;
+        return;
+    }
+    if (printTexture_ == 0) gl::GenTextures(1, &printTexture_);
+    gl::BindTexture(gl::TEXTURE_2D, printTexture_);
+    gl::PixelStorei(gl::UNPACK_ALIGNMENT, 1);
+    gl::TexImage2D(gl::TEXTURE_2D, 0, static_cast<gl::GLint>(gl::RGBA), width, height, 0, gl::RGBA, gl::UNSIGNED_BYTE, rgba);
+    gl::GenerateMipmap(gl::TEXTURE_2D);
+    gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, static_cast<gl::GLint>(gl::LINEAR_MIPMAP_LINEAR));
+    gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, static_cast<gl::GLint>(gl::LINEAR));
+    gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, static_cast<gl::GLint>(gl::CLAMP_TO_EDGE));
+    gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, static_cast<gl::GLint>(gl::CLAMP_TO_EDGE));
+    gl::BindTexture(gl::TEXTURE_2D, 0);
+    printOrigin_ = origin;
+    printSize_ = glm::max(size, glm::vec2(1e-4f));
 }
 
 void Renderer::updateCloth(const std::vector<glm::vec3>& positions, const std::vector<glm::vec3>& normals,
@@ -263,6 +345,7 @@ void Renderer::render(const SceneView& scene, const ClothAppearance& cloth)
     shader_.set("uLightDir", glm::normalize(glm::vec3(-0.45f, -1.0f, -0.35f)));
     shader_.set("uShowStrain", 0);
     shader_.set("uBackSide", 0);
+    shader_.set("uHasPrints", 0);
     shader_.set("uVertexColor", 0);
 
     const bool hasSphere = scene.spheres != nullptr && !scene.spheres->empty();
@@ -314,10 +397,20 @@ void Renderer::render(const SceneView& scene, const ClothAppearance& cloth)
     shader_.set("uVertexColor", clothHasColors_ ? 1 : 0);
     shader_.set("uStrainScale", cloth.strainScale);
     shader_.set("uBackSide", cloth.showBackSide ? 1 : 0);
+    shader_.set("uHasPrints", printTexture_ != 0 ? 1 : 0);
+    if (printTexture_ != 0) {
+        gl::ActiveTexture(gl::TEXTURE0);
+        gl::BindTexture(gl::TEXTURE_2D, printTexture_);
+        shader_.set("uPrints", 0);
+        shader_.set("uPrintOrigin", printOrigin_);
+        shader_.set("uPrintSize", printSize_);
+    }
     if (cloth.wireframe) gl::PolygonMode(gl::FRONT_AND_BACK, gl::LINE);
     drawMesh(cloth_);
     if (cloth.wireframe) gl::PolygonMode(gl::FRONT_AND_BACK, gl::FILL);
     shader_.set("uVertexColor", 0);
+    shader_.set("uHasPrints", 0);
+    if (printTexture_ != 0) gl::BindTexture(gl::TEXTURE_2D, 0);
     gl::BindVertexArray(0);
 }
 

@@ -24,6 +24,7 @@
 #include "io/RasterImage.h"
 #include "garment/GarmentMesher.h"
 #include "garment/PatternOps.h"
+#include "garment/PrintAtlas.h"
 #include "geometry/Mannequin.h"
 #include "simulation/Materials.h"
 #include "simulation/SpatialHash.h"
@@ -859,6 +860,69 @@ int main()
         CHECK(!mcp::Json::parse("{} x", bad, error));
     });
 
+    run("Allonger une pièce : points au-dessus de la ligne, poses et impressions", [] {
+        garment::Garment g;
+        garment::Panel base;
+        base.points = {{0, 0}, {0.4f, 0}, {0.4f, 0.6f}, {0, 0.6f}};
+        garment::Panel patch;
+        patch.points = {{-0.05f, -0.05f}, {0.05f, -0.05f}, {0.05f, 0.05f}, {-0.05f, 0.05f}};
+        g.panels = {base, patch};
+        CHECK(g.attachPatch(1, 0, {0.2f, 0.45f}, garment::AttachKind::AllRound) >= 0);
+        garment::Print pr;
+        pr.image = "logo.png";
+        pr.offset = {0.0f, 0.2f};   // y = 0.5 dans le patron
+        g.panels[0].prints.push_back(pr);
+        CHECK(garment::lengthenPanel(g, 0, 0.3f, 0.05f));
+        CHECK(std::abs(g.panels[0].points[2].y - 0.65f) < 1e-5f && g.panels[0].points[1].y == 0.0f);
+        CHECK(std::abs(g.attachments[0].at.y - 0.50f) < 1e-5f);
+        CHECK(std::abs(garment::printCenter(g.panels[0], g.panels[0].prints[0]).y - 0.55f) < 1e-4f);   // suit le tissu au-dessus de la ligne
+        CHECK(garment::lengthenPanel(g, 0, 0.3f, -0.1f));
+        CHECK(std::abs(g.panels[0].points[2].y - 0.55f) < 1e-5f);
+        CHECK(!garment::lengthenPanel(g, 0, 2.0f, 0.05f));   // ligne hors de la pièce
+    });
+
+    run("Impressions et aspect : enregistrement et texture du patron", [] {
+        garment::Garment g;
+        garment::Panel p;
+        p.points = {{0, 0}, {0.3f, 0}, {0.3f, 0.3f}, {0, 0.3f}};
+        p.finish = garment::FabricFinish::Ripstop;
+        garment::Print pr;
+        pr.image = "impressions/logo avec espace.png";
+        pr.offset = {0.02f, -0.01f};
+        pr.width = 0.1f;
+        pr.angleDeg = 30.0f;
+        p.prints.push_back(pr);
+        g.panels.push_back(p);
+        garment::Garment back;
+        std::string error;
+        CHECK(io::parseProject(io::writeProject(g), back, error));
+        CHECK(back.panels.size() == 1 && back.panels[0].finish == garment::FabricFinish::Ripstop && back.panels[0].prints.size() == 1);
+        CHECK(back.panels[0].prints[0].image == pr.image && std::abs(back.panels[0].prints[0].angleDeg - 30.0f) < 1e-4f);
+        // Image 2 x 1 rouge opaque, centrée sur la pièce (sans rotation) : peinte au centre, rien ailleurs.
+        io::RasterImage red;
+        red.width = 2;
+        red.height = 1;
+        red.rgba = {255, 0, 0, 255, 255, 0, 0, 255};
+        back.panels[0].prints[0].offset = {0, 0};
+        back.panels[0].prints[0].angleDeg = 0.0f;
+        garment::PatternTexture tex;
+        garment::PatternTextureOptions opt;
+        CHECK(garment::buildPatternTexture(back, [&](const std::string&) { return &red; }, opt, tex));
+        auto pixel = [&](glm::vec2 q) {
+            const glm::vec2 uv = tex.uv(q);
+            const int x = std::clamp(static_cast<int>(uv.x * static_cast<float>(tex.width)), 0, tex.width - 1);
+            const int y = std::clamp(static_cast<int>(uv.y * static_cast<float>(tex.height)), 0, tex.height - 1);
+            return &tex.rgba[(static_cast<std::size_t>(y) * static_cast<std::size_t>(tex.width) + static_cast<std::size_t>(x)) * 4];
+        };
+        CHECK(pixel({0.15f, 0.15f})[0] > 200 && pixel({0.15f, 0.15f})[3] > 200);   // centre : rouge
+        CHECK(pixel({0.15f, 0.22f})[3] == 0);   // au-dessus de l'image (hauteur 5 cm) : transparent
+        CHECK(garment::printSize(back.panels[0].prints[0], &red).y > 0.049f);
+        garment::Garment none;
+        none.panels.push_back(p);
+        none.panels[0].prints.clear();
+        CHECK(!garment::buildPatternTexture(none, [](const std::string&) { return nullptr; }, opt, tex));
+    });
+
     run("MCP : initialisation, liste des outils, création et couture de pièces", [] {
         const std::string path = (std::filesystem::temp_directory_path() / "drapeo_test_mcp.drapeo").string();
         std::filesystem::remove(path);
@@ -905,6 +969,25 @@ int main()
         mcp::Json sim;
         CHECK(mcp::Json::parse(call("simuler", R"({"secondes":0.5,"exporter_obj":")" + obj + R"("})"), sim, error));
         CHECK(sim.get("particules").asNumber() > 100 && sim.has("encombrement") && std::filesystem::exists(obj));
+        // Outils ajoutés : aspect, impression, pose d'une pièce, allongement.
+        call("modifier_piece", R"({"piece":0,"aspect":"ripstop"})");
+        call("modifier_piece", R"({"piece":0,"aspect":"velours"})", false);
+        call("ajouter_impression", R"({"piece":1,"image":"logo.png","largeur_cm":8})");
+        call("ajouter_rectangle", R"({"nom":"renfort","largeur_cm":6,"hauteur_piece_cm":6})");
+        call("poser_piece", R"({"piece":"renfort","sur":0,"x_cm":-500,"y_cm":-500})", false);   // pas sur la pièce
+        mcp::Json info2;
+        CHECK(mcp::Json::parse(call("projet_info", "{}"), info2, error));
+        const auto& p0 = info2.get("pieces").at(0);
+        const std::string onBase = R"({"piece":"renfort","sur":0,"type":"tout_autour","x_cm":)" +
+                                   std::to_string(p0.get("centre_cm").at(0).asNumber()) + R"(,"y_cm":)" +
+                                   std::to_string(p0.get("centre_cm").at(1).asNumber()) + "}";
+        call("poser_piece", onBase);
+        call("allonger_piece", R"({"piece":1,"a_hauteur_cm":10,"longueur_cm":3})");
+        call("supprimer_impression", R"({"piece":1,"index":3})", false);
+        garment::Garment g2;
+        CHECK(io::loadProject(path, g2, error));
+        CHECK(g2.panels[0].finish == garment::FabricFinish::Ripstop && g2.panels[1].prints.size() == 1 && g2.attachments.size() == 1);
+        call("supprimer_impression", R"({"piece":1,"index":0})");
         std::filesystem::remove(path);
         std::filesystem::remove(obj);
     });

@@ -53,7 +53,10 @@ Redémarrer Claude Desktop. Sans `--projet`, le serveur travaille sur `Documents
 | `projet_info` | Pièces (points, bords, longueurs), coutures — en cm |
 | `nouveau_projet`, `ouvrir_projet`, `enregistrer_sous` | Projet vide ou modèle (débardeur, jupe, robe), changer de fichier |
 | `ajouter_piece`, `ajouter_rectangle`, `dupliquer_piece`, `supprimer_piece` | Pièces de patron et leur placement autour du corps |
-| `modifier_piece`, `deplacer_piece` | Nom, couleur, zone, angle, hauteur, droit fil, symétrie, état 3D, propriétés de simulation |
+| `modifier_piece`, `deplacer_piece` | Nom, couleur, aspect du tissu, zone, angle, hauteur, droit fil, symétrie, état 3D, propriétés de simulation |
+| `poser_piece` | Pose une poche, un rabat, un renfort ou une bande sur une autre pièce |
+| `ajouter_impression`, `supprimer_impression` | Logo, inscription, drapeau ou bande imprimés sur une pièce |
+| `allonger_piece` | Allonge ou raccourcit une pièce à une hauteur donnée (poses et impressions suivent) |
 | `deplacer_point`, `ajouter_point`, `supprimer_point` | Édition du contour |
 | `coudre`, `inverser_couture`, `supprimer_couture` | Coutures bord à bord (sur plusieurs bords si besoin) |
 | `arrondir_coin`, `couper_bord`, `ajouter_pince`, `deplier`, `agrandir_piece` | Opérations de forme |
@@ -147,6 +150,18 @@ La flèche de la pièce sélectionnée est aussi reportée sur le tissu dans la 
 Glissez la poche dans le patron pour la déplacer sur sa base ; déplacer la base emporte ses poches.
 **Détacher de la pièce** la libère.
 
+## Impressions et aspect du tissu
+
+- **Impressions** (Propriétés > Pièce > *Ajouter une image...*) : un PNG, JPEG, BMP ou TGA est imprimé sur la pièce —
+  logo, inscription, drapeau, bande réfléchissante. Il est découpé au contour de la pièce, garde sa transparence
+  (PNG transparent conseillé pour un texte seul) et suit le drapé en 3D. Position (depuis le centre de la pièce),
+  taille (hauteur 0 = proportions de l'image) et rotation se règlent dans l'inspecteur ; l'impression est visible
+  aussi dans le patron 2D. Les images placées dans le dossier du projet y sont référencées par un chemin relatif :
+  copiez le dossier entier pour déplacer le projet.
+- **Aspect** : *Uni*, *Toile technique (ripstop)* (petit quadrillage), *Sergé (denim)* (côtes en diagonale) ou
+  *Réfléchissant* (reflet brillant), par pièce.
+- **Allonger / raccourcir** une pièce à une hauteur : outil `allonger_piece` du serveur MCP.
+
 ## Guides d'alignement et sélection en 3D
 
 - Quand on déplace une pièce ou un point dans la vue patron (aimant actif, touche M), des guides magenta
@@ -232,7 +247,7 @@ Options : `drapeo --frames 200 --screenshot capture.ppm --size 1600x900` lance 2
 ```
 src/
   geometry/    ClothMesh, TriangleBvh, Mannequin intégré
-  garment/     Pattern (pièces, coutures, modèles), GarmentMesher (triangulation CDT, placement)
+  garment/     Pattern (pièces, coutures, modèles), GarmentMesher (triangulation CDT, placement), PrintAtlas (texture des impressions)
   simulation/  XpbdSolver (XPBD à petits pas, coutures), SpatialHash (auto-collisions), Materials
   io/          MeshImport (FBX/OBJ via ufbx), PatternImport (SVG/DXF), PdfImport, RasterImage
                (images + détection des pièces), GarmentExport (OBJ)

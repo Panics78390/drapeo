@@ -18,6 +18,28 @@ glm::vec2 Garment::edgeEnd(const EdgeRef& e) const
 
 float Garment::edgeLength(const EdgeRef& e) const { return glm::distance(edgeStart(e), edgeEnd(e)); }
 
+const char* fabricFinishName(FabricFinish f)
+{
+    switch (f) {
+    case FabricFinish::Plain: return "Uni";
+    case FabricFinish::Ripstop: return "Toile technique (ripstop)";
+    case FabricFinish::Twill: return "Sergé (denim)";
+    case FabricFinish::Reflective: return "Réfléchissant";
+    }
+    return "?";
+}
+
+glm::vec2 panelBoxCenter(const Panel& panel)
+{
+    if (panel.points.empty()) return glm::vec2(0.0f);
+    glm::vec2 lo(1e9f), hi(-1e9f);
+    for (const auto& p : panel.points) {
+        lo = glm::min(lo, p);
+        hi = glm::max(hi, p);
+    }
+    return (lo + hi) * 0.5f;
+}
+
 const char* bodyZoneName(BodyZone z)
 {
     switch (z) {
@@ -738,6 +760,10 @@ int Garment::addMirrorCopy(int panel, float gap)
     for (auto& p : copy.points) p.x = 2.0f * axis - p.x;
     std::reverse(copy.points.begin(), copy.points.end());
     copy.name += " (miroir)";
+    for (auto& pr : copy.prints) {
+        pr.offset.x = -pr.offset.x;
+        pr.angleDeg = -pr.angleDeg;
+    }
     copy.grainDeg = 180.0f - copy.grainDeg;   // le droit fil est retourné comme la pièce
     copy.placement.angleDeg = copy.placement.angleDeg + 180.0f;
     if (copy.placement.angleDeg > 180.0f) copy.placement.angleDeg -= 360.0f;

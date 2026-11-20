@@ -164,6 +164,10 @@ void mirrorGarment(Garment& part, float axis)
         pl.rotation = glm::quat(pl.rotation.w, pl.rotation.x, -pl.rotation.y, -pl.rotation.z);
         p.linkMirror = !p.linkMirror;
         p.linkAngle = wrapDeg(-p.linkAngle);
+        for (auto& pr : p.prints) {   // l'impression change de côté, l'image reste lisible
+            pr.offset.x = -pr.offset.x;
+            pr.angleDeg = -pr.angleDeg;
+        }
     }
     for (auto& a : part.attachments) a.at.x = 2.0f * axis - a.at.x;
 }
@@ -338,7 +342,13 @@ void rotatePanels(Garment& g, const std::vector<int>& idsIn, float degrees)
     const glm::vec2 c = (lo + hi) * 0.5f;
     for (const int p : ids) {
         auto& pn = g.panels[static_cast<std::size_t>(p)];
+        std::vector<glm::vec2> printAt;
+        for (const auto& pr : pn.prints) printAt.push_back(c + linkTransform(printCenter(pn, pr) - c, degrees, false));
         for (auto& q : pn.points) q = c + linkTransform(q - c, degrees, false);
+        for (std::size_t i = 0; i < pn.prints.size(); ++i) {
+            pn.prints[i].offset = printAt[i] - panelBoxCenter(pn);
+            pn.prints[i].angleDeg = wrapDeg(pn.prints[i].angleDeg + degrees);
+        }
         pn.grainDeg = wrapDeg(pn.grainDeg + degrees);
         pn.linkAngle = wrapDeg(pn.linkAngle + degrees);
         if (pn.symmetric) {
@@ -368,6 +378,11 @@ void flipPanels(Garment& g, const std::vector<int>& idsIn, bool horizontal)
         pn.linkMirror = !pn.linkMirror;
         pn.linkAngle = wrapDeg(horizontal ? -pn.linkAngle : 180.0f - pn.linkAngle);
         if (horizontal) pn.symAxisX = 2.0f * c.x - pn.symAxisX;
+        for (auto& pr : pn.prints) {
+            if (horizontal) pr.offset.x = -pr.offset.x;
+            else pr.offset.y = -pr.offset.y;
+            pr.angleDeg = -pr.angleDeg;
+        }
     }
     for (auto& a : g.attachments)
         if (indexIn(ids, a.base) >= 0) {
@@ -1031,6 +1046,32 @@ int propagateLinkedEdits(const Garment& before, Garment& after)
         updated += propagateFrom(after, static_cast<int>(p), was.points);
     }
     return updated;
+}
+
+bool lengthenPanel(Garment& g, int panel, float atY, float amount)
+{
+    if (panel < 0 || panel >= static_cast<int>(g.panels.size()) || amount == 0.0f) return false;
+    Panel& p = g.panels[static_cast<std::size_t>(panel)];
+    float lo = 1e9f, hi = -1e9f;
+    for (const auto& q : p.points) {
+        lo = std::min(lo, q.y);
+        hi = std::max(hi, q.y);
+    }
+    if (atY <= lo || atY >= hi) return false;
+    if (amount < 0.0f && atY - amount >= hi) return false;   // on retirerait tout le haut
+    auto move = [&](float y) {
+        if (y <= atY) return y;
+        if (amount > 0.0f) return y + amount;
+        return y + amount < atY ? atY : y + amount;
+    };
+    std::vector<glm::vec2> printAt;
+    for (const auto& pr : p.prints) printAt.push_back(printCenter(p, pr));
+    for (auto& q : p.points) q.y = move(q.y);
+    for (auto& a : g.attachments)
+        if (a.base == panel) a.at.y = move(a.at.y);
+    const glm::vec2 c = panelBoxCenter(p);
+    for (std::size_t i = 0; i < p.prints.size(); ++i) p.prints[i].offset = glm::vec2(printAt[i].x, move(printAt[i].y)) - c;
+    return true;
 }
 
 } // namespace drapeo::garment

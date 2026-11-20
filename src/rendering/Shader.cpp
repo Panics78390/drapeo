@@ -59,6 +59,10 @@ bool Shader::create(const char* vertexSource, const char* fragmentSource, std::s
 void Shader::use() const { gl::UseProgram(program_); }
 void Shader::set(const char* name, int v) const { gl::Uniform1i(gl::GetUniformLocation(program_, name), v); }
 void Shader::set(const char* name, float v) const { gl::Uniform1f(gl::GetUniformLocation(program_, name), v); }
+void Shader::set(const char* name, const glm::vec2& v) const
+{
+    gl::Uniform2fv(gl::GetUniformLocation(program_, name), 1, glm::value_ptr(v));
+}
 void Shader::set(const char* name, const glm::vec3& v) const
 {
     gl::Uniform3fv(gl::GetUniformLocation(program_, name), 1, glm::value_ptr(v));

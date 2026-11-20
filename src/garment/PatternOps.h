@@ -96,6 +96,12 @@ glm::vec2 contourPoint(const Garment& g, int panel, float s);          // point 
 /// sont cousus ensemble. Des points sont ajoutés aux extrémités si besoin. Renvoie l'index de la couture, ou -1.
 int sewFree(Garment& g, int panelA, float sA, float lenA, int panelB, float sB, float lenB);
 
+/// Allonger (amount > 0) ou raccourcir (amount < 0) une pièce à la ligne horizontale y = `atY` (m) :
+/// tout ce qui est au-dessus de la ligne monte ou descend de `amount`. En raccourcissant, les points
+/// situés dans la bande retirée sont posés sur la ligne. Les coutures, poches et impressions suivent.
+/// Renvoie false si la ligne ne traverse pas la pièce.
+bool lengthenPanel(Garment& g, int panel, float atY, float amount);
+
 /// Propriété commune pour « sélectionner les pièces semblables ».
 enum class SameProperty { Color, Zone, LinkGroup };
 std::vector<int> panelsLike(const Garment& g, int panel, SameProperty property);

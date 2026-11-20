@@ -233,6 +233,26 @@ void placeBesideOthers(const Garment& g, std::vector<glm::vec2>& pts)
 }
 
 // --- Description du projet -----------------------------------------------------
+const char* finishKey(garment::FabricFinish f)
+{
+    switch (f) {
+    case garment::FabricFinish::Ripstop: return "ripstop";
+    case garment::FabricFinish::Twill: return "serge";
+    case garment::FabricFinish::Reflective: return "reflechissant";
+    default: return "uni";
+    }
+}
+
+garment::FabricFinish finishOf(const std::string& text)
+{
+    const std::string t = lower(text);
+    if (t == "ripstop" || t == "toile" || t == "toile technique") return garment::FabricFinish::Ripstop;
+    if (t == "serge" || t == "sergé" || t == "denim") return garment::FabricFinish::Twill;
+    if (t.rfind("refl", 0) == 0 || t.rfind("réfl", 0) == 0) return garment::FabricFinish::Reflective;
+    if (t == "uni" || t.empty()) return garment::FabricFinish::Plain;
+    fail("Aspect inconnu : " + text + " (uni, ripstop, serge ou reflechissant).");
+}
+
 Json describe(const Garment& g, const std::string& path)
 {
     Json root = Json::object();
@@ -272,6 +292,24 @@ Json describe(const Garment& g, const std::string& path)
         if (p.thickCollision > 0.0f) o["epaisseur_contact_mm"] = round2(p.thickCollision * 1000.0);
         if (p.thickRender > 0.0f) o["epaisseur_affichage_mm"] = round2(p.thickRender * 1000.0);
         if (p.pressure != 0.0f) o["pression"] = round2(p.pressure);
+        if (p.finish != garment::FabricFinish::Plain) o["aspect"] = finishKey(p.finish);
+        if (!p.prints.empty()) {
+            Json prints = Json::array();
+            const glm::vec2 bc = garment::panelBoxCenter(p);
+            for (std::size_t k = 0; k < p.prints.size(); ++k) {
+                const auto& pr = p.prints[k];
+                Json q = Json::object();
+                q["index"] = static_cast<int>(k);
+                q["image"] = pr.image;
+                q["x_cm"] = cm(bc.x + pr.offset.x);
+                q["y_cm"] = cm(bc.y + pr.offset.y);
+                q["largeur_cm"] = cm(pr.width);
+                if (pr.height > 0.0f) q["hauteur_cm"] = cm(pr.height);
+                if (pr.angleDeg != 0.0f) q["angle"] = round2(pr.angleDeg);
+                prints.push(std::move(q));
+            }
+            o["impressions"] = std::move(prints);
+        }
         const glm::vec2 c = garment::centroid(p.points);
         o["centre_cm"] = Json::array();
         o["centre_cm"].push(cm(c.x));
@@ -327,6 +365,8 @@ Json describe(const Garment& g, const std::string& path)
             Json o = Json::object();
             o["piece_posee"] = a.patch;
             o["sur"] = a.base;
+            const auto k = g.attachKind(a);
+            o["type"] = k == garment::AttachKind::Flap ? "rabat" : k == garment::AttachKind::AllRound ? "tout_autour" : "poche";
             at.push(std::move(o));
         }
         root["pieces_posees"] = std::move(at);
@@ -451,7 +491,8 @@ const std::vector<ToolDef>& toolDefs()
                  {"retrait_chaine", "number", "Retrait chaîne en % (100 = aucun)."},
                  {"epaisseur_contact_mm", "number", "Épaisseur ajoutée pour les contacts (mm)."},
                  {"epaisseur_affichage_mm", "number", "Épaisseur ajoutée à l'affichage (mm)."},
-                 {"pression", "number", "Pression (Pa) qui gonfle la pièce (doudoune, coussin)."}},
+                 {"pression", "number", "Pression (Pa) qui gonfle la pièce (doudoune, coussin)."},
+                 {"aspect", "string", "Aspect du tissu : uni, ripstop (toile technique quadrillée), serge (denim) ou reflechissant."}},
                 placementParams())},
         {"deplacer_piece", "Déplace, pivote ou retourne une pièce dans la vue patron (le placement 3D ne change pas).",
          {{"piece", "piece", "Index ou nom de la pièce.", true},
@@ -503,6 +544,32 @@ const std::vector<ToolDef>& toolDefs()
           {"largeur_cm", "number", "Largeur à l'ouverture (cm, défaut 3)."}}},
         {"deplier", "Déplie une demi-pièce autour d'un bord (le pli) : la pièce est complétée par son miroir.",
          {{"piece", "piece", "Index ou nom de la pièce.", true}, {"bord", "integer", "Index du bord qui sert de pli.", true}}},
+        {"poser_piece",
+         "Pose une pièce sur une autre (poche, rabat, renfort, bande, écusson en tissu) : elle est cousue sur la pièce de base et "
+         "suit son drapé. Une pièce posée ne peut pas recevoir une autre pièce posée.",
+         {{"piece", "piece", "Pièce à poser (index ou nom).", true},
+          {"sur", "piece", "Pièce de base (index ou nom).", true},
+          {"x_cm", "number", "Centre de la pièce posée (cm, coordonnées du patron comme les points de la pièce de base : il doit être sur elle).", true},
+          {"y_cm", "number", "Centre (cm).", true},
+          {"type", "string", "poche (ouverte en haut, défaut), rabat (cousu en haut seulement) ou tout_autour (renfort, bande)."}}},
+        {"ajouter_impression",
+         "Imprime une image (PNG, JPEG, BMP, TGA) sur une pièce : logo, inscription, drapeau, bande réfléchissante. L'image est "
+         "découpée au contour de la pièce, la transparence est respectée, et elle suit le drapé en 3D.",
+         {{"piece", "piece", "Index ou nom de la pièce.", true},
+          {"image", "string", "Chemin de l'image (absolu, ou relatif au dossier du projet).", true},
+          {"x_cm", "number", "Centre de l'image dans le patron (cm). Défaut : centre de la pièce."},
+          {"y_cm", "number", "Centre de l'image (cm)."},
+          {"largeur_cm", "number", "Largeur (cm, défaut 10)."},
+          {"hauteur_cm", "number", "Hauteur (cm, 0 ou absent = proportions de l'image)."},
+          {"angle", "number", "Rotation (degrés)."}}},
+        {"supprimer_impression", "Retire une impression d'une pièce.",
+         {{"piece", "piece", "Index ou nom de la pièce.", true}, {"index", "integer", "Index de l'impression (voir projet_info).", true}}},
+        {"allonger_piece",
+         "Allonge (longueur > 0) ou raccourcit (< 0) une pièce à une hauteur du patron : tout ce qui est au-dessus de la ligne se "
+         "déplace verticalement. Les pièces posées et les impressions suivent ; les coutures sont gardées.",
+         {{"piece", "piece", "Index ou nom de la pièce.", true},
+          {"a_hauteur_cm", "number", "Ligne d'allongement (y du patron, cm).", true},
+          {"longueur_cm", "number", "Allongement (cm, négatif pour raccourcir).", true}}},
         {"agrandir_piece", "Agrandit (distance > 0) ou rétrécit (< 0) tout le contour d'une pièce. Les coutures sont gardées.",
          {{"piece", "piece", "Index ou nom de la pièce.", true}, {"distance_cm", "number", "Décalage du contour (cm).", true}}},
         {"simuler",
@@ -861,6 +928,7 @@ bool Server::callTool(const std::string& name, const Json& argsIn, std::string& 
             if (args.has("epaisseur_affichage_mm"))
                 p.thickRender = std::clamp(static_cast<float>(num(args, "epaisseur_affichage_mm", 0.0)), 0.0f, 50.0f) / 1000.0f;
             if (args.has("pression")) p.pressure = std::clamp(static_cast<float>(num(args, "pression", 0.0)), -500.0f, 500.0f);
+            if (args.has("aspect")) p.finish = finishOf(str(args, "aspect"));
             save("Pièce " + std::to_string(i) + " « " + p.name + " » modifiée.");
             return true;
         }
@@ -1002,6 +1070,78 @@ bool Server::callTool(const std::string& name, const Json& argsIn, std::string& 
             const int e = edgeRef(g, i, args);
             if (!garment::unfoldPanel(g, i, e)) fail("Dépliage impossible autour de ce bord.");
             save("Pièce dépliée. Points (cm) : " + pointText(i));
+            return true;
+        }
+        if (name == "poser_piece") {
+            const int i = panelRef(g, args);
+            Json baseArgs = Json::object();
+            baseArgs["piece"] = args.get("sur");
+            const int b = panelRef(g, baseArgs);
+            if (i == b) fail("Une pièce ne peut pas être posée sur elle-même.");
+            const std::string t = lower(str(args, "type", "poche"));
+            const garment::AttachKind kind = t == "rabat" ? garment::AttachKind::Flap
+                                             : (t == "tout_autour" || t == "tout autour") ? garment::AttachKind::AllRound
+                                                                                           : garment::AttachKind::Pocket;
+            const glm::vec2 at(static_cast<float>(numRequired(args, "x_cm") / 100.0), static_cast<float>(numRequired(args, "y_cm") / 100.0));
+            {   // le centre doit tomber sur la pièce de base (test pair-impair)
+                const auto& poly = P(b).points;
+                bool inside = false;
+                for (std::size_t k = 0, j = poly.size() - 1; k < poly.size(); j = k++)
+                    if ((poly[k].y > at.y) != (poly[j].y > at.y) &&
+                        at.x < (poly[j].x - poly[k].x) * (at.y - poly[k].y) / (poly[j].y - poly[k].y) + poly[k].x)
+                        inside = !inside;
+                if (!inside) {
+                    const glm::vec2 c = garment::panelBoxCenter(P(b));
+                    char buf[160];
+                    std::snprintf(buf, sizeof(buf), "Le point (%.1f, %.1f) n'est pas sur la pièce « %s » (son centre : %.1f, %.1f cm).", cm(at.x),
+                                  cm(at.y), P(b).name.c_str(), cm(c.x), cm(c.y));
+                    fail(buf);
+                }
+            }
+            if (g.attachPatch(i, b, at, kind) < 0)
+                fail("Pose impossible (la base est elle-même posée, ou la pièce est déjà posée ailleurs).");
+            save("Pièce « " + P(i).name + " » posée sur « " + P(b).name + " ».");
+            return true;
+        }
+        if (name == "ajouter_impression") {
+            const int i = panelRef(g, args);
+            garment::Print pr;
+            pr.image = str(args, "image");
+            if (pr.image.empty()) fail("Paramètre image manquant.");
+            const std::filesystem::path img = fsPath(pr.image);
+            const std::filesystem::path dir = fsPath(projectPath_).parent_path();
+            std::error_code ec;
+            const bool found = std::filesystem::exists(img.is_absolute() ? img : dir / img, ec);
+            if (img.is_absolute()) {   // chemin relatif au projet si l'image est dans son dossier
+                const auto rel = std::filesystem::relative(img, dir, ec);
+                if (!ec && !rel.empty() && rel.begin()->string() != "..") pr.image = utf8Of(rel);
+            }
+            const glm::vec2 c = garment::panelBoxCenter(P(i));
+            const glm::vec2 at(args.has("x_cm") ? static_cast<float>(num(args, "x_cm", 0.0) / 100.0) : c.x,
+                               args.has("y_cm") ? static_cast<float>(num(args, "y_cm", 0.0) / 100.0) : c.y);
+            pr.offset = at - c;
+            pr.width = std::clamp(static_cast<float>(num(args, "largeur_cm", 10.0) / 100.0), 0.002f, 3.0f);
+            pr.height = std::clamp(static_cast<float>(num(args, "hauteur_cm", 0.0) / 100.0), 0.0f, 3.0f);
+            pr.angleDeg = static_cast<float>(num(args, "angle", 0.0));
+            P(i).prints.push_back(pr);
+            save("Impression " + std::to_string(P(i).prints.size() - 1) + " ajoutée sur « " + P(i).name + " »." +
+                 (found ? "" : " Attention : image introuvable pour l'instant (" + pr.image + ")."));
+            return true;
+        }
+        if (name == "supprimer_impression") {
+            const int i = panelRef(g, args);
+            const int k = intRequired(args, "index");
+            if (k < 0 || k >= static_cast<int>(P(i).prints.size())) fail("Impression " + std::to_string(k) + " introuvable.");
+            P(i).prints.erase(P(i).prints.begin() + k);
+            save("Impression retirée.");
+            return true;
+        }
+        if (name == "allonger_piece") {
+            const int i = panelRef(g, args);
+            if (!garment::lengthenPanel(g, i, static_cast<float>(numRequired(args, "a_hauteur_cm") / 100.0),
+                                        static_cast<float>(numRequired(args, "longueur_cm") / 100.0)))
+                fail("Allongement impossible (ligne hors de la pièce ?).");
+            save("Pièce « " + P(i).name + " » modifiée. Points (cm) : " + pointText(i));
             return true;
         }
         if (name == "agrandir_piece") {

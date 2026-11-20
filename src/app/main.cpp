@@ -23,6 +23,10 @@ int main(int argc, char** argv)
             options.startPaused = true;
         } else if (arg == "--about") {
             options.showAbout = true;
+        } else if (arg == "--yaw" && i + 1 < argc) {
+            options.yawDeg = static_cast<float>(std::atof(argv[++i]));
+        } else if (arg == "--zoom" && i + 1 < argc) {
+            options.zoom = static_cast<float>(std::atof(argv[++i]));
         } else if (arg == "--size" && i + 1 < argc) {
             std::sscanf(argv[++i], "%dx%d", &options.width, &options.height);
         } else if (!arg.empty() && arg[0] != '-') {
@@ -33,7 +37,7 @@ int main(int argc, char** argv)
             if (ext == "fbx" || ext == "obj") options.avatarPath = arg;
             else options.patternPath = arg;
         } else {
-            std::printf("Usage : %s [avatar.fbx] [--frames N] [--screenshot fichier.ppm] [--size 1600x900]\n", argv[0]);
+            std::printf("Usage : %s [avatar.fbx] [--frames N] [--screenshot fichier.ppm] [--size 1600x900] [--yaw degrés] [--zoom x]\n", argv[0]);
             return arg == "--help" ? 0 : 1;
         }
     }

@@ -367,6 +367,12 @@ int App::run(const AppOptions& options)
         if (options_.acceptImport && pendingImage_.width > 0) finishImageImport();
         if (options_.startPaused) playing_ = false;
     }
+    if (options_.yawDeg > -999.0f) {
+        frameCamera();
+        camera_.yaw = glm::radians(options_.yawDeg);
+        camera_.pitch = 0.05f;
+    }
+    camera_.distance /= std::max(options_.zoom, 0.1f);
 
     while (!glfwWindowShouldClose(window_)) {
         glfwPollEvents();
@@ -640,6 +646,7 @@ void App::resetCloth()
     if (garment_.empty()) {
         garmentMesh_ = {};
         renderer_.setClothTopology({}, 0);
+        updateClothPattern();
         return;
     }
     const garment::MeshingOptions mo = meshingOptions();
@@ -659,6 +666,7 @@ void App::resetCloth()
     solver_.setSeams(garmentMesh_.seamPairs, sewingSeconds_);
     renderer_.setClothTopology(garmentMesh_.mesh.indices, garmentMesh_.mesh.vertexCount());
     clothValid_ = true;
+    updateClothPattern();
     highlighted_ = {-2};   // recalcul de la mise en évidence au prochain affichage
     selectionEdges_.clear();
     updateClothColors();
@@ -733,6 +741,83 @@ void App::updateClothColors()
     renderer_.setClothColors(colors);
 }
 
+std::string App::projectDirectory() const
+{
+    const auto cut = watchedProject_.find_last_of("/\\");
+    return cut == std::string::npos ? std::string() : watchedProject_.substr(0, cut + 1);
+}
+
+void App::updateClothPattern()
+{
+    // Aspect du tissu (uni, ripstop, sergé, réfléchissant) et coordonnées du patron de chaque sommet.
+    std::vector<float> finish(garmentMesh_.panelOfVertex.size(), 0.0f);
+    for (std::size_t i = 0; i < finish.size(); ++i) {
+        const int p = garmentMesh_.panelOfVertex[i];
+        if (p >= 0 && p < static_cast<int>(garment_.panels.size()))
+            finish[i] = static_cast<float>(garment_.panels[static_cast<std::size_t>(p)].finish);
+    }
+    if (clothValid_) renderer_.setClothPattern(garmentMesh_.mesh.uvs, finish);
+
+    // Texture des impressions : reconstruite seulement si une impression ou une pièce imprimée a changé.
+    std::string sig = projectDirectory();
+    char buf[96];
+    for (std::size_t k = 0; k < garment_.panels.size(); ++k) {
+        const auto& p = garment_.panels[k];
+        if (p.prints.empty()) continue;
+        std::snprintf(buf, sizeof(buf), "#%zu:", k);
+        sig += buf;
+        for (const auto& q : p.points) {
+            std::snprintf(buf, sizeof(buf), "%.5f,%.5f;", q.x, q.y);
+            sig += buf;
+        }
+        for (const auto& pr : p.prints) {
+            std::snprintf(buf, sizeof(buf), "|%.5f %.5f %.5f %.5f %.3f ", pr.offset.x, pr.offset.y, pr.width, pr.height, pr.angleDeg);
+            sig += buf + pr.image;
+        }
+    }
+    {   // le cadre de la texture dépend de toutes les pièces
+        glm::vec2 lo(1e9f), hi(-1e9f);
+        for (const auto& p : garment_.panels)
+            for (const auto& q : p.points) {
+                lo = glm::min(lo, q);
+                hi = glm::max(hi, q);
+            }
+        std::snprintf(buf, sizeof(buf), "@%.4f %.4f %.4f %.4f", lo.x, lo.y, hi.x, hi.y);
+        sig += buf;
+    }
+    if (sig == printSignature_) return;
+    printSignature_ = sig;
+    const std::string dir = projectDirectory();
+    auto load = [&](const std::string& path) -> const io::RasterImage* {
+        if (auto it = printImages_.find(path); it != printImages_.end()) return &it->second;
+        if (printMissing_.count(path) != 0) return nullptr;
+        std::string bytes, error;
+        const bool absolute = !path.empty() && (path[0] == '/' || path[0] == '\\' || (path.size() > 1 && path[1] == ':'));
+        bool ok = !absolute && !dir.empty() && io::readFileBytes(dir + path, bytes, error);
+        if (!ok) ok = io::readFileBytes(path, bytes, error);
+        io::RasterImage img;
+        if (!ok || !io::decodeRasterImage(bytes, img, error)) {
+            printMissing_[path] = true;
+            setStatus("Image d'impression introuvable : " + path, true);
+            return nullptr;
+        }
+        return &(printImages_[path] = std::move(img));
+    };
+    garment::PatternTextureOptions opt;
+    opt.metersPerPixel = 0.001f;
+    opt.maxSize = 4096;
+    if (!garment::buildPatternTexture(garment_, load, opt, printAtlas_)) {
+        printAtlas_ = {};
+        renderer_.setPrintTexture(0, 0, nullptr, {}, {});
+        editor_.prints = {};
+        return;
+    }
+    renderer_.setPrintTexture(printAtlas_.width, printAtlas_.height, printAtlas_.rgba.data(), printAtlas_.origin, printAtlas_.size());
+    editor_.prints.texture = static_cast<ImTextureID>(renderer_.printTexture());
+    editor_.prints.min = printAtlas_.origin;
+    editor_.prints.max = printAtlas_.origin + printAtlas_.size();
+}
+
 void App::importPattern(const std::string& path)
 {
     if (path.empty()) return;
@@ -774,8 +859,8 @@ void App::importPattern(const std::string& path)
                 frameCamera();
             }
         }
+        watchProject(path);   // avant le maillage : les images d'impression sont cherchées à côté du projet
         setGarment(std::move(g));
-        watchProject(path);
         char text[200];
         std::snprintf(text, sizeof(text), "Projet %s ouvert : %zu pièce(s), %zu couture(s).", name.c_str(), garment_.panels.size(),
                       garment_.seams.size());
@@ -1015,6 +1100,10 @@ long long fileStamp(const std::string& utf8Path)
 
 void App::watchProject(const std::string& path)
 {
+    if (path != watchedProject_) {
+        printMissing_.clear();
+        printSignature_.clear();
+    }
     watchedProject_ = path;
     watchedStamp_ = fileStamp(path);
 }
@@ -1031,6 +1120,9 @@ void App::checkWatchedProject()
     std::string error;
     if (!io::loadProject(watchedProject_, g, error)) return;   // fichier en cours d'écriture : on réessaiera
     watchedStamp_ = stamp;
+    printImages_.clear();   // les images d'impression ont pu être ajoutées ou remplacées
+    printMissing_.clear();
+    printSignature_.clear();
     // Modifié par un autre programme (assistant via le serveur MCP) : on recharge le vêtement,
     // l'avatar et l'état de la simulation (lecture / pause) ne changent pas.
     const bool countChanged = g.panels.size() != garment_.panels.size();
@@ -2299,6 +2391,7 @@ void App::apply3DState()
         if (!hidden) shown.insert(shown.end(), {idx[t], idx[t + 1], idx[t + 2]});
     }
     renderer_.setClothTopology(shown, garmentMesh_.mesh.vertexCount());
+    updateClothPattern();
 }
 
 void App::pasteClipboard(bool mirror, bool atMenuPoint)
@@ -2978,6 +3071,77 @@ void App::drawInspector()
     ImGui::End();
 }
 
+void App::inspectorPrints(int idx)
+{
+    auto& panel = garment_.panels[static_cast<std::size_t>(idx)];
+    ImGui::SeparatorText("Impressions (logos, textes)");
+    int removeAt = -1;
+    bool changed = false, done = false;
+    for (std::size_t k = 0; k < panel.prints.size(); ++k) {
+        auto& pr = panel.prints[k];
+        ImGui::PushID(static_cast<int>(k) + 1000);
+        const auto cut = pr.image.find_last_of("/\\");
+        ImGui::TextUnformatted((cut == std::string::npos ? pr.image : pr.image.substr(cut + 1)).c_str());
+        if (printMissing_.count(pr.image) != 0) {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.35f, 1.0f), "(introuvable)");
+        }
+        ImGui::SameLine(ImGui::GetContentRegionAvail().x - 8.0f * uiScale_);
+        if (ImGui::SmallButton("x")) removeAt = static_cast<int>(k);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Retirer cette impression");
+        float off[2] = {pr.offset.x * 100.0f, pr.offset.y * 100.0f};
+        label("Position");
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::DragFloat2("##off", off, 0.1f, -300.0f, 300.0f, "%.1f cm")) {
+            pr.offset = glm::vec2(off[0], off[1]) / 100.0f;
+            changed = true;
+        }
+        done = done || ImGui::IsItemDeactivatedAfterEdit();
+        float size[2] = {pr.width * 100.0f, pr.height * 100.0f};
+        label("Taille");
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::DragFloat2("##size", size, 0.1f, 0.0f, 300.0f, "%.1f cm")) {
+            pr.width = std::clamp(size[0], 0.2f, 300.0f) / 100.0f;
+            pr.height = std::clamp(size[1], 0.0f, 300.0f) / 100.0f;
+            changed = true;
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Largeur, hauteur (0 = proportions de l'image). Position : depuis le centre de la pièce.");
+        done = done || ImGui::IsItemDeactivatedAfterEdit();
+        label("Rotation");
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::DragFloat("##angle", &pr.angleDeg, 0.5f, -360.0f, 360.0f, "%.0f°")) changed = true;
+        done = done || ImGui::IsItemDeactivatedAfterEdit();
+        ImGui::PopID();
+    }
+    if (removeAt >= 0) {
+        undoStack_.push_back(committed_);
+        panel.prints.erase(panel.prints.begin() + removeAt);
+        committed_ = garment_;
+        updateClothPattern();
+    }
+    if (changed) updateClothPattern();
+    if (done) {
+        undoStack_.push_back(committed_);
+        committed_ = garment_;
+    }
+    if (ImGui::Button("Ajouter une image...", ImVec2(-1, 0))) {
+        std::string path = openFileDialog("Image à imprimer sur la pièce", "Images (PNG, JPEG, BMP, TGA)|*.png;*.jpg;*.jpeg;*.bmp;*.tga");
+        if (!path.empty()) {
+            const std::string dir = projectDirectory();   // chemin relatif si l'image est dans le dossier du projet
+            if (!dir.empty() && path.rfind(dir, 0) == 0) path = path.substr(dir.size());
+            garment::Print pr;
+            pr.image = path;
+            pr.width = 0.10f;
+            undoStack_.push_back(committed_);
+            garment_.panels[static_cast<std::size_t>(idx)].prints.push_back(pr);
+            committed_ = garment_;
+            printMissing_.erase(path);
+            updateClothPattern();
+        }
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Logo, inscription, drapeau... L'image est découpée au contour de la pièce (PNG transparent conseillé).");
+}
+
 void App::inspectorPanel()
 {
     if (!ImGui::CollapsingHeader("Pièce", ImGuiTreeNodeFlags_DefaultOpen)) return;
@@ -3000,6 +3164,22 @@ void App::inspectorPanel()
         updateClothColors();
         committed_ = garment_;
     }
+    label("Aspect");
+    {
+        int finish = static_cast<int>(panel.finish);
+        const char* finishes[garment::kFabricFinishCount];
+        for (int k = 0; k < garment::kFabricFinishCount; ++k) finishes[k] = garment::fabricFinishName(static_cast<garment::FabricFinish>(k));
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::Combo("##aspect", &finish, finishes, garment::kFabricFinishCount)) {
+            undoStack_.push_back(committed_);
+            panel.finish = static_cast<garment::FabricFinish>(finish);
+            committed_ = garment_;
+            updateClothPattern();
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Toile technique quadrillée (ripstop), sergé en diagonale (denim) ou bande réfléchissante.");
+    }
+    inspectorPrints(idx);
 
     label("Droit fil");
     const float fw = (ImGui::GetContentRegionAvail().x - 3 * ImGui::GetStyle().ItemSpacing.x) / 4.0f;

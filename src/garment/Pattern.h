@@ -33,6 +33,21 @@ struct Placement {
     glm::vec3 offset{0.0f};
 };
 
+/// Impression posée sur une pièce (logo, inscription, drapeau, bande réfléchissante...) :
+/// une image PNG / JPEG plaquée sur le tissu, visible en 3D et exportée avec le vêtement.
+struct Print {
+    std::string image;            // chemin du fichier image (UTF-8), relatif au projet ou absolu
+    glm::vec2 offset{0.0f};       // centre de l'image par rapport au centre du cadre de la pièce (m)
+    float width = 0.10f;          // largeur (m)
+    float height = 0.0f;          // hauteur (m) ; 0 = proportions de l'image
+    float angleDeg = 0.0f;        // rotation dans le patron (degrés)
+};
+
+/// Aspect du tissu (rendu 3D et texture exportée).
+enum class FabricFinish { Plain = 0, Ripstop, Twill, Reflective };
+inline constexpr int kFabricFinishCount = 4;
+const char* fabricFinishName(FabricFinish f);
+
 struct Panel {
     std::string name;
     std::vector<glm::vec2> points;   // contour fermé, sens quelconque
@@ -59,7 +74,14 @@ struct Panel {
     float thickCollision = 0.0f;     // épaisseur ajoutée pour les contacts (m)
     float thickRender = 0.0f;        // épaisseur ajoutée à l'affichage (m)
     float pressure = 0.0f;           // pression (Pa) qui pousse la pièce vers son endroit (volume gonflé)
+    FabricFinish finish = FabricFinish::Plain;   // aspect du tissu
+    std::vector<Print> prints;       // impressions posées sur la pièce
 };
+
+/// Centre du cadre (boîte englobante) d'une pièce : repère des impressions.
+glm::vec2 panelBoxCenter(const Panel& panel);
+/// Position du centre d'une impression dans les coordonnées du patron (m).
+inline glm::vec2 printCenter(const Panel& panel, const Print& print) { return panelBoxCenter(panel) + print.offset; }
 
 /// Un bord = le segment entre points[edge] et points[(edge + 1) % n] de la pièce.
 struct EdgeRef {

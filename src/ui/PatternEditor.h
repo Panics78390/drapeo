@@ -69,6 +69,11 @@ public:
     int selectedEdge = -1;             // arête choisie (ses deux points sont dans selectedPoints)
     std::vector<int> selection;   // sélection multiple (rectangle, Maj+clic) ; contient selectedPanel
     Backdrop backdrop;
+    /// Impressions (logos, inscriptions) peintes sur les pièces : texture couvrant tout le patron (ligne du bas en premier).
+    struct PrintOverlay {
+        ImTextureID texture = 0;
+        glm::vec2 min{0.0f}, max{0.0f};   // coins bas-gauche et haut-droit (m)
+    } prints;
     /// Silhouette de l'avatar vu de face, sous le patron (coordonnées 2D = mètres du monde, pieds à y = 0).
     struct Silhouette {
         ImTextureID texture = 0;

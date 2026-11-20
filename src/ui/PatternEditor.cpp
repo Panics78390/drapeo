@@ -1390,6 +1390,8 @@ bool PatternEditor::draw(garment::Garment& g)
     if (tool != Tool::Seam) pendingSeam_ = {};
 
     // --- Dessin des pièces -----------------------------------------------------
+    if (prints.texture != 0)   // texture stockée ligne du bas en premier : v inversé
+        dl->AddImage(prints.texture, toScreen({prints.min.x, prints.max.y}), toScreen({prints.max.x, prints.min.y}), ImVec2(0, 1), ImVec2(1, 0));
     std::vector<ImVec2> scr;
     for (std::size_t p = 0; p < g.panels.size(); ++p) {
         const auto& panel = g.panels[p];
