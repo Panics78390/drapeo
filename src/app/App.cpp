@@ -2655,6 +2655,21 @@ void App::pieceAction(PieceAction a)
         setStatus(plural("supprimée(s). Ctrl+Z pour annuler."), false);
         break;
     }
+    case A::DeleteSeams: {
+        const auto before = garment_.seams.size();
+        std::erase_if(garment_.seams, [&](const garment::Seam& s) {
+            return std::find(t.begin(), t.end(), s.a.panel) != t.end() || std::find(t.begin(), t.end(), s.b.panel) != t.end();
+        });
+        const auto removed = before - garment_.seams.size();
+        editor_.selectedSeam = -1;
+        if (removed > 0) {
+            commitGarment();
+            setStatus(std::to_string(removed) + " couture(s) effacée(s). Ctrl+Z pour annuler.", false);
+        } else {
+            setStatus("Aucune couture sur la sélection.", false);
+        }
+        break;
+    }
     case A::CloneMirrorSewn:
     case A::CloneMirror:
     case A::CloneInstance:
@@ -3031,6 +3046,13 @@ void App::drawPieceMenu()
     item("Coller ici", "Ctrl+V", A::Paste, hasClip);
     item("Coller en miroir", "Ctrl+R", A::PasteMirror, hasClip);
     item("Supprimer", "Suppr", A::Delete, has);
+    {
+        // Coutures touchant la sélection (une sélection de toutes les pièces efface toutes les coutures).
+        const bool seamed = has && std::any_of(garment_.seams.begin(), garment_.seams.end(), [&](const garment::Seam& s) {
+            return std::find(t.begin(), t.end(), s.a.panel) != t.end() || std::find(t.begin(), t.end(), s.b.panel) != t.end();
+        });
+        item("Effacer les coutures", nullptr, A::DeleteSeams, seamed);
+    }
     ImGui::Separator();
     if (ImGui::BeginMenu("Cloner (édition liée)", has)) {
         item("Clone symétrique cousu", "Ctrl+D", A::CloneMirrorSewn);

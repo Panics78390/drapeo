@@ -224,6 +224,7 @@ Un clic droit sans glisser sur une pièce (ou sur une sélection) ouvre son menu
 - **Sélection** : tout sélectionner, inverser la sélection, pièces de la même couleur, de la même zone du corps, clones liés.
 - **Nouvelle couleur de tissu** pour les pièces choisies.
 - **Copier / Coller ici / Coller en miroir / Supprimer** (Ctrl+C, Ctrl+V, Ctrl+R, Suppr).
+- **Effacer les coutures** : supprime toutes les coutures des pièces sélectionnées (Ctrl+A puis clic droit pour effacer toutes les coutures du patron ; Ctrl+Z pour annuler).
 - **Cloner (édition liée)** : clone symétrique cousu (Ctrl+D : le clone est aussi cousu sur le côté opposé des
   pièces symétriques voisines, et ses poches posées en face), clone symétrique, clone identique, clone par-dessus
   ou en dessous (couche, Ctrl+Maj+V / Ctrl+Maj+B). Les clones restent liés : changer la forme de l'un (points, cintrage,

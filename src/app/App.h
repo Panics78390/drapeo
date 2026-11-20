@@ -108,7 +108,7 @@ private:
     // --- Menu clic droit des pièces (vue patron) ------------------------------
     enum class PieceAction {
         SelectAll, InvertSelection, SameColor, SameZone, SameLink, NewFabric,
-        Copy, Paste, PasteMirror, Delete,
+        Copy, Paste, PasteMirror, Delete, DeleteSeams,
         CloneMirrorSewn, CloneMirror, CloneInstance, CloneOver, CloneUnder, Link, Unlink,
         Grow, Shrink, Offset, Simplify, InnerShape,
         Deactivate, DeactivateWithSeams, Activate, Freeze, Unfreeze, Strengthen, Soften, Hide, Show, ShowAll,
