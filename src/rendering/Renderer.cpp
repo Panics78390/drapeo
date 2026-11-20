@@ -137,6 +137,11 @@ void main() {
             roughness = 0.28;
             F0 = vec3(0.30);
             sheenAmount = 0.0;
+        } else if (finish == 4) {
+            // Fermeture éclair : dents métalliques dessinées dans la texture du patron, un peu brillantes.
+            roughness = 0.38;
+            F0 = vec3(0.10);
+            sheenAmount = 0.0;
         }
         if (uHasPrints == 1 && gl_FrontFacing) {
             vec4 p = texture(uPrints, (vUv - uPrintOrigin) / uPrintSize);

@@ -102,6 +102,34 @@ int sewFree(Garment& g, int panelA, float sA, float lenA, int panelB, float sB, 
 /// Renvoie false si la ligne ne traverse pas la pièce.
 bool lengthenPanel(Garment& g, int panel, float atY, float amount);
 
+/// Coupe une pièce en deux le long du segment `p0`-`p1`, deux points de son contour (ajoutés s'il le
+/// faut). La pièce garde le morceau qui va de p0 à p1 dans l'ordre du contour ; l'autre morceau devient
+/// une nouvelle pièce (mêmes propriétés, même place en 3D). Les coutures sont gardées : une couture qui
+/// passe par un point de coupe est partagée entre les deux morceaux, en proportion de sa longueur.
+/// Les pièces posées et les impressions vont sur le morceau qui les porte. `sewTogether` : les deux
+/// morceaux sont recousus le long de la coupe. Renvoie l'index de la nouvelle pièce, ou -1 (et `error`).
+int splitPanel(Garment& g, int panel, glm::vec2 p0, glm::vec2 p1, bool sewTogether, std::string& error);
+/// Même chose le long de la droite qui passe par `a` et `b` : la coupe va entre les deux bords de la
+/// pièce traversés de part et d'autre du milieu de [a, b].
+int splitPanelAlongLine(Garment& g, int panel, glm::vec2 a, glm::vec2 b, bool sewTogether, std::string& error);
+/// Points où la droite (a, b) entre et sort de la pièce autour du milieu de [a, b] ; false s'il n'y en a pas.
+bool lineCut(const Panel& panel, glm::vec2 a, glm::vec2 b, glm::vec2& p0, glm::vec2& p1);
+
+/// Bande de soufflet (épaisseur d'une poche, d'un sac) : crée une bande de largeur `width` aussi longue
+/// que la portion de contour de `panel` qui part de `s0` et parcourt `len` (comme sewFree), et coud son
+/// grand bord du bas sur cette portion. En 3D, la bande est posée debout le long de la portion, vers le corps
+/// (derrière la pièce, là où sera le fond de la poche).
+/// Renvoie l'index de la bande, ou -1 (et `error`).
+int addGussetStrip(Garment& g, int panel, float s0, float len, float width, std::string& error);
+/// Coud le grand bord du haut d'une bande de soufflet sur une portion de contour d'une autre pièce
+/// (son début contre le début de la bande). Renvoie l'index de la couture, ou -1.
+int sewGussetTop(Garment& g, int strip, int panel, float s0, float len);
+
+/// Fermeture éclair posée sur `base` le long du segment a-b (coordonnées de la base, gardé à l'intérieur de la
+/// pièce) : une bande de largeur `width` à l'aspect « Fermeture éclair » (dents dessinées), cousue tout autour,
+/// et un curseur avec sa tirette au bout `b`, cousu par le haut. Renvoie l'index de la bande, ou -1 (et `error`).
+int addZipper(Garment& g, int base, glm::vec2 a, glm::vec2 b, float width, std::string& error);
+
 /// Propriété commune pour « sélectionner les pièces semblables ».
 enum class SameProperty { Color, Zone, LinkGroup };
 std::vector<int> panelsLike(const Garment& g, int panel, SameProperty property);

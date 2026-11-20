@@ -19,7 +19,7 @@
 
 namespace drapeo::ui {
 
-enum class Tool { Select, Transform, CurvePoint, Curvature, Smooth, AddPoint, Slash, Polygon, Rectangle, Seam, FreeSeam };
+enum class Tool { Select, Transform, CurvePoint, Curvature, Smooth, AddPoint, Slash, CutPanel, Fold, Zipper, Polygon, Rectangle, Seam, FreeSeam, Gusset };
 
 /// Outils d'édition du patron (menu de la barre d'outils) : nom, raccourci, aide.
 struct ToolInfo {
@@ -36,16 +36,25 @@ inline constexpr ToolInfo kEditTools[] = {
     {Tool::Smooth, "Lisser la courbe", "L", "Tirer un coin pour l'arrondir ; pinceau ailleurs pour adoucir le contour"},
     {Tool::AddPoint, "Ajouter un point / couper un bord", "A", "Clic sur un bord ou une courbe : la couper au point cliqué ou en parties égales"},
     {Tool::Slash, "Fendre et écarter", "E", "Clic sur le bord de départ, puis sur le point charnière : la pièce s'ouvre en pointe"},
+    {Tool::Fold, "Ligne de pli", "K",
+     "Tracer une ligne sur une pièce : le tissu s'y plie de l'angle choisi (passepoil, bande de fermeture, bord replié). "
+     "Clic sur une ligne de pli : la choisir (Suppr pour la retirer)"},
+    {Tool::Zipper, "Fermeture éclair", "J",
+     "Tracer la fermeture sur une pièce, du début vers le bout où sera le curseur : bande à dents cousue dessus, curseur et tirette"},
+    {Tool::CutPanel, "Couper la pièce", "X", "Tracer une ligne à travers une pièce : elle est coupée en deux morceaux (Maj : ligne droite ou à 45°)"},
 };
 [[nodiscard]] inline bool isEditTool(Tool t)
 {
-    return t != Tool::Polygon && t != Tool::Rectangle && t != Tool::Seam && t != Tool::FreeSeam;
+    return t != Tool::Polygon && t != Tool::Rectangle && t != Tool::Seam && t != Tool::FreeSeam && t != Tool::Gusset;
 }
 /// Outils de couture (liste déroulante du bouton Couture)
 inline constexpr ToolInfo kSeamTools[] = {
     {Tool::Seam, "Couture bord à bord", "S", "Cliquer deux bords à coudre ensemble"},
     {Tool::FreeSeam, "Couture libre", "G",
      "Clic au début puis à la fin d'une portion de contour (elle peut passer par plusieurs bords), puis pareil sur l'autre pièce"},
+    {Tool::Gusset, "Bande de soufflet", "U",
+     "Choisir une portion de contour (début, puis fin) : une bande de cette longueur y est cousue. Ensuite, choisir la portion "
+     "d'une autre pièce pour y coudre l'autre côté de la bande (Échap pour s'arrêter là)"},
 };
 
 /// Image de patron (photo, scan, page de PDF) affichée sous les pièces, à l'échelle.
@@ -83,7 +92,15 @@ public:
     float bodyScale = 1.0f;     // hauteur de l'avatar / 1,75 m
     float torsoCenterX = 0.0f;  // abscisse du centre du buste (avatar de 1,75 m)
     bool magnet = true;           // aimant : points et pièces s'accrochent aux points et bords voisins
-    float spreadDeg = 15.0f;      // « Fendre et écarter » : angle d'ouverture
+    float spreadDeg = 15.0f;
+    float gussetWidth = 0.03f;
+    float zipperWidth = 0.025f;   // « Fermeture éclair » : largeur de la bande (m)
+    float foldAngle = 90.0f;      // « Ligne de pli » : angle des nouvelles lignes (> 0 vers l'endroit)
+    float foldStrength = 0.8f;
+    int foldPanel = -1, foldIndex = -1;   // ligne de pli choisie    // « Bande de soufflet » : largeur de la bande (m)      // « Fendre et écarter » : angle d'ouverture
+    bool cutSew = true;           // « Couper la pièce » : recoudre les deux morceaux le long de la coupe
+    bool noticeError = false;
+    std::string notice;           // message à afficher dans la barre d'état (lu puis vidé par l'application)
     bool traceRequested = false;  // touche I : l'application détecte les pièces sur l'image de fond
 
     [[nodiscard]] bool isSelected(int panel) const;
@@ -164,7 +181,7 @@ private:
     bool needsFrame_ = true;
 
     // États d'interaction
-    enum class Drag { None, Point, Points, Panel, Pan, Rect, Backdrop, Marquee, Scale, Rotate, Move, Curve, Smooth, Round } drag_ = Drag::None;
+    enum class Drag { None, Point, Points, Panel, Pan, Rect, Backdrop, Marquee, Scale, Rotate, Move, Curve, Smooth, Round, CutLine, FoldLine, ZipLine } drag_ = Drag::None;
     glm::vec2 dragStart_{0.0f};
     glm::vec2 dragLast_{0.0f};
     std::vector<glm::vec2> drawing_;  // polygone en cours
@@ -197,12 +214,17 @@ private:
         float s0 = 0.0f, len = 0.0f;
     };
     FreeRun freeA_, freeB_;
+    int gussetStrip_ = -1;     // bande de soufflet créée, dont le haut reste à coudre (étapes 2 et 3)
+    Tool freeTool_ = Tool::FreeSeam;   // outil qui a commencé le choix des portions
     int freeStage_ = 0;        // 0 : début de A, 1 : fin de A, 2 : début de B, 3 : fin de B
     float freePrevS_ = 0.0f;   // dernière position survolée (pour suivre le sens de la souris)
     int freeHoverPanel_ = -1;
     float freeHoverS_ = 0.0f;
     // Outil Fendre et écarter : premier point choisi
     int slashPanel_ = -1, slashPoint_ = -1;
+    // Outil Couper la pièce : ligne tracée (dragStart_ -> cutEnd_)
+    glm::vec2 cutEnd_{0.0f};
+    int cutTarget(const garment::Garment& g, glm::vec2 a, glm::vec2 b, glm::vec2* p0 = nullptr, glm::vec2* p1 = nullptr) const;
     /// Ajoute un point sur le bord survolé (renvoie son index, -1 sinon).
     int insertOnEdge(garment::Garment& g, garment::EdgeRef e, float t);
     [[nodiscard]] bool pointChosen(int panel, int point) const;

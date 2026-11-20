@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <unordered_map>
 #include <cmath>
 
 namespace drapeo::simulation {
@@ -70,6 +71,11 @@ void XpbdSolver::build(const geometry::ClothMesh& mesh, const FabricMaterial& ma
     seams_.clear();
     seamKeys_.clear();
     seamFactor_ = 0.0f;
+    folds_.clear();
+    foldStrength_.clear();
+    foldPush_.clear();
+    foldPushTris_.clear();
+    foldPushTime_ = 0.0f;
     setMaterial(material);
 
     stats_ = {};
@@ -117,6 +123,74 @@ void XpbdSolver::setSeams(const std::vector<std::array<uint32_t, 2>>& pairs, flo
     }
     seamCloseSeconds_ = std::max(closeSeconds, 0.05f);
     seamFactor_ = seams_.empty() ? 0.0f : 1.0f;
+}
+
+void XpbdSolver::setFolds(const std::vector<FoldConstraint>& folds, const std::vector<std::pair<uint32_t, float>>& push)
+{
+    folds_.clear();
+    foldStrength_.clear();
+    std::unordered_set<uint64_t> keys;
+    auto key = [](uint32_t a, uint32_t b) { return (static_cast<uint64_t>(std::min(a, b)) << 32) | std::max(a, b); };
+    for (const auto& f : folds) {
+        if (f.a >= x_.size() || f.b >= x_.size() || f.a == f.b) continue;
+        folds_.push_back({f.a, f.b, f.rest});
+        foldStrength_.push_back(std::clamp(f.strength, 0.0f, 1.0f));
+        keys.insert(key(f.a, f.b));
+    }
+    // La flexion à plat de ces paires est remplacée par le pli.
+    std::erase_if(bend_, [&](const DistanceConstraint& c) { return keys.count(key(c.a, c.b)) != 0; });
+    stats_.bendConstraints = bend_.size();
+    foldPush_.clear();
+    foldPushTris_.clear();
+    for (const auto& [v, sign] : push)
+        if (v < x_.size()) {
+            foldPush_.push_back({v, sign});
+            foldPushTris_.emplace_back();
+        }
+    if (!foldPush_.empty()) {
+        std::unordered_map<uint32_t, std::size_t> slot;
+        for (std::size_t k = 0; k < foldPush_.size(); ++k) slot[foldPush_[k].first] = k;
+        for (std::size_t t = 0; t + 2 < indices_.size(); t += 3)
+            for (int j = 0; j < 3; ++j)
+                if (const auto it = slot.find(indices_[t + static_cast<std::size_t>(j)]); it != slot.end())
+                    foldPushTris_[it->second].push_back(static_cast<uint32_t>(t));
+    }
+    foldPushTime_ = foldPush_.empty() ? 0.0f : 0.8f;
+}
+
+void XpbdSolver::solveFolds(float dt)
+{
+    // Comme la flexion, mais avec la longueur « pliée » et une raideur qui dépend de la force du pli.
+    const float base = std::min(material_.bendCompliance, 0.2f);
+    for (std::size_t k = 0; k < folds_.size(); ++k) {
+        const auto& c = folds_[k];
+        const float wa = invMass_[c.a], wb = invMass_[c.b];
+        const float w = wa + wb;
+        if (w == 0.0f) continue;
+        const glm::vec3 d = x_[c.b] - x_[c.a];
+        const float len = glm::length(d);
+        if (len < kEpsilon) continue;
+        const float alphaTilde = base * std::pow(10.0f, -3.0f * foldStrength_[k]) / (dt * dt);
+        const float dLambda = -(len - c.rest) / (w + alphaTilde);
+        x_[c.a] -= d / len * (dLambda * wa);
+        x_[c.b] += d / len * (dLambda * wb);
+    }
+}
+
+void XpbdSolver::pushFolds(float dt)
+{
+    // Amorce : la ligne de pli recule (ou avance) un peu, pour que le tissu se plie du bon côté.
+    for (std::size_t k = 0; k < foldPush_.size(); ++k) {
+        const auto [v, sign] = foldPush_[k];
+        if (invMass_[v] == 0.0f) continue;
+        glm::vec3 nrm(0.0f);
+        for (const uint32_t t : foldPushTris_[k]) {
+            const uint32_t a = indices_[t], b = indices_[t + 1], c = indices_[t + 2];
+            nrm += glm::cross(x_[b] - x_[a], x_[c] - x_[a]);
+        }
+        const float l = glm::length(nrm);
+        if (l > 1e-12f) x_[v] += nrm / l * (sign * 0.03f * dt);
+    }
 }
 
 void XpbdSolver::setMaterial(const FabricMaterial& material)
@@ -190,6 +264,7 @@ void XpbdSolver::step(float frameDt)
     const bool sewing = seamFactor_ > 0.0f;
     if (sewing) seamFactor_ = std::max(0.0f, seamFactor_ - frameDt / seamCloseSeconds_);
     const glm::vec3 gravity = sewing ? glm::vec3(0.0f) : settings_.gravity;
+    foldPushTime_ = std::max(0.0f, foldPushTime_ - frameDt);
 
     for (int s = 0; s < substeps; ++s) {
         const bool pressure = !pressure_.empty() && !sewing;
@@ -206,6 +281,8 @@ void XpbdSolver::step(float frameDt)
         // 2. Contraintes internes du tissu
         solveDistance(stretch_, material_.stretchCompliance, dt);
         solveDistance(bend_, material_.bendCompliance, dt);
+        if (!folds_.empty()) solveFolds(dt);
+        if (foldPushTime_ > 0.0f) pushFolds(dt);
         if (!seams_.empty()) solveSeams();
 
         // 3. Contacts

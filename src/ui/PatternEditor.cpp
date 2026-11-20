@@ -303,6 +303,31 @@ void PatternEditor::beginTransform(const garment::Garment& g)
     transformBox(g, tLo_, tHi_);
 }
 
+int PatternEditor::cutTarget(const garment::Garment& g, glm::vec2 a, glm::vec2 b, glm::vec2* p0, glm::vec2* p1) const
+{
+    // Pièce coupée : la sélectionnée si la ligne la traverse, sinon celle sous le milieu de la ligne,
+    // sinon la première traversée (en commençant par celles du dessus).
+    glm::vec2 q0, q1;
+    auto ok = [&](int p) {
+        return p >= 0 && p < static_cast<int>(g.panels.size()) && g.attachmentOf(p) < 0 &&
+               garment::lineCut(g.panels[static_cast<std::size_t>(p)], a, b, q0, q1);
+    };
+    int found = -1;
+    if (ok(selectedPanel)) found = selectedPanel;
+    if (found < 0) {
+        const int under = pickPanel(g, (a + b) * 0.5f);
+        if (ok(under)) found = under;
+    }
+    for (int p = static_cast<int>(g.panels.size()) - 1; found < 0 && p >= 0; --p)
+        if (ok(p)) found = p;
+    if (found >= 0) {
+        ok(found);
+        if (p0) *p0 = q0;
+        if (p1) *p1 = q1;
+    }
+    return found;
+}
+
 int PatternEditor::insertOnEdge(garment::Garment& g, garment::EdgeRef e, float t)
 {
     if (e.panel < 0 || e.panel >= static_cast<int>(g.panels.size())) return -1;
@@ -478,6 +503,14 @@ std::string PatternEditor::hint() const
     case Tool::Slash:
         return slashPanel_ < 0 ? "Fendre et écarter : cliquez le point ou le bord où la pièce s'ouvre."
                                : "Fendre et écarter : cliquez maintenant le point charnière (la pièce pivote autour de lui).";
+    case Tool::Zipper:
+        return "Fermeture éclair : tracez la fermeture sur une pièce, en finissant du côté du curseur (Maj : droite ou à 45°).";
+    case Tool::Fold:
+        return foldPanel >= 0 ? "Ligne de pli choisie : réglez son angle et sa force dans la barre d'outils, Suppr pour la retirer."
+                              : "Ligne de pli : tracez une ligne sur une pièce (Maj : droite ou à 45°). Clic sur une ligne de pli pour la choisir.";
+    case Tool::CutPanel:
+        return "Couper la pièce : tracez une ligne qui traverse la pièce (Maj : horizontale, verticale ou à 45°). "
+               "Les coutures et les poches sont gardées.";
     case Tool::Polygon:
         return drawing_.empty() ? "Polygone : cliquez pour poser le premier point."
                                 : "Polygone : cliquez pour ajouter des points, cliquez sur le premier (ou Entrée) pour fermer. Échap : annuler.";
@@ -489,6 +522,13 @@ std::string PatternEditor::hint() const
         case 1: return "Couture libre : suivez le contour avec la souris (le sens compte), puis cliquez la fin de la portion. Échap : annuler.";
         case 2: return "Couture libre : cliquez le début de la portion à coudre en face (il sera cousu sur le début de la première).";
         default: return "Couture libre : suivez le contour et cliquez la fin. Les longueurs des deux portions s'affichent. Échap : annuler.";
+        }
+    case Tool::Gusset:
+        switch (freeStage_) {
+        case 0: return "Bande de soufflet : cliquez le début de la portion de contour qui recevra la bande (largeur dans la barre d'outils).";
+        case 1: return "Bande de soufflet : suivez le contour avec la souris, puis cliquez la fin de la portion. Échap : annuler.";
+        case 2: return "Bande de soufflet : cliquez le début de la portion d'une autre pièce pour y coudre l'autre côté (Échap : laisser libre).";
+        default: return "Bande de soufflet : suivez le contour et cliquez la fin. Échap : annuler.";
         }
     case Tool::Seam:
         return pendingSeam_.panel < 0 ? "Couture : cliquez sur le premier bord."
@@ -585,7 +625,11 @@ bool PatternEditor::draw(garment::Garment& g)
 
     // Couture libre : position survolée sur un contour (accrochée aux points) et suivi du parcours
     freeHoverPanel_ = -1;
-    if (tool == Tool::FreeSeam && hovered) {
+    if (tool != freeTool_) {
+        freeStage_ = 0;
+        freeTool_ = tool;
+    }
+    if ((tool == Tool::FreeSeam || tool == Tool::Gusset) && hovered) {
         for (int p = 0; freeHoverPanel_ < 0 && p < static_cast<int>(g.panels.size()); ++p)
             if (const int k = pickPoint(g, p, mouse); k >= 0) {
                 freeHoverPanel_ = p;
@@ -605,7 +649,8 @@ bool PatternEditor::draw(garment::Garment& g)
             freePrevS_ = freeHoverS_;
         }
     }
-    if (tool != Tool::FreeSeam) freeStage_ = 0;
+    if (tool != Tool::FreeSeam && tool != Tool::Gusset) freeStage_ = 0;
+    if (tool != Tool::Gusset) gussetStrip_ = -1;
 
     // --- Interactions ---------------------------------------------------------
     if (hovered) {
@@ -736,6 +781,39 @@ bool PatternEditor::draw(garment::Garment& g)
                 dragStart_ = dragLast_ = mw;
                 break;
             }
+            case Tool::Fold: {
+                // Clic sur une ligne de pli : on la choisit ; sinon on commence à en tracer une.
+                foldPanel = foldIndex = -1;
+                for (int p = 0; p < static_cast<int>(g.panels.size()) && foldPanel < 0; ++p) {
+                    const auto& pn = g.panels[static_cast<std::size_t>(p)];
+                    const glm::vec2 c = garment::panelBoxCenter(pn);
+                    for (int k = 0; k < static_cast<int>(pn.folds.size()); ++k) {
+                        const ImVec2 a = toScreen(c + pn.folds[static_cast<std::size_t>(k)].a), b = toScreen(c + pn.folds[static_cast<std::size_t>(k)].b);
+                        if (garment::distanceToSegment({mouse.x, mouse.y}, {a.x, a.y}, {b.x, b.y}) < kPickRadius) {
+                            foldPanel = p;
+                            foldIndex = k;
+                            foldAngle = pn.folds[static_cast<std::size_t>(k)].angleDeg;
+                            foldStrength = pn.folds[static_cast<std::size_t>(k)].strength;
+                            selectedPanel = p;
+                            selection.clear();
+                            break;
+                        }
+                    }
+                }
+                if (foldPanel < 0) {
+                    drag_ = Drag::FoldLine;
+                    dragStart_ = cutEnd_ = mw;
+                }
+                break;
+            }
+            case Tool::Zipper:
+                drag_ = Drag::ZipLine;
+                dragStart_ = cutEnd_ = mw;
+                break;
+            case Tool::CutPanel:
+                drag_ = Drag::CutLine;
+                dragStart_ = cutEnd_ = mw;
+                break;
             case Tool::Slash: {
                 // 1er clic : départ de la fente (point ou bord) ; 2e clic : point charnière sur la même pièce.
                 int panel = -1, point = -1;
@@ -883,6 +961,54 @@ bool PatternEditor::draw(garment::Garment& g)
             case Tool::Rectangle:
                 drag_ = Drag::Rect;
                 dragStart_ = dragLast_ = w;
+                break;
+            case Tool::Gusset:
+                if (freeHoverPanel_ < 0) break;
+                if (freeStage_ == 0 || freeStage_ == 2) {
+                    if (freeStage_ == 2 && freeHoverPanel_ == gussetStrip_) break;   // l'autre côté va sur une autre pièce
+                    FreeRun& r = freeStage_ == 0 ? freeA_ : freeB_;
+                    r = {freeHoverPanel_, freeHoverS_, 0.0f};
+                    freePrevS_ = freeHoverS_;
+                    selectedPanel = freeHoverPanel_;
+                    selection.clear();
+                    ++freeStage_;
+                } else {
+                    FreeRun& r = freeStage_ == 1 ? freeA_ : freeB_;
+                    if (freeHoverPanel_ != r.panel || std::abs(r.len) < 2.0f / zoom_) break;
+                    std::string error;
+                    if (freeStage_ == 1) {
+                        const int strip = garment::addGussetStrip(g, freeA_.panel, freeA_.s0, freeA_.len, gussetWidth, error);
+                        if (strip >= 0) {
+                            gussetStrip_ = strip;
+                            freeStage_ = 2;
+                            selectedPanel = strip;
+                            committed = true;
+                            char text[160];
+                            std::snprintf(text, sizeof(text),
+                                          "Bande de soufflet de %.1f cm cousue. Choisissez la portion d'une autre pièce pour l'autre côté, ou Échap.",
+                                          static_cast<double>(std::abs(freeA_.len) * 100.0f));
+                            notice = text;
+                            noticeError = false;
+                        } else {
+                            notice = error;
+                            noticeError = true;
+                            freeStage_ = 0;
+                        }
+                    } else {
+                        const int sid = garment::sewGussetTop(g, gussetStrip_, freeB_.panel, freeB_.s0, freeB_.len);
+                        if (sid >= 0) {
+                            selectedSeam = sid;
+                            committed = true;
+                            notice = "Bande de soufflet cousue des deux côtés.";
+                            noticeError = false;
+                        } else {
+                            notice = "L'autre côté de la bande n'a pas pu être cousu.";
+                            noticeError = true;
+                        }
+                        freeStage_ = 0;
+                        gussetStrip_ = -1;
+                    }
+                }
                 break;
             case Tool::FreeSeam:
                 if (freeHoverPanel_ < 0) break;
@@ -1144,6 +1270,108 @@ bool PatternEditor::draw(garment::Garment& g)
             curveEdge_ = {};
             drag_ = Drag::None;
         }
+    } else if (drag_ == Drag::ZipLine) {
+        glm::vec2 e = mw;
+        if (shift_) {
+            const glm::vec2 d = mw - dragStart_;
+            const float ang = std::round(std::atan2(d.y, d.x) / (3.14159265f / 4.0f)) * (3.14159265f / 4.0f);
+            e = dragStart_ + glm::length(d) * glm::vec2(std::cos(ang), std::sin(ang));
+        }
+        cutEnd_ = e;
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            drag_ = Drag::None;
+            if (glm::distance(dragStart_, cutEnd_) * zoom_ > 6.0f) {
+                const int panel = cutTarget(g, dragStart_, cutEnd_);
+                std::string error;
+                const int zi = panel < 0 ? -1 : garment::addZipper(g, panel, dragStart_, cutEnd_, zipperWidth, error);
+                if (zi >= 0) {
+                    selectedPanel = zi;
+                    selection.clear();
+                    committed = true;
+                    char text[128];
+                    std::snprintf(text, sizeof(text), "Fermeture éclair de %.1f cm posée sur « %s », curseur au bout.",
+                                  static_cast<double>(glm::distance(g.panels[static_cast<std::size_t>(zi)].points[0], g.panels[static_cast<std::size_t>(zi)].points[1]) * 100.0f),
+                                  g.panels[static_cast<std::size_t>(panel)].name.c_str());
+                    notice = text;
+                    noticeError = false;
+                } else {
+                    notice = panel < 0 ? "La fermeture doit être tracée sur une pièce." : error;
+                    noticeError = true;
+                }
+            }
+        }
+    } else if (drag_ == Drag::FoldLine) {
+        glm::vec2 e = mw;
+        if (shift_) {
+            const glm::vec2 d = mw - dragStart_;
+            const float ang = std::round(std::atan2(d.y, d.x) / (3.14159265f / 4.0f)) * (3.14159265f / 4.0f);
+            e = dragStart_ + glm::length(d) * glm::vec2(std::cos(ang), std::sin(ang));
+        }
+        cutEnd_ = e;
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            drag_ = Drag::None;
+            if (glm::distance(dragStart_, cutEnd_) * zoom_ > 6.0f) {
+                glm::vec2 p0, p1;
+                const int panel = cutTarget(g, dragStart_, cutEnd_, &p0, &p1);
+                if (panel < 0) {
+                    notice = "La ligne de pli doit être tracée sur une pièce.";
+                    noticeError = true;
+                } else {
+                    auto& pn = g.panels[static_cast<std::size_t>(panel)];
+                    // Ligne gardée à l'intérieur de la pièce (le maillage la coupe aussi au contour).
+                    const glm::vec2 a = garment::pointInPolygon(pn.points, dragStart_) ? dragStart_ : p0;
+                    const glm::vec2 b = garment::pointInPolygon(pn.points, cutEnd_) ? cutEnd_ : p1;
+                    garment::FoldLine f;
+                    f.a = a - garment::panelBoxCenter(pn);
+                    f.b = b - garment::panelBoxCenter(pn);
+                    f.angleDeg = foldAngle;
+                    f.strength = foldStrength;
+                    pn.folds.push_back(f);
+                    foldPanel = panel;
+                    foldIndex = static_cast<int>(pn.folds.size()) - 1;
+                    selectedPanel = panel;
+                    selection.clear();
+                    committed = true;
+                    char text[128];
+                    std::snprintf(text, sizeof(text), "Ligne de pli ajoutée sur « %s » (%.0f°).", pn.name.c_str(), static_cast<double>(foldAngle));
+                    notice = text;
+                    noticeError = false;
+                }
+            }
+        }
+    } else if (drag_ == Drag::CutLine) {
+        glm::vec2 e = mw;
+        if (shift_) {
+            // Maj : ligne horizontale, verticale ou à 45°
+            const glm::vec2 d = mw - dragStart_;
+            const float ang = std::round(std::atan2(d.y, d.x) / (3.14159265f / 4.0f)) * (3.14159265f / 4.0f);
+            const float l = glm::length(d);
+            e = dragStart_ + l * glm::vec2(std::cos(ang), std::sin(ang));
+        }
+        cutEnd_ = e;
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            drag_ = Drag::None;
+            if (glm::distance(dragStart_, cutEnd_) * zoom_ > 6.0f) {
+                const int panel = cutTarget(g, dragStart_, cutEnd_);
+                std::string error;
+                if (panel < 0) {
+                    notice = "La ligne ne traverse aucune pièce.";
+                    noticeError = true;
+                } else if (const int np = garment::splitPanelAlongLine(g, panel, dragStart_, cutEnd_, cutSew, error); np >= 0) {
+                    notice = "Pièce « " + g.panels[static_cast<std::size_t>(panel)].name + " » coupée en deux" +
+                             (cutSew ? " (morceaux recousus)." : ".");
+                    selection.clear();
+                    selectedPanel = np;
+                    selectedPoint = selectedEdge = selectedSeam = -1;
+                    selectedPoints.clear();
+                    committed = true;
+                    noticeError = false;
+                } else {
+                    notice = error;
+                    noticeError = true;
+                }
+            }
+        }
     } else if (drag_ == Drag::Round) {
         if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
             // Le coin s'arrondit d'autant que la souris s'en éloigne (longueur prise sur chaque bord).
@@ -1298,6 +1526,7 @@ bool PatternEditor::draw(garment::Garment& g)
             drawing_.clear();
             pendingSeam_ = {};
             freeStage_ = 0;
+            gussetStrip_ = -1;
         }
         if (ImGui::IsKeyPressed(ImGuiKey_Enter) && drawing_.size() >= 3) {
             garment::Panel panel;
@@ -1311,7 +1540,13 @@ bool PatternEditor::draw(garment::Garment& g)
             committed = true;
         }
         if (ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace)) {
-            if (backdrop.selected && selectedPanel < 0 && selectedSeam < 0) {
+            if (tool == Tool::Fold && foldPanel >= 0 && foldPanel < static_cast<int>(g.panels.size()) && foldIndex >= 0 &&
+                foldIndex < static_cast<int>(g.panels[static_cast<std::size_t>(foldPanel)].folds.size())) {
+                auto& folds = g.panels[static_cast<std::size_t>(foldPanel)].folds;
+                folds.erase(folds.begin() + foldIndex);
+                foldPanel = foldIndex = -1;
+                committed = true;
+            } else if (backdrop.selected && selectedPanel < 0 && selectedSeam < 0) {
                 backdrop.removeRequested = true;
                 backdrop.selected = false;
             } else if (selection.size() > 1 && selectedSeam < 0) {
@@ -1378,11 +1613,15 @@ bool PatternEditor::draw(garment::Garment& g)
             if (ImGui::IsKeyPressed(ImGuiKey_L)) tool = Tool::Smooth;
             if (ImGui::IsKeyPressed(ImGuiKey_A)) tool = Tool::AddPoint;
             if (ImGui::IsKeyPressed(ImGuiKey_E)) tool = Tool::Slash;
+            if (ImGui::IsKeyPressed(ImGuiKey_X)) tool = Tool::CutPanel;
+            if (ImGui::IsKeyPressed(ImGuiKey_K)) tool = Tool::Fold;
+            if (ImGui::IsKeyPressed(ImGuiKey_J)) tool = Tool::Zipper;
             if (ImGui::IsKeyPressed(ImGuiKey_I)) traceRequested = true;
             if (ImGui::IsKeyPressed(ImGuiKey_P)) tool = Tool::Polygon;
             if (ImGui::IsKeyPressed(ImGuiKey_B)) tool = Tool::Rectangle;
             if (ImGui::IsKeyPressed(ImGuiKey_S)) tool = Tool::Seam;
             if (ImGui::IsKeyPressed(ImGuiKey_G)) tool = Tool::FreeSeam;
+            if (ImGui::IsKeyPressed(ImGuiKey_U)) tool = Tool::Gusset;
             if (ImGui::IsKeyPressed(ImGuiKey_F)) frameAll(g);
             if (ImGui::IsKeyPressed(ImGuiKey_M)) magnet = !magnet;
         }
@@ -1447,6 +1686,30 @@ bool PatternEditor::draw(garment::Garment& g)
         const ImU32 col = isSelected(static_cast<int>(p)) ? IM_COL32(120, 200, 255, 220) : IM_COL32(120, 200, 255, 110);
         for (int k = 0; k < dashes; k += 2)
             dl->AddLine({a.x, a.y + (b.y - a.y) * k / dashes}, {a.x, a.y + (b.y - a.y) * (k + 1) / dashes}, col, 1.5f);
+    }
+
+    // --- Lignes de pli : tirets et points alternés (couleur selon le sens du pli) ---
+    if (foldPanel >= static_cast<int>(g.panels.size()) ||
+        (foldPanel >= 0 && foldIndex >= static_cast<int>(g.panels[static_cast<std::size_t>(foldPanel)].folds.size())))
+        foldPanel = foldIndex = -1;
+    if (tool != Tool::Fold) foldPanel = foldIndex = -1;
+    for (std::size_t p = 0; p < g.panels.size(); ++p) {
+        const auto& pn = g.panels[p];
+        const glm::vec2 c = garment::panelBoxCenter(pn);
+        for (std::size_t k = 0; k < pn.folds.size(); ++k) {
+            const auto& f = pn.folds[k];
+            const ImVec2 a = toScreen(c + f.a), b = toScreen(c + f.b);
+            const bool chosen = static_cast<int>(p) == foldPanel && static_cast<int>(k) == foldIndex;
+            const ImU32 col = chosen ? IM_COL32(255, 240, 120, 255) : f.angleDeg >= 0.0f ? IM_COL32(120, 230, 160, 230) : IM_COL32(250, 150, 90, 230);
+            const float len = std::hypot(b.x - a.x, b.y - a.y);
+            const int n = std::max(1, static_cast<int>(len / 6.0f));
+            for (int s2 = 0; s2 < n; ++s2) {
+                if (s2 % 3 == 2) continue;   // trait, trait, vide
+                const float t0 = static_cast<float>(s2) / n, t1 = static_cast<float>(s2 + 1) / n;
+                dl->AddLine({a.x + (b.x - a.x) * t0, a.y + (b.y - a.y) * t0}, {a.x + (b.x - a.x) * t1, a.y + (b.y - a.y) * t1}, col,
+                            chosen ? 2.6f : 1.6f);
+            }
+        }
     }
 
     // --- Droit fil : flèche à deux pointes sur chaque pièce -----------------------
@@ -1690,7 +1953,7 @@ bool PatternEditor::draw(garment::Garment& g)
         if (!onPoint) dl->AddCircle(mouse, 28.0f, IM_COL32(120, 200, 255, 160), 32, 1.5f);
     }
     // Couture libre : portions choisies, traits qui relient leurs débuts et leurs fins, longueurs
-    if (tool == Tool::FreeSeam) {
+    if (tool == Tool::FreeSeam || tool == Tool::Gusset) {
         const ImU32 pink = IM_COL32(236, 72, 153, 255);
         auto runLine = [&](const FreeRun& r, std::vector<ImVec2>& out) {
             out.clear();
@@ -1754,6 +2017,27 @@ bool PatternEditor::draw(garment::Garment& g)
         const ImVec2 sp = toScreen(q);
         dl->AddCircleFilled(sp, 4.5f, IM_COL32(255, 220, 60, 255), 12);
         dl->AddCircle(sp, 4.5f, IM_COL32(30, 32, 36, 255), 12, 1.0f);
+    }
+    if (drag_ == Drag::ZipLine) {
+        const ImVec2 a = toScreen(dragStart_), b = toScreen(cutEnd_);
+        dl->AddLine(a, b, IM_COL32(40, 40, 44, 220), std::max(3.0f, zipperWidth * zoom_));
+        dl->AddLine(a, b, IM_COL32(200, 196, 180, 255), std::max(1.5f, zipperWidth * 0.25f * zoom_));
+        dl->AddCircleFilled(b, 5.0f, IM_COL32(200, 200, 205, 255), 12);
+    }
+    if (drag_ == Drag::FoldLine) dl->AddLine(toScreen(dragStart_), toScreen(cutEnd_), IM_COL32(120, 230, 160, 230), 2.0f);
+    // Outil Couper la pièce : ligne tracée et points de coupe
+    if (drag_ == Drag::CutLine) {
+        const ImU32 red = IM_COL32(255, 90, 90, 240);
+        dl->AddLine(toScreen(dragStart_), toScreen(cutEnd_), IM_COL32(255, 90, 90, 120), 1.0f);
+        glm::vec2 p0, p1;
+        if (cutTarget(g, dragStart_, cutEnd_, &p0, &p1) >= 0) {
+            dl->AddLine(toScreen(p0), toScreen(p1), red, 2.0f);
+            for (const glm::vec2 q : {p0, p1}) dl->AddCircleFilled(toScreen(q), 4.5f, red, 12);
+            char text[48];
+            std::snprintf(text, sizeof(text), "%.1f cm", static_cast<double>(glm::distance(p0, p1) * 100.0f));
+            dl->AddRectFilled({mouse.x + 12, mouse.y + 10}, {mouse.x + 18 + ImGui::CalcTextSize(text).x, mouse.y + 30}, IM_COL32(20, 20, 24, 210), 3.0f);
+            dl->AddText({mouse.x + 15, mouse.y + 12}, kInk, text);
+        }
     }
     // Outil Fendre et écarter : premier point choisi
     if (tool == Tool::Slash && slashPanel_ >= 0 && slashPanel_ < static_cast<int>(g.panels.size()) && slashPoint_ >= 0 &&

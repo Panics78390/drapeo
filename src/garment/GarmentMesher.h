@@ -29,6 +29,12 @@ struct GarmentMesh {
     std::vector<std::array<uint32_t, 2>> allSeamPairs; // toutes les coutures, actives ou non
     std::vector<int> seamOfPair;                    // couture de chaque paire de allSeamPairs
     std::vector<std::vector<glm::vec2>> panelPoints2D; // pour l'export
+    /// Arêtes du maillage sur les lignes de pli (le tissu se plie autour d'elles).
+    struct FoldEdge {
+        uint32_t a, b;
+        float angleDeg, strength;
+    };
+    std::vector<FoldEdge> foldEdges;
 };
 
 struct MeshingOptions {

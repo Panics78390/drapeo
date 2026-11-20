@@ -1,5 +1,7 @@
 #include "garment/PatternOps.h"
 
+#include "garment/GarmentMesher.h"
+
 #include <algorithm>
 #include <cmath>
 #include <map>
@@ -167,6 +169,10 @@ void mirrorGarment(Garment& part, float axis)
         for (auto& pr : p.prints) {   // l'impression change de côté, l'image reste lisible
             pr.offset.x = -pr.offset.x;
             pr.angleDeg = -pr.angleDeg;
+        }
+        for (auto& f : p.folds) {
+            f.a.x = -f.a.x;
+            f.b.x = -f.b.x;
         }
     }
     for (auto& a : part.attachments) a.at.x = 2.0f * axis - a.at.x;
@@ -344,7 +350,15 @@ void rotatePanels(Garment& g, const std::vector<int>& idsIn, float degrees)
         auto& pn = g.panels[static_cast<std::size_t>(p)];
         std::vector<glm::vec2> printAt;
         for (const auto& pr : pn.prints) printAt.push_back(c + linkTransform(printCenter(pn, pr) - c, degrees, false));
+        std::vector<glm::vec2> foldAt;
+        const glm::vec2 c0 = panelBoxCenter(pn);
+        for (const auto& f : pn.folds)
+            for (const glm::vec2 q : {f.a, f.b}) foldAt.push_back(c + linkTransform(c0 + q - c, degrees, false));
         for (auto& q : pn.points) q = c + linkTransform(q - c, degrees, false);
+        for (std::size_t i = 0; i < pn.folds.size(); ++i) {
+            pn.folds[i].a = foldAt[2 * i] - panelBoxCenter(pn);
+            pn.folds[i].b = foldAt[2 * i + 1] - panelBoxCenter(pn);
+        }
         for (std::size_t i = 0; i < pn.prints.size(); ++i) {
             pn.prints[i].offset = printAt[i] - panelBoxCenter(pn);
             pn.prints[i].angleDeg = wrapDeg(pn.prints[i].angleDeg + degrees);
@@ -383,6 +397,11 @@ void flipPanels(Garment& g, const std::vector<int>& idsIn, bool horizontal)
             else pr.offset.y = -pr.offset.y;
             pr.angleDeg = -pr.angleDeg;
         }
+        for (auto& f : pn.folds)
+            for (glm::vec2* q : {&f.a, &f.b}) {
+                if (horizontal) q->x = -q->x;
+                else q->y = -q->y;
+            }
     }
     for (auto& a : g.attachments)
         if (indexIn(ids, a.base) >= 0) {
@@ -1066,12 +1085,548 @@ bool lengthenPanel(Garment& g, int panel, float atY, float amount)
     };
     std::vector<glm::vec2> printAt;
     for (const auto& pr : p.prints) printAt.push_back(printCenter(p, pr));
+    std::vector<glm::vec2> foldAt;
+    for (const auto& f : p.folds)
+        for (const glm::vec2 q : {f.a, f.b}) foldAt.push_back(panelBoxCenter(p) + q);
     for (auto& q : p.points) q.y = move(q.y);
     for (auto& a : g.attachments)
         if (a.base == panel) a.at.y = move(a.at.y);
     const glm::vec2 c = panelBoxCenter(p);
     for (std::size_t i = 0; i < p.prints.size(); ++i) p.prints[i].offset = glm::vec2(printAt[i].x, move(printAt[i].y)) - c;
+    for (std::size_t i = 0; i < p.folds.size(); ++i) {
+        p.folds[i].a = glm::vec2(foldAt[2 * i].x, move(foldAt[2 * i].y)) - c;
+        p.folds[i].b = glm::vec2(foldAt[2 * i + 1].x, move(foldAt[2 * i + 1].y)) - c;
+    }
     return true;
+}
+
+namespace {
+int vertexNear(const std::vector<glm::vec2>& pts, glm::vec2 q, float tol)
+{
+    for (int k = 0; k < static_cast<int>(pts.size()); ++k)
+        if (glm::distance(pts[static_cast<std::size_t>(k)], q) < tol) return k;
+    return -1;
+}
+
+// Sens d'appariement réel d'une couture : true si le début de A est cousu contre la fin de B.
+bool seamReversed(const Garment& g, const Seam& s)
+{
+    bool rev = false;
+    if (s.order == 1) rev = false;
+    else if (s.order == 2) rev = true;
+    else {
+        // Comme le mailleur : on compare les distances 3D des deux appariements, après placement.
+        const MeshingOptions opt;
+        auto sample = [&](int side, float t) {
+            const auto edges = g.seamEdges(s, side);
+            float total = 0.0f;
+            for (const auto& e : edges) total += g.edgeLength(e);
+            float target = t * total;
+            for (const auto& e : edges) {
+                const float l = g.edgeLength(e);
+                if (target <= l || &e == &edges.back()) {
+                    const glm::vec2 q = glm::mix(g.edgeStart(e), g.edgeEnd(e), l > 1e-9f ? glm::clamp(target / l, 0.0f, 1.0f) : 0.0f);
+                    return placeGarmentPoint(g, e.panel, q, opt);
+                }
+                target -= l;
+            }
+            return glm::vec3(0.0f);
+        };
+        float direct = 0.0f, reversed = 0.0f;
+        for (int k = 0; k <= 8; ++k) {
+            const float t = static_cast<float>(k) / 8.0f;
+            const glm::vec3 a = sample(0, t);
+            direct += glm::distance(a, sample(1, t));
+            reversed += glm::distance(a, sample(1, 1.0f - t));
+        }
+        rev = reversed < direct;
+    }
+    return s.flipped ? !rev : rev;
+}
+
+// Coupe la couture `si` au sommet `v` (position) qui est à l'intérieur du côté `side`. L'autre côté est
+// coupé à la même proportion de sa longueur. Renvoie false si la coupe est impossible.
+bool cutSeamAt(Garment& g, int si, int side, glm::vec2 v)
+{
+    Seam s = g.seams[static_cast<std::size_t>(si)];
+    const bool rev = seamReversed(g, s);
+    const EdgeRef xs = side == 0 ? s.a : s.b;
+    const int xc = side == 0 ? s.countA : s.countB;
+    const int xn = static_cast<int>(g.panels[static_cast<std::size_t>(xs.panel)].points.size());
+    float before = 0.0f, total = 0.0f;
+    int j = -1;
+    for (int k = 0; k < xc; ++k) {
+        const EdgeRef e{xs.panel, (xs.edge + k) % xn};
+        if (j < 0 && glm::distance(g.edgeStart(e), v) < 1e-6f) j = k;
+        if (j < 0) before += g.edgeLength(e);
+        total += g.edgeLength(e);
+    }
+    if (j <= 0 || total <= 0.0f) return false;
+    const float f = before / total;
+    // Point correspondant de l'autre côté.
+    const int ys = 1 - side;
+    const EdgeRef yst = ys == 0 ? s.a : s.b;
+    const int yc = ys == 0 ? s.countA : s.countB;
+    const auto& ypts = g.panels[static_cast<std::size_t>(yst.panel)].points;
+    const int yn = static_cast<int>(ypts.size());
+    float ylen = 0.0f;
+    for (int k = 0; k < yc; ++k) ylen += g.edgeLength({yst.panel, (yst.edge + k) % yn});
+    if (ylen <= 2e-3f) return false;
+    float target = glm::clamp((rev ? 1.0f - f : f) * ylen, 1e-3f, ylen - 1e-3f);
+    glm::vec2 q(0.0f);
+    int edge = -1;
+    for (int k = 0; k < yc; ++k) {
+        const EdgeRef e{yst.panel, (yst.edge + k) % yn};
+        const float l = g.edgeLength(e);
+        if (target <= l || k == yc - 1) {
+            edge = e.edge;
+            q = glm::mix(g.edgeStart(e), g.edgeEnd(e), l > 1e-9f ? glm::clamp(target / l, 0.0f, 1.0f) : 0.0f);
+            break;
+        }
+        target -= l;
+    }
+    if (edge < 0) return false;
+    // Un sommet intérieur tout proche (0,5 mm) sert de point de coupe ; sinon on en ajoute un.
+    bool snapped = false;
+    for (int k = 1; k < yc; ++k) {
+        const int vi = (yst.edge + k) % yn;
+        if (glm::distance(ypts[static_cast<std::size_t>(vi)], q) < 5e-4f) {
+            q = ypts[static_cast<std::size_t>(vi)];
+            snapped = true;
+            break;
+        }
+    }
+    if (!snapped) g.insertPoint(yst.panel, edge, q);
+    // Relecture après l'ajout (les index ont pu bouger, y compris côté X sur la même pièce).
+    s = g.seams[static_cast<std::size_t>(si)];
+    auto split = [&](int sd, glm::vec2 at, EdgeRef& first, int& count, int& k) {
+        first = sd == 0 ? s.a : s.b;
+        count = sd == 0 ? s.countA : s.countB;
+        const int n = static_cast<int>(g.panels[static_cast<std::size_t>(first.panel)].points.size());
+        k = -1;
+        for (int i = 1; i < count; ++i)
+            if (glm::distance(g.panels[static_cast<std::size_t>(first.panel)].points[static_cast<std::size_t>((first.edge + i) % n)], at) < 1e-6f) k = i;
+        return n;
+    };
+    EdgeRef xf, yf;
+    int xcnt = 0, ycnt = 0, xk = -1, yk = -1;
+    const int xn2 = split(side, v, xf, xcnt, xk);
+    const int yn2 = split(ys, q, yf, ycnt, yk);
+    if (xk <= 0 || yk <= 0) return false;
+    Seam s1 = s, s2 = s;
+    s1.flipped = s2.flipped = false;
+    s1.order = s2.order = rev ? 2 : 1;
+    EdgeRef& x1 = side == 0 ? s1.a : s1.b;
+    EdgeRef& x2 = side == 0 ? s2.a : s2.b;
+    int& x1c = side == 0 ? s1.countA : s1.countB;
+    int& x2c = side == 0 ? s2.countA : s2.countB;
+    EdgeRef& y1 = side == 0 ? s1.b : s1.a;
+    EdgeRef& y2 = side == 0 ? s2.b : s2.a;
+    int& y1c = side == 0 ? s1.countB : s1.countA;
+    int& y2c = side == 0 ? s2.countB : s2.countA;
+    x1 = xf;
+    x1c = xk;
+    x2 = {xf.panel, (xf.edge + xk) % xn2};
+    x2c = xcnt - xk;
+    // Début de X contre début de Y (ou contre la fin de Y si la couture est inversée).
+    if (!rev) {
+        y1 = yf;
+        y1c = yk;
+        y2 = {yf.panel, (yf.edge + yk) % yn2};
+        y2c = ycnt - yk;
+    } else {
+        y1 = {yf.panel, (yf.edge + yk) % yn2};
+        y1c = ycnt - yk;
+        y2 = yf;
+        y2c = yk;
+    }
+    g.seams[static_cast<std::size_t>(si)] = s1;
+    g.seams.insert(g.seams.begin() + si + 1, s2);
+    return true;
+}
+
+// Recale le placement d'un morceau de pièce pour qu'il reste à la même place en 3D.
+void keepPlace(const Panel& before, Panel& after)
+{
+    const MeshingOptions opt;
+    const glm::vec2 c = centroid(after.points);
+    float lo = 1e9f, hi = -1e9f, y0 = 1e9f, alo = 1e9f, ahi = -1e9f, ay0 = 1e9f;
+    for (const auto& q : before.points) {
+        lo = std::min(lo, q.x);
+        hi = std::max(hi, q.x);
+        y0 = std::min(y0, q.y);
+    }
+    for (const auto& q : after.points) {
+        alo = std::min(alo, q.x);
+        ahi = std::max(ahi, q.x);
+        ay0 = std::min(ay0, q.y);
+    }
+    const float R = std::max(after.placement.radius + 0.012f * static_cast<float>(after.layer), 0.03f);
+    if (!after.placement.flat) after.placement.angleDeg += glm::degrees(((alo + ahi) - (lo + hi)) * 0.5f / R);
+    after.placement.height += ay0 - y0;
+    for (int it = 0; it < 2; ++it) after.placement.offset += placePoint(before, c, opt) - placePoint(after, c, opt);
+}
+} // namespace
+
+bool lineCut(const Panel& panel, glm::vec2 a, glm::vec2 b, glm::vec2& p0, glm::vec2& p1)
+{
+    const auto& pts = panel.points;
+    const int n = static_cast<int>(pts.size());
+    const glm::vec2 d = b - a;
+    if (n < 3 || glm::dot(d, d) < 1e-10f) return false;
+    std::vector<float> ts;
+    for (int k = 0; k < n; ++k) {
+        const glm::vec2 p = pts[static_cast<std::size_t>(k)], q = pts[static_cast<std::size_t>((k + 1) % n)];
+        const glm::vec2 e = q - p;
+        const float den = d.x * e.y - d.y * e.x;
+        if (std::abs(den) < 1e-12f) continue;
+        const glm::vec2 w = p - a;
+        const float t = (w.x * e.y - w.y * e.x) / den;   // le long de la droite
+        const float u = (w.x * d.y - w.y * d.x) / den;   // le long du bord
+        if (u < 0.0f || u >= 1.0f) continue;
+        ts.push_back(t);
+    }
+    std::sort(ts.begin(), ts.end());
+    ts.erase(std::unique(ts.begin(), ts.end(), [](float x, float y) { return std::abs(x - y) < 1e-6f; }), ts.end());
+    // Paire d'intersections consécutives qui entoure le milieu (sinon la plus proche) et dont le milieu est dans la pièce.
+    int best = -1;
+    float bd = 1e9f;
+    for (int k = 0; k + 1 < static_cast<int>(ts.size()); ++k) {
+        const float tm = 0.5f * (ts[static_cast<std::size_t>(k)] + ts[static_cast<std::size_t>(k + 1)]);
+        if (!pointInPolygon(pts, a + d * tm)) continue;
+        const float dist = (ts[static_cast<std::size_t>(k)] <= 0.5f && ts[static_cast<std::size_t>(k + 1)] >= 0.5f) ? 0.0f : std::abs(tm - 0.5f);
+        if (dist < bd) {
+            bd = dist;
+            best = k;
+        }
+    }
+    if (best < 0) return false;
+    p0 = a + d * ts[static_cast<std::size_t>(best)];
+    p1 = a + d * ts[static_cast<std::size_t>(best + 1)];
+    return true;
+}
+
+int splitPanelAlongLine(Garment& g, int panel, glm::vec2 a, glm::vec2 b, bool sewTogether, std::string& error)
+{
+    if (panel < 0 || panel >= static_cast<int>(g.panels.size())) {
+        error = "Pièce inconnue.";
+        return -1;
+    }
+    glm::vec2 p0, p1;
+    if (!lineCut(g.panels[static_cast<std::size_t>(panel)], a, b, p0, p1)) {
+        error = "La ligne ne traverse pas la pièce.";
+        return -1;
+    }
+    return splitPanel(g, panel, p0, p1, sewTogether, error);
+}
+
+int splitPanel(Garment& g, int panel, glm::vec2 p0, glm::vec2 p1, bool sewTogether, std::string& error)
+{
+    if (panel < 0 || panel >= static_cast<int>(g.panels.size())) {
+        error = "Pièce inconnue.";
+        return -1;
+    }
+    if (g.attachmentOf(panel) >= 0) {
+        error = "Pièce posée sur une autre : détachez-la avant de la couper.";
+        return -1;
+    }
+    if (glm::distance(p0, p1) < 2e-3f) {
+        error = "Ligne de coupe trop courte.";
+        return -1;
+    }
+    {
+        // La coupe doit rester à l'intérieur de la pièce.
+        const auto& pts = g.panels[static_cast<std::size_t>(panel)].points;
+        const int n = static_cast<int>(pts.size());
+        if (!pointInPolygon(pts, 0.5f * (p0 + p1))) {
+            error = "La ligne de coupe sort de la pièce.";
+            return -1;
+        }
+        for (int k = 0; k < n; ++k) {
+            const glm::vec2 a = pts[static_cast<std::size_t>(k)], b = pts[static_cast<std::size_t>((k + 1) % n)];
+            const glm::vec2 d = p1 - p0, e = b - a, w = a - p0;
+            const float den = d.x * e.y - d.y * e.x;
+            if (std::abs(den) < 1e-12f) continue;
+            const float t = (w.x * e.y - w.y * e.x) / den, u = (w.x * d.y - w.y * d.x) / den;
+            if (t > 1e-3f && t < 1.0f - 1e-3f && u > 1e-4f && u < 1.0f - 1e-4f) {
+                error = "La ligne de coupe croise un autre bord de la pièce.";
+                return -1;
+            }
+        }
+    }
+    const Garment backup = g;
+    auto failWith = [&](const char* msg) {
+        g = backup;
+        error = msg;
+        return -1;
+    };
+    if (pointAt(g, panel, p0) < 0 || pointAt(g, panel, p1) < 0) return failWith("Points de coupe introuvables sur le contour.");
+    {
+        const auto& pts = g.panels[static_cast<std::size_t>(panel)].points;
+        const int i0 = vertexNear(pts, p0, 2e-4f), i1 = vertexNear(pts, p1, 2e-4f);
+        if (i0 < 0 || i1 < 0) return failWith("Points de coupe introuvables sur le contour.");
+        p0 = pts[static_cast<std::size_t>(i0)];
+        p1 = pts[static_cast<std::size_t>(i1)];
+    }
+    // Les coutures qui passent par un point de coupe sont partagées entre les deux morceaux.
+    for (int guard = 0; guard < 64; ++guard) {
+        bool changed = false;
+        for (int si = 0; si < static_cast<int>(g.seams.size()) && !changed; ++si)
+            for (int side = 0; side < 2 && !changed; ++side) {
+                const Seam& s = g.seams[static_cast<std::size_t>(si)];
+                const EdgeRef st = side == 0 ? s.a : s.b;
+                const int cnt = side == 0 ? s.countA : s.countB;
+                if (st.panel != panel) continue;
+                const auto& pts = g.panels[static_cast<std::size_t>(panel)].points;
+                const int n = static_cast<int>(pts.size());
+                for (int k = 1; k < cnt && !changed; ++k) {
+                    const glm::vec2 v = pts[static_cast<std::size_t>((st.edge + k) % n)];
+                    if (v == p0 || v == p1) {
+                        if (!cutSeamAt(g, si, side, v)) return failWith("Une couture qui passe par la coupe n'a pas pu être partagée.");
+                        changed = true;
+                    }
+                }
+            }
+        if (!changed) break;
+    }
+    const Panel before = g.panels[static_cast<std::size_t>(panel)];
+    const auto& pts = before.points;
+    const int n = static_cast<int>(pts.size());
+    const int i0 = vertexNear(pts, p0, 1e-6f), i1 = vertexNear(pts, p1, 1e-6f);
+    const int len1 = ((i1 - i0) % n + n) % n + 1, len2 = ((i0 - i1) % n + n) % n + 1;
+    if (i0 < 0 || i1 < 0 || len1 < 3 || len2 < 3) return failWith("La coupe doit relier deux bords différents de la pièce.");
+    std::vector<glm::vec2> part1, part2;
+    for (int k = 0; k < len1; ++k) part1.push_back(pts[static_cast<std::size_t>((i0 + k) % n)]);
+    for (int k = 0; k < len2; ++k) part2.push_back(pts[static_cast<std::size_t>((i1 + k) % n)]);
+    const int np = static_cast<int>(g.panels.size());
+    // Bord e de l'ancienne pièce -> (pièce, bord) d'un des deux morceaux.
+    auto mapEdge = [&](int e) {
+        const int r1 = ((e - i0) % n + n) % n;
+        if (r1 < len1 - 1) return EdgeRef{panel, r1};
+        return EdgeRef{np, ((e - i1) % n + n) % n};
+    };
+    for (auto& s : g.seams)
+        for (int side = 0; side < 2; ++side) {
+            EdgeRef& st = side == 0 ? s.a : s.b;
+            if (st.panel == panel) st = mapEdge(st.edge);
+        }
+    Panel first = before, second = before;
+    first.points = part1;
+    second.points = part2;
+    second.name = before.name + " (2)";
+    for (Panel* p : {&first, &second}) {
+        p->linkGroup = 0;
+        p->symmetric = false;
+        p->prints.clear();
+        p->folds.clear();
+    }
+    for (const auto& pr : before.prints) {
+        const glm::vec2 c = printCenter(before, pr);
+        Panel& dst = pointInPolygon(part2, c) ? second : first;
+        Print copy = pr;
+        copy.offset = c - panelBoxCenter(dst);
+        dst.prints.push_back(copy);
+    }
+    // Lignes de pli : sur le morceau qui contient leur milieu, coupées au besoin à la ligne de coupe.
+    for (const auto& f : before.folds) {
+        glm::vec2 fa = panelBoxCenter(before) + f.a, fb = panelBoxCenter(before) + f.b;
+        const bool inSecond = pointInPolygon(part2, 0.5f * (fa + fb));
+        Panel& dst = inSecond ? second : first;
+        const glm::vec2 d = p1 - p0, e = fb - fa, w = p0 - fa;
+        const float den = e.x * d.y - e.y * d.x;
+        if (std::abs(den) > 1e-12f) {
+            const float t = (w.x * d.y - w.y * d.x) / den;   // le long du pli
+            if (t > 0.0f && t < 1.0f) {
+                const glm::vec2 x = fa + e * t;
+                if (pointInPolygon(dst.points, 0.5f * (fa + x))) fb = x;
+                else fa = x;
+            }
+        }
+        FoldLine copy = f;
+        copy.a = fa - panelBoxCenter(dst);
+        copy.b = fb - panelBoxCenter(dst);
+        dst.folds.push_back(copy);
+    }
+    keepPlace(before, first);
+    keepPlace(before, second);
+    g.panels[static_cast<std::size_t>(panel)] = first;
+    g.panels.push_back(second);
+    for (auto& a : g.attachments)
+        if (a.base == panel && pointInPolygon(part2, a.at)) a.base = np;
+    if (sewTogether) {
+        Seam s;
+        s.a = {panel, len1 - 1};    // p1 -> p0
+        s.b = {np, len2 - 1};       // p0 -> p1
+        s.order = 2;
+        g.seams.push_back(s);
+    }
+    return np;
+}
+
+int addGussetStrip(Garment& g, int panel, float s0, float len, float width, std::string& error)
+{
+    if (panel < 0 || panel >= static_cast<int>(g.panels.size())) {
+        error = "Pièce inconnue.";
+        return -1;
+    }
+    const float total = contourLength(g, panel);
+    const float L = std::min(std::abs(len), total);
+    if (L < 0.01f) {
+        error = "Portion de contour trop courte (1 cm au moins).";
+        return -1;
+    }
+    if (width < 0.003f) {
+        error = "Largeur de bande trop petite.";
+        return -1;
+    }
+    const Panel& src = g.panels[static_cast<std::size_t>(panel)];
+    const float dir = len >= 0.0f ? 1.0f : -1.0f;
+    const glm::vec2 mid = contourPoint(g, panel, s0 + 0.5f * len);
+    glm::vec2 tan2 = contourPoint(g, panel, s0 + 0.5f * len + dir * 0.005f) - contourPoint(g, panel, s0 + 0.5f * len - dir * 0.005f);
+    if (glm::length(tan2) < 1e-6f) tan2 = {1.0f, 0.0f};
+    tan2 = glm::normalize(tan2);
+    // La bande est rangée à droite de tout le patron, à la hauteur de la pièce.
+    float gx = -1e9f, py = 1e9f;
+    for (const auto& pn : g.panels)
+        for (const auto& q : pn.points) gx = std::max(gx, q.x);
+    for (const auto& q : src.points) py = std::min(py, q.y);
+    const float x0 = gx + 0.05f, y0 = py;
+    Panel strip;
+    strip.name = src.name + " - soufflet";
+    strip.color = src.color;
+    strip.finish = src.finish;
+    strip.layer = src.layer;
+    strip.particleDistance = src.particleDistance;
+    strip.placement = src.placement;
+    strip.placement.flat = true;
+    strip.placement.rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+    strip.placement.offset = glm::vec3(0.0f);
+    strip.grainDeg = 0.0f;   // droit fil le long de la bande
+    strip.points = {{x0, y0}, {x0 + L, y0}, {x0 + L, y0 + width}, {x0, y0 + width}};
+    {
+        float lo = 1e9f, hi = -1e9f;
+        for (const auto& q : src.points) {
+            lo = std::min(lo, q.x);
+            hi = std::max(hi, q.x);
+        }
+        const float R = std::max(src.placement.radius + 0.012f * static_cast<float>(src.layer), 0.03f);
+        if (!src.placement.flat) strip.placement.angleDeg = src.placement.angleDeg + glm::degrees((mid.x - 0.5f * (lo + hi)) / R);
+    }
+    // En 3D : la bande se dresse sur la portion (longueur le long du contour, largeur vers l'extérieur).
+    const MeshingOptions opt;
+    const glm::vec3 P = placeGarmentPoint(g, panel, mid, opt);
+    const glm::vec3 du = placeGarmentPoint(g, panel, mid + glm::vec2(0.005f, 0.0f), opt) - P;
+    const glm::vec3 dv = placeGarmentPoint(g, panel, mid + glm::vec2(0.0f, 0.005f), opt) - P;
+    glm::vec3 T = du * tan2.x + dv * tan2.y;
+    glm::vec3 N = glm::cross(du, dv);
+    {
+        const ZoneFrame zf = zoneFrame(src.placement.zone, opt);
+        glm::vec3 radial = P - zf.origin;
+        radial -= zf.up * glm::dot(radial, zf.up);
+        if (glm::dot(N, radial) > 0.0f) N = -N;   // vers le corps : la bande part derrière la pièce (fond de poche)
+    }
+    if (glm::length(T) > 1e-9f && glm::length(N) > 1e-9f) {
+        T = glm::normalize(T);
+        N = glm::normalize(N - T * glm::dot(N, T));
+        const glm::vec2 c = (strip.points[0] + strip.points[2]) * 0.5f;
+        const glm::vec3 pivot = placePoint(strip, c, opt);
+        glm::vec3 X0 = glm::normalize(placePoint(strip, c + glm::vec2(0.01f, 0.0f), opt) - pivot);
+        glm::vec3 Y0 = placePoint(strip, c + glm::vec2(0.0f, 0.01f), opt) - pivot;
+        Y0 = glm::normalize(Y0 - X0 * glm::dot(Y0, X0));
+        const glm::mat3 from(X0, Y0, glm::cross(X0, Y0)), to(T, N, glm::cross(T, N));
+        strip.placement.rotation = glm::normalize(glm::quat_cast(to * glm::transpose(from)));
+        strip.placement.offset = P + N * (0.5f * width) - pivot;
+    }
+    g.panels.push_back(strip);
+    const int ns = static_cast<int>(g.panels.size()) - 1;
+    if (sewFree(g, panel, s0, dir * L, ns, 0.0f, L) < 0) {
+        g.panels.pop_back();
+        error = "La bande n'a pas pu être cousue sur la pièce.";
+        return -1;
+    }
+    return ns;
+}
+
+int sewGussetTop(Garment& g, int strip, int panel, float s0, float len)
+{
+    if (strip < 0 || strip >= static_cast<int>(g.panels.size())) return -1;
+    const auto& pts = g.panels[static_cast<std::size_t>(strip)].points;
+    if (pts.size() < 4) return -1;
+    // Bande : (x0, y0) -> (x0 + L, y0) -> (x0 + L, y0 + w) -> (x0, y0 + w). Le haut part de (x0, y0 + w),
+    // à la longueur 2L + w du contour, et se parcourt à reculons.
+    const float L = glm::distance(pts[0], pts[1]), w = glm::distance(pts[1], pts[2]);
+    return sewFree(g, strip, 2.0f * L + w, -glm::distance(pts[2], pts[3]), panel, s0, len);
+}
+
+int addZipper(Garment& g, int base, glm::vec2 a, glm::vec2 b, float width, std::string& error)
+{
+    if (base < 0 || base >= static_cast<int>(g.panels.size())) {
+        error = "Pièce inconnue.";
+        return -1;
+    }
+    if (g.attachmentOf(base) >= 0) {
+        error = "Une fermeture se pose sur une pièce ordinaire, pas sur une pièce déjà posée.";
+        return -1;
+    }
+    const Panel& bp = g.panels[static_cast<std::size_t>(base)];
+    // Partie du segment à l'intérieur de la pièce, raccourcie de 5 mm à chaque bout qui touche le bord.
+    glm::vec2 p0, p1;
+    if (!lineCut(bp, a, b, p0, p1)) {
+        error = "La fermeture doit être tracée sur la pièce.";
+        return -1;
+    }
+    const glm::vec2 dir0 = glm::normalize(b - a);
+    if (glm::dot(p1 - p0, dir0) < 0.0f) std::swap(p0, p1);
+    if (!pointInPolygon(bp.points, a) || glm::dot(a - p0, dir0) < 0.0f) a = p0 + dir0 * 0.005f;
+    if (!pointInPolygon(bp.points, b) || glm::dot(p1 - b, dir0) < 0.0f) b = p1 - dir0 * 0.005f;
+    const float L = glm::distance(a, b);
+    if (L < 0.02f) {
+        error = "Fermeture trop courte (2 cm au moins).";
+        return -1;
+    }
+    width = std::clamp(width, 0.008f, 0.08f);
+    const glm::vec2 d = (b - a) / L, n(-d.y, d.x);
+    float gx = -1e9f, gy = 1e9f;
+    for (const auto& pn : g.panels)
+        for (const auto& q : pn.points) gx = std::max(gx, q.x);
+    for (const auto& q : bp.points) gy = std::min(gy, q.y);
+    // Dessinées à droite du patron ; posées sur la base en 3D.
+    const glm::vec2 park(gx + 0.05f + 0.5f * (std::abs(d.x) * L + std::abs(n.x) * width), gy + 0.5f * (std::abs(d.y) * L + std::abs(n.y) * width));
+    Panel zip;
+    zip.name = "Fermeture éclair";
+    zip.color = glm::vec3(0.12f, 0.12f, 0.13f);
+    zip.finish = FabricFinish::Zipper;
+    zip.placement = bp.placement;
+    zip.stiffness = 2.0f;
+    zip.grainDeg = glm::degrees(std::atan2(d.y, d.x));
+    const glm::vec2 hl = d * (0.5f * L), hw = n * (0.5f * width);
+    zip.points = {park - hl - hw, park + hl - hw, park + hl + hw, park - hl + hw};
+    if (signedArea(zip.points) < 0.0f) std::reverse(zip.points.begin(), zip.points.end());
+    Panel puller;
+    puller.name = "Curseur";
+    puller.color = glm::vec3(0.58f, 0.59f, 0.61f);
+    puller.finish = FabricFinish::Reflective;
+    puller.placement = bp.placement;
+    puller.stiffness = 4.0f;
+    {
+        // Curseur + tirette qui pend : 1,4 x 3,2 cm, cousu par le haut (au bout de la fermeture).
+        const glm::vec2 o(park.x + 0.5f * (std::abs(d.x) * L + std::abs(n.x) * width) + 0.03f, park.y);
+        const float s = 0.01f;
+        for (const glm::vec2 q : {glm::vec2(-0.7f, 0.0f), glm::vec2(0.7f, 0.0f), glm::vec2(0.7f, -2.3f), glm::vec2(0.4f, -3.2f),
+                                  glm::vec2(-0.4f, -3.2f), glm::vec2(-0.7f, -2.3f)})
+            puller.points.push_back(o + q * s);
+    }
+    g.panels.push_back(zip);
+    const int zi = static_cast<int>(g.panels.size()) - 1;
+    if (g.attachPatch(zi, base, 0.5f * (a + b), AttachKind::AllRound) < 0) {
+        g.panels.pop_back();
+        error = "La fermeture n'a pas pu être posée sur la pièce.";
+        return -1;
+    }
+    g.panels.push_back(puller);
+    const int pi = static_cast<int>(g.panels.size()) - 1;
+    if (g.attachPatch(pi, base, b - glm::vec2(0.0f, 0.016f), AttachKind::Flap) < 0) g.removePanel(pi);
+    return zi;
 }
 
 } // namespace drapeo::garment

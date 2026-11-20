@@ -43,9 +43,17 @@ struct Print {
     float angleDeg = 0.0f;        // rotation dans le patron (degrés)
 };
 
+/// Ligne de pli à l'intérieur d'une pièce (pli de passepoil, de bande de fermeture, bord de poche
+/// replié) : le tissu se plie le long de la ligne d'un angle donné.
+struct FoldLine {
+    glm::vec2 a{0.0f}, b{0.0f};   // extrémités, par rapport au centre du cadre de la pièce (m), comme les impressions
+    float angleDeg = 90.0f;       // 0 = à plat ; > 0 : les deux côtés se replient vers l'endroit, < 0 : vers l'envers
+    float strength = 0.8f;        // force du pli, de 0 (souple) à 1 (marqué)
+};
+
 /// Aspect du tissu (rendu 3D et texture exportée).
-enum class FabricFinish { Plain = 0, Ripstop, Twill, Reflective };
-inline constexpr int kFabricFinishCount = 4;
+enum class FabricFinish { Plain = 0, Ripstop, Twill, Reflective, Zipper };   // Zipper : bande de fermeture éclair (dents dessinées)
+inline constexpr int kFabricFinishCount = 5;
 const char* fabricFinishName(FabricFinish f);
 
 struct Panel {
@@ -76,6 +84,7 @@ struct Panel {
     float pressure = 0.0f;           // pression (Pa) qui pousse la pièce vers son endroit (volume gonflé)
     FabricFinish finish = FabricFinish::Plain;   // aspect du tissu
     std::vector<Print> prints;       // impressions posées sur la pièce
+    std::vector<FoldLine> folds;     // lignes de pli
 };
 
 /// Centre du cadre (boîte englobante) d'une pièce : repère des impressions.

@@ -239,6 +239,7 @@ const char* finishKey(garment::FabricFinish f)
     case garment::FabricFinish::Ripstop: return "ripstop";
     case garment::FabricFinish::Twill: return "serge";
     case garment::FabricFinish::Reflective: return "reflechissant";
+    case garment::FabricFinish::Zipper: return "fermeture";
     default: return "uni";
     }
 }
@@ -249,8 +250,9 @@ garment::FabricFinish finishOf(const std::string& text)
     if (t == "ripstop" || t == "toile" || t == "toile technique") return garment::FabricFinish::Ripstop;
     if (t == "serge" || t == "sergé" || t == "denim") return garment::FabricFinish::Twill;
     if (t.rfind("refl", 0) == 0 || t.rfind("réfl", 0) == 0) return garment::FabricFinish::Reflective;
+    if (t.rfind("fermeture", 0) == 0 || t == "zip") return garment::FabricFinish::Zipper;
     if (t == "uni" || t.empty()) return garment::FabricFinish::Plain;
-    fail("Aspect inconnu : " + text + " (uni, ripstop, serge ou reflechissant).");
+    fail("Aspect inconnu : " + text + " (uni, ripstop, serge, reflechissant ou fermeture).");
 }
 
 Json describe(const Garment& g, const std::string& path)
@@ -309,6 +311,23 @@ Json describe(const Garment& g, const std::string& path)
                 prints.push(std::move(q));
             }
             o["impressions"] = std::move(prints);
+        }
+        if (!p.folds.empty()) {
+            Json folds = Json::array();
+            const glm::vec2 bc = garment::panelBoxCenter(p);
+            for (std::size_t k = 0; k < p.folds.size(); ++k) {
+                const auto& f = p.folds[k];
+                Json q = Json::object();
+                q["index"] = static_cast<int>(k);
+                q["x1_cm"] = cm(bc.x + f.a.x);
+                q["y1_cm"] = cm(bc.y + f.a.y);
+                q["x2_cm"] = cm(bc.x + f.b.x);
+                q["y2_cm"] = cm(bc.y + f.b.y);
+                q["angle"] = round2(f.angleDeg);
+                q["force"] = round2(f.strength * 100.0);
+                folds.push(std::move(q));
+            }
+            o["plis"] = std::move(folds);
         }
         const glm::vec2 c = garment::centroid(p.points);
         o["centre_cm"] = Json::array();
@@ -492,7 +511,7 @@ const std::vector<ToolDef>& toolDefs()
                  {"epaisseur_contact_mm", "number", "Épaisseur ajoutée pour les contacts (mm)."},
                  {"epaisseur_affichage_mm", "number", "Épaisseur ajoutée à l'affichage (mm)."},
                  {"pression", "number", "Pression (Pa) qui gonfle la pièce (doudoune, coussin)."},
-                 {"aspect", "string", "Aspect du tissu : uni, ripstop (toile technique quadrillée), serge (denim) ou reflechissant."}},
+                 {"aspect", "string", "Aspect du tissu : uni, ripstop (toile technique quadrillée), serge (denim), reflechissant ou fermeture (dents de fermeture éclair)."}},
                 placementParams())},
         {"deplacer_piece", "Déplace, pivote ou retourne une pièce dans la vue patron (le placement 3D ne change pas).",
          {{"piece", "piece", "Index ou nom de la pièce.", true},
@@ -570,6 +589,50 @@ const std::vector<ToolDef>& toolDefs()
          {{"piece", "piece", "Index ou nom de la pièce.", true},
           {"a_hauteur_cm", "number", "Ligne d'allongement (y du patron, cm).", true},
           {"longueur_cm", "number", "Allongement (cm, négatif pour raccourcir).", true}}},
+        {"couper_piece",
+         "Coupe une pièce en deux morceaux le long d'une ligne (par exemple pour séparer le haut et le bas d'une poche, ou faire "
+         "un empiècement). Donner soit hauteur_cm (ligne horizontale), soit x_cm (ligne verticale), soit deux points de la ligne. "
+         "Les coutures sont gardées (une couture coupée est partagée entre les deux morceaux), les poches et impressions suivent leur morceau.",
+         {{"piece", "piece", "Index ou nom de la pièce.", true},
+          {"hauteur_cm", "number", "Ligne horizontale y = hauteur (cm, coordonnées du patron)."},
+          {"x_cm", "number", "Ligne verticale x = valeur (cm)."},
+          {"x1_cm", "number", "Ligne quelconque : premier point (cm)."},
+          {"y1_cm", "number", "Premier point (cm)."},
+          {"x2_cm", "number", "Second point (cm)."},
+          {"y2_cm", "number", "Second point (cm)."},
+          {"recoudre", "boolean", "Recoudre les deux morceaux le long de la coupe (défaut : non, deux pièces séparées)."}}},
+        {"ajouter_soufflet",
+         "Ajoute une bande de soufflet (épaisseur d'une poche ou d'un sac) : une bande aussi longue que les bords choisis, cousue "
+         "dessus et dressée en 3D. Son autre côté peut être cousu sur les bords d'une autre pièce (fond de la poche).",
+         {{"piece", "piece", "Pièce qui reçoit la bande (index ou nom).", true},
+          {"bord", "integer", "Premier bord de la portion.", true},
+          {"nb_bords", "integer", "Nombre de bords consécutifs (défaut 1)."},
+          {"largeur_cm", "number", "Largeur de la bande (cm, défaut 3)."},
+          {"piece_b", "piece", "Autre pièce où coudre l'autre côté de la bande (facultatif)."},
+          {"bord_b", "integer", "Premier bord côté B."},
+          {"nb_bords_b", "integer", "Nombre de bords côté B (défaut 1)."},
+          {"inverser_b", "boolean", "Parcourt les bords B dans l'autre sens (si la bande se vrille)."}}},
+        {"ajouter_pli",
+         "Ajoute une ligne de pli sur une pièce : le tissu s'y plie de l'angle donné en 3D (passepoil, bande de fermeture repliée, "
+         "bord de poche retourné). La ligne est coupée au contour de la pièce.",
+         {{"piece", "piece", "Index ou nom de la pièce.", true},
+          {"x1_cm", "number", "Début de la ligne (cm, coordonnées du patron).", true},
+          {"y1_cm", "number", "Début (cm).", true},
+          {"x2_cm", "number", "Fin de la ligne (cm).", true},
+          {"y2_cm", "number", "Fin (cm).", true},
+          {"angle", "number", "Angle du pli (degrés, défaut 90 ; 180 = replié à plat). > 0 : vers l'endroit, < 0 : vers l'envers."},
+          {"force", "number", "Force du pli de 0 (souple) à 100 (marqué), défaut 80."}}},
+        {"supprimer_pli", "Retire une ligne de pli d'une pièce.",
+         {{"piece", "piece", "Index ou nom de la pièce.", true}, {"index", "integer", "Index de la ligne de pli (voir projet_info).", true}}},
+        {"ajouter_fermeture",
+         "Pose une fermeture éclair sur une pièce, le long d'une ligne : bande à dents (aspect « fermeture ») cousue dessus, "
+         "et curseur avec tirette au bout de la ligne (x2, y2).",
+         {{"piece", "piece", "Pièce qui reçoit la fermeture (index ou nom).", true},
+          {"x1_cm", "number", "Début de la fermeture (cm, coordonnées du patron de la pièce).", true},
+          {"y1_cm", "number", "Début (cm).", true},
+          {"x2_cm", "number", "Bout de la fermeture, côté curseur (cm).", true},
+          {"y2_cm", "number", "Bout (cm).", true},
+          {"largeur_cm", "number", "Largeur de la bande (cm, défaut 2,5)."}}},
         {"agrandir_piece", "Agrandit (distance > 0) ou rétrécit (< 0) tout le contour d'une pièce. Les coutures sont gardées.",
          {{"piece", "piece", "Index ou nom de la pièce.", true}, {"distance_cm", "number", "Décalage du contour (cm).", true}}},
         {"simuler",
@@ -633,6 +696,7 @@ std::string simulate(const Garment& g, const io::ProjectAvatar& av, const std::s
     simulation::XpbdSolver solver;
     solver.build(gm.mesh, material);
     simulation::applyShrinkage(solver, g, gm);
+    simulation::applyFolds(solver, gm);
     solver.spheres().clear();
     solver.setMeshCollider(&bvh);
     solver.setSeams(gm.seamPairs, 1.0f);
@@ -1142,6 +1206,106 @@ bool Server::callTool(const std::string& name, const Json& argsIn, std::string& 
                                         static_cast<float>(numRequired(args, "longueur_cm") / 100.0)))
                 fail("Allongement impossible (ligne hors de la pièce ?).");
             save("Pièce « " + P(i).name + " » modifiée. Points (cm) : " + pointText(i));
+            return true;
+        }
+        if (name == "couper_piece") {
+            const int i = panelRef(g, args);
+            glm::vec2 lo(1e9f), hi(-1e9f);
+            for (const auto& q : P(i).points) {
+                lo = glm::min(lo, q);
+                hi = glm::max(hi, q);
+            }
+            glm::vec2 a, b;
+            if (args.has("hauteur_cm")) {
+                const float y = static_cast<float>(num(args, "hauteur_cm", 0.0) / 100.0);
+                a = {lo.x - 0.01f, y};
+                b = {hi.x + 0.01f, y};
+            } else if (args.has("x_cm")) {
+                const float x = static_cast<float>(num(args, "x_cm", 0.0) / 100.0);
+                a = {x, lo.y - 0.01f};
+                b = {x, hi.y + 0.01f};
+            } else {
+                a = {static_cast<float>(numRequired(args, "x1_cm") / 100.0), static_cast<float>(numRequired(args, "y1_cm") / 100.0)};
+                b = {static_cast<float>(numRequired(args, "x2_cm") / 100.0), static_cast<float>(numRequired(args, "y2_cm") / 100.0)};
+            }
+            std::string err;
+            const int np = garment::splitPanelAlongLine(g, i, a, b, args.get("recoudre").asBool(), err);
+            if (np < 0) fail(err);
+            save("Pièce coupée : « " + P(i).name + " » (pièce " + std::to_string(i) + ", points (cm) : " + pointText(i) + ") et « " +
+                 P(np).name + " » (pièce " + std::to_string(np) + ", points (cm) : " + pointText(np) + ").");
+            return true;
+        }
+        if (name == "ajouter_soufflet") {
+            const int i = panelRef(g, args);
+            auto portion = [&](int panel, const char* edgeKey, const char* countKey, bool reverse, float& s0, float& len) {
+                const int e = edgeRef(g, panel, args, edgeKey);
+                const int n = static_cast<int>(P(panel).points.size());
+                const int c = static_cast<int>(std::lround(num(args, countKey, 1.0)));
+                if (c < 1 || c > n) fail(std::string("« ") + countKey + " » doit être entre 1 et le nombre de bords de la pièce.");
+                s0 = garment::contourParam(g, panel, e, 0.0f);
+                len = 0.0f;
+                for (int k = 0; k < c; ++k) len += g.edgeLength({panel, (e + k) % n});
+                if (reverse) {
+                    s0 += len;
+                    len = -len;
+                }
+            };
+            float s0 = 0, len = 0;
+            portion(i, "bord", "nb_bords", false, s0, len);
+            int b = -1;
+            float sb = 0, lb = 0;
+            if (args.has("piece_b")) {
+                b = panelRef(g, args, "piece_b");
+                if (b == i) fail("L'autre côté de la bande doit aller sur une autre pièce.");
+                portion(b, "bord_b", "nb_bords_b", args.get("inverser_b").asBool(), sb, lb);
+            }
+            std::string err;
+            const int strip = garment::addGussetStrip(g, i, s0, len, static_cast<float>(num(args, "largeur_cm", 3.0) / 100.0), err);
+            if (strip < 0) fail(err);
+            std::string more;
+            if (b >= 0) {
+                if (garment::sewGussetTop(g, strip, b, sb, lb) < 0) fail("L'autre côté de la bande n'a pas pu être cousu.");
+                more = " Autre côté cousu sur « " + P(b).name + " ».";
+            }
+            char lenText[32];
+            std::snprintf(lenText, sizeof(lenText), "%.1f cm", static_cast<double>(std::abs(len) * 100.0f));
+            save("Bande de soufflet « " + P(strip).name + " » (pièce " + std::to_string(strip) + ", " + lenText + ") cousue." + more);
+            return true;
+        }
+        if (name == "ajouter_fermeture") {
+            const int i = panelRef(g, args);
+            const glm::vec2 a(static_cast<float>(numRequired(args, "x1_cm") / 100.0), static_cast<float>(numRequired(args, "y1_cm") / 100.0));
+            const glm::vec2 b(static_cast<float>(numRequired(args, "x2_cm") / 100.0), static_cast<float>(numRequired(args, "y2_cm") / 100.0));
+            std::string err;
+            const int zi = garment::addZipper(g, i, a, b, static_cast<float>(num(args, "largeur_cm", 2.5) / 100.0), err);
+            if (zi < 0) fail(err);
+            const int puller = static_cast<int>(g.panels.size()) - 1;
+            save("Fermeture éclair posée sur « " + P(i).name + " » : bande = pièce " + std::to_string(zi) +
+                 (puller != zi ? ", curseur = pièce " + std::to_string(puller) : std::string()) + ".");
+            return true;
+        }
+        if (name == "ajouter_pli") {
+            const int i = panelRef(g, args);
+            const glm::vec2 a(static_cast<float>(numRequired(args, "x1_cm") / 100.0), static_cast<float>(numRequired(args, "y1_cm") / 100.0));
+            const glm::vec2 b(static_cast<float>(numRequired(args, "x2_cm") / 100.0), static_cast<float>(numRequired(args, "y2_cm") / 100.0));
+            if (glm::distance(a, b) < 0.005f) fail("Ligne de pli trop courte.");
+            glm::vec2 p0, p1;
+            if (!garment::lineCut(P(i), a, b, p0, p1)) fail("La ligne ne passe pas sur la pièce.");
+            garment::FoldLine f;
+            f.a = a - garment::panelBoxCenter(P(i));
+            f.b = b - garment::panelBoxCenter(P(i));
+            f.angleDeg = std::clamp(static_cast<float>(num(args, "angle", 90.0)), -180.0f, 180.0f);
+            f.strength = std::clamp(static_cast<float>(num(args, "force", 80.0) / 100.0), 0.0f, 1.0f);
+            P(i).folds.push_back(f);
+            save("Ligne de pli " + std::to_string(P(i).folds.size() - 1) + " ajoutée sur « " + P(i).name + " ».");
+            return true;
+        }
+        if (name == "supprimer_pli") {
+            const int i = panelRef(g, args);
+            const int k = intRequired(args, "index");
+            if (k < 0 || k >= static_cast<int>(P(i).folds.size())) fail("Ligne de pli " + std::to_string(k) + " introuvable.");
+            P(i).folds.erase(P(i).folds.begin() + k);
+            save("Ligne de pli retirée.");
             return true;
         }
         if (name == "agrandir_piece") {

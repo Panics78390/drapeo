@@ -32,6 +32,8 @@ std::string writeProject(const garment::Garment& g, const ProjectAvatar* avatar)
         for (const auto& pr : p.prints)   // impression <dx> <dy> <largeur> <hauteur> <angle> <image>
             o << "impression " << pr.offset.x << ' ' << pr.offset.y << ' ' << pr.width << ' ' << pr.height << ' ' << pr.angleDeg << ' '
               << pr.image << "\n";
+        for (const auto& f : p.folds)   // pli <ax> <ay> <bx> <by> <angle> <force> (par rapport au centre du cadre)
+            o << "pli " << f.a.x << ' ' << f.a.y << ' ' << f.b.x << ' ' << f.b.y << ' ' << f.angleDeg << ' ' << f.strength << "\n";
         if (p.particleDistance != 0.0f || p.layer != 0 || p.shrinkWeft != 1.0f || p.shrinkWarp != 1.0f || p.thickCollision != 0.0f ||
             p.thickRender != 0.0f || p.pressure != 0.0f)   // simu <espacement> <couche> <trame> <chaîne> <ép. contact> <ép. affichage> <pression>
             o << "simu " << p.particleDistance << ' ' << p.layer << ' ' << p.shrinkWeft << ' ' << p.shrinkWarp << ' ' << p.thickCollision << ' '
@@ -115,6 +117,12 @@ bool parseProject(const std::string& text, garment::Garment& out, std::string& e
             pr.width = std::clamp(pr.width, 0.002f, 3.0f);
             pr.height = std::clamp(pr.height, 0.0f, 3.0f);
             if (!pr.image.empty()) g.panels.back().prints.push_back(pr);
+        } else if (key == "pli" && !g.panels.empty()) {
+            garment::FoldLine f;
+            ls >> f.a.x >> f.a.y >> f.b.x >> f.b.y >> f.angleDeg >> f.strength;
+            f.angleDeg = std::clamp(f.angleDeg, -180.0f, 180.0f);
+            f.strength = std::clamp(f.strength, 0.0f, 1.0f);
+            if (ls && glm::distance(f.a, f.b) > 1e-4f) g.panels.back().folds.push_back(f);
         } else if (key == "plate" && !g.panels.empty()) {
             g.panels.back().placement.flat = true;
         } else if (key == "lien" && !g.panels.empty()) {

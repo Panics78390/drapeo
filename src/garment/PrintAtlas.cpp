@@ -39,6 +39,7 @@ glm::vec3 finishColor(glm::vec3 base, FabricFinish finish, glm::vec2 p)
         return base * (d < 0.5f ? 1.05f : 0.93f);
     }
     case FabricFinish::Reflective: return glm::mix(base, glm::vec3(0.82f, 0.84f, 0.86f), 0.7f);
+    case FabricFinish::Zipper: return base;   // dents peintes par buildPatternTexture
     }
     return base;
 }
@@ -84,7 +85,7 @@ bool buildPatternTexture(const Garment& g, const PrintImageLoader& load, const P
             lo = glm::min(lo, q);
             hi = glm::max(hi, q);
         }
-        if (!p.prints.empty()) anyPrint = true;
+        if (!p.prints.empty() || p.finish == FabricFinish::Zipper) anyPrint = true;
     }
     if (g.panels.empty() || (!anyPrint && !options.fillPanels && !options.stitches)) return false;
     lo -= glm::vec2(0.01f);
@@ -181,6 +182,56 @@ bool buildPatternTexture(const Garment& g, const PrintImageLoader& load, const P
                 along += L;
             }
         }
+    }
+
+    // Fermetures éclair : ruban tissé, deux rangées de dents qui s'emboîtent au milieu, piqûres le long des bords.
+    for (const auto& p : g.panels) {
+        if (p.finish != FabricFinish::Zipper || p.points.size() < 3) continue;
+        const std::size_t n = p.points.size();
+        glm::vec2 d(1.0f, 0.0f);
+        float longest = 0.0f;
+        for (std::size_t e = 0; e < n; ++e)
+            if (const float l = glm::distance(p.points[e], p.points[(e + 1) % n]); l > longest) {
+                longest = l;
+                d = (p.points[(e + 1) % n] - p.points[e]) / l;
+            }
+        const glm::vec2 nrm(-d.y, d.x), c = centroid(p.points);
+        float halfW = 0.0f;
+        glm::vec2 plo(1e9f), phi(-1e9f);
+        for (const auto& q : p.points) {
+            halfW = std::max(halfW, std::abs(glm::dot(q - c, nrm)));
+            plo = glm::min(plo, q);
+            phi = glm::max(phi, q);
+        }
+        const float teeth = std::min(0.0035f, halfW * 0.45f), pitch = 0.003f;
+        const glm::vec3 tape = p.color, metal(0.78f, 0.77f, 0.72f);
+        const int x0 = std::max(0, static_cast<int>((plo.x - lo.x) / mpp)), x1 = std::min(out.width - 1, static_cast<int>((phi.x - lo.x) / mpp) + 1);
+        const int y0 = std::max(0, static_cast<int>((plo.y - lo.y) / mpp)), y1 = std::min(out.height - 1, static_cast<int>((phi.y - lo.y) / mpp) + 1);
+        for (int y = y0; y <= y1; ++y)
+            for (int x = x0; x <= x1; ++x) {
+                const glm::vec2 w = pixelCenter(x, y);
+                if (!pointInPolygon(p.points, w)) continue;
+                const float s = glm::dot(w - c, d), t = glm::dot(w - c, nrm);
+                glm::vec3 col = tape * (0.94f + 0.06f * std::sin(t * 6283.0f));            // ruban : fils dans la longueur
+                if (std::abs(std::abs(t) - (halfW - 0.003f)) < std::max(0.0003f, mpp * 0.5f) && std::fmod(std::abs(s), 0.004f) < 0.0026f)
+                    col = glm::min(tape * 1.8f + 0.08f, glm::vec3(1.0f));                    // piqûre
+                if (std::abs(t) < teeth) {
+                    // Dents : une rangée de chaque côté, décalées d'un demi-pas pour s'emboîter.
+                    const float phase = glm::fract(s / pitch + (t < 0.0f ? 0.5f : 0.0f));
+                    const bool overlap = std::abs(t) < teeth * 0.35f;   // milieu : les dents des deux côtés se croisent
+                    if (phase < 0.62f || overlap) {
+                        const float shade = 0.82f + 0.25f * std::sin(phase / 0.62f * 3.14159f);
+                        col = metal * (overlap ? 0.78f : shade);
+                    } else {
+                        col = tape * 0.55f;
+                    }
+                }
+                unsigned char* dst = at(x, y);
+                dst[0] = static_cast<unsigned char>(std::lround(std::clamp(col.r, 0.0f, 1.0f) * 255.0f));
+                dst[1] = static_cast<unsigned char>(std::lround(std::clamp(col.g, 0.0f, 1.0f) * 255.0f));
+                dst[2] = static_cast<unsigned char>(std::lround(std::clamp(col.b, 0.0f, 1.0f) * 255.0f));
+                dst[3] = 255;
+            }
     }
 
     // Impressions, découpées au contour de leur pièce.

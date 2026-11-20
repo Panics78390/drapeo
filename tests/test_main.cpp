@@ -29,6 +29,7 @@
 #include "simulation/Materials.h"
 #include "simulation/SpatialHash.h"
 #include "simulation/XpbdSolver.h"
+#include "simulation/GarmentSetup.h"
 
 using namespace drapeo;
 
@@ -881,6 +882,212 @@ int main()
         CHECK(!garment::lengthenPanel(g, 0, 2.0f, 0.05f));   // ligne hors de la pièce
     });
 
+    run("Couper une pièce selon une ligne : coutures partagées, même place en 3D", [] {
+        garment::Garment g;
+        garment::Panel a, b;
+        a.name = "Devant";
+        a.points = {{0, 0}, {0.4f, 0}, {0.4f, 0.6f}, {0, 0.6f}};
+        b.points = {{0.5f, 0}, {0.9f, 0}, {0.9f, 0.6f}, {0.5f, 0.6f}};
+        garment::Print pr;
+        pr.image = "logo.png";
+        pr.offset = {0.0f, 0.2f};   // centre (0.2, 0.5) : dans le morceau du haut
+        a.prints.push_back(pr);
+        g.panels = {a, b};
+        garment::Seam s;
+        s.a = {0, 1};   // bord droit de A, vers le haut
+        s.b = {1, 3};   // bord gauche de B, vers le bas
+        g.seams.push_back(s);
+        garment::Panel patch;
+        patch.points = {{0, 0}, {0.1f, 0}, {0.1f, 0.1f}, {0, 0.1f}};
+        g.panels.push_back(patch);
+        CHECK(g.attachPatch(2, 0, {0.2f, 0.1f}, garment::AttachKind::Pocket) >= 0);   // poche dans le bas
+        const garment::Panel before = g.panels[0];
+        std::string error;
+        const int np = garment::splitPanelAlongLine(g, 0, {-0.1f, 0.2f}, {0.5f, 0.2f}, true, error);
+        CHECK(np == 3 && error.empty());
+        if (np != 3) return;
+        CHECK(std::abs(std::abs(garment::signedArea(g.panels[0].points)) + std::abs(garment::signedArea(g.panels[3].points)) - 0.24f) < 1e-5f);
+        // La couture A-B est partagée en deux (20 cm et 40 cm), plus la couture de la coupe.
+        CHECK(g.seams.size() == 3);
+        float l20 = 0, l40 = 0;
+        for (const auto& se : g.seams) {
+            const float la = g.seamLength(se, 0), lb = g.seamLength(se, 1);
+            CHECK(std::abs(la - lb) < 1e-4f);
+            if (std::abs(la - 0.2f) < 1e-4f && (se.a.panel == 1 || se.b.panel == 1)) l20 += 1;
+            if (std::abs(la - 0.4f) < 1e-4f && (se.a.panel == 1 || se.b.panel == 1)) l40 += 1;
+        }
+        CHECK(l20 == 1 && l40 == 1);
+        // Le morceau du bas et celui du haut sont cousus au bon endroit de B (même hauteur).
+        for (const auto& se : g.seams) {
+            if (se.a.panel == 1 || se.b.panel == 1) {
+                const int side = se.a.panel == 1 ? 1 : 0;
+                float lo = 1e9f, hi = -1e9f;
+                for (const auto& e : g.seamEdges(se, side)) {
+                    lo = std::min({lo, g.edgeStart(e).y, g.edgeEnd(e).y});
+                    hi = std::max({hi, g.edgeStart(e).y, g.edgeEnd(e).y});
+                }
+                float blo = 1e9f, bhi = -1e9f;
+                for (const auto& e : g.seamEdges(se, 1 - side)) {
+                    blo = std::min({blo, g.edgeStart(e).y, g.edgeEnd(e).y});
+                    bhi = std::max({bhi, g.edgeStart(e).y, g.edgeEnd(e).y});
+                }
+                CHECK(std::abs(lo - blo) < 1e-4f && std::abs(hi - bhi) < 1e-4f);
+            }
+        }
+        // Impression et poche suivent leur morceau ; chaque morceau reste à sa place en 3D.
+        const int top = garment::pointInPolygon(g.panels[0].points, {0.2f, 0.5f}) ? 0 : 3;
+        const int bottom = top == 0 ? 3 : 0;
+        CHECK(g.panels[top].prints.size() == 1 && g.panels[bottom].prints.empty());
+        CHECK(std::abs(garment::printCenter(g.panels[top], g.panels[top].prints[0]).y - 0.5f) < 1e-4f);
+        CHECK(g.attachments[0].base == bottom);
+        const garment::MeshingOptions opt;
+        for (const glm::vec2 q : {glm::vec2(0.1f, 0.5f), glm::vec2(0.3f, 0.1f)}) {
+            const int pi = garment::pointInPolygon(g.panels[0].points, q) ? 0 : 3;
+            CHECK(glm::distance(garment::placePoint(before, q, opt), garment::placePoint(g.panels[pi], q, opt)) < 1e-3f);
+        }
+        garment::GarmentMesh mesh;
+        CHECK(garment::buildGarmentMesh(g, garment::MeshingOptions{}, mesh, error));
+        // Coupes refusées
+        CHECK(garment::splitPanelAlongLine(g, 1, {0.0f, 2.0f}, {1.0f, 2.0f}, false, error) < 0);
+        CHECK(garment::splitPanel(g, 2, {0, 0.05f}, {0.1f, 0.05f}, false, error) < 0);   // pièce posée
+    });
+
+    run("Bande de soufflet : longueur de la portion, cousue des deux côtés, debout vers le corps en 3D", [] {
+        garment::Garment g;
+        garment::Panel front, back;
+        front.name = "Poche";
+        front.points = {{0, 0}, {0.2f, 0}, {0.2f, 0.25f}, {0, 0.25f}};
+        front.placement.height = 1.0f;
+        back = front;
+        back.name = "Fond";
+        for (auto& q : back.points) q.x += 0.3f;
+        g.panels = {front, back};
+        // Portion : du coin haut gauche, en descendant (bord 3), le bas, puis en remontant à droite (25 + 20 + 25 cm).
+        const float s0 = garment::contourParam(g, 0, 3, 0.0f);
+        std::string error;
+        const int strip = garment::addGussetStrip(g, 0, s0, 0.70f, 0.03f, error);
+        CHECK(strip == 2 && error.empty());
+        if (strip != 2) return;
+        const auto& sp = g.panels[2].points;
+        CHECK(std::abs(glm::distance(sp[0], sp[1]) - 0.70f) < 1e-4f && std::abs(glm::distance(sp[1], sp[2]) - 0.03f) < 1e-4f);
+        CHECK(g.seams.size() == 1 && std::abs(g.seamLength(g.seams[0], 0) - g.seamLength(g.seams[0], 1)) < 1e-4f);
+        // Le bas de la bande est contre la portion en 3D (son milieu contre le milieu du bas de la poche).
+        const garment::MeshingOptions opt;
+        const glm::vec3 a = garment::placePoint(g.panels[0], {0.1f, 0.0f}, opt);
+        const glm::vec3 b = garment::placePoint(g.panels[2], (sp[0] + sp[1]) * 0.5f, opt);
+        CHECK(glm::distance(a, b) < 0.01f);
+        const glm::vec3 top = garment::placePoint(g.panels[2], (sp[2] + sp[3]) * 0.5f, opt);
+        CHECK(glm::length(glm::vec2(top.x, top.z)) < glm::length(glm::vec2(b.x, b.z)) - 0.025f);   // debout, vers le corps
+        // Le haut de la bande sur le fond : même portion.
+        const int seam = garment::sewGussetTop(g, strip, 1, garment::contourParam(g, 1, 3, 0.0f), 0.70f);
+        CHECK(seam >= 0 && g.seams.size() == 2);
+        if (seam >= 0) CHECK(std::abs(g.seamLength(g.seams[static_cast<std::size_t>(seam)], 0) - 0.70f) < 1e-4f);
+        garment::GarmentMesh mesh;
+        CHECK(garment::buildGarmentMesh(g, garment::MeshingOptions{}, mesh, error));
+        CHECK(garment::addGussetStrip(g, 0, 0.0f, 0.001f, 0.03f, error) < 0);
+    });
+
+    run("Lignes de pli : arêtes dans le maillage, tissu plié du bon côté, projet", [] {
+        for (const float angle : {90.0f, -90.0f}) {
+            garment::Garment g;
+            garment::Panel p;
+            p.points = {{0, 0}, {0.3f, 0}, {0.3f, 0.2f}, {0, 0.2f}};
+            p.placement.flat = true;
+            garment::FoldLine f;
+            f.a = {0.0f, -0.2f};   // ligne verticale au milieu (débordant : coupée au contour)
+            f.b = {0.0f, 0.2f};
+            f.angleDeg = angle;
+            f.strength = 1.0f;
+            p.folds.push_back(f);
+            g.panels.push_back(p);
+            garment::GarmentMesh gm;
+            std::string error;
+            CHECK(garment::buildGarmentMesh(g, garment::MeshingOptions{}, gm, error));
+            CHECK(gm.foldEdges.size() >= 8);
+            bool onLine = true;
+            for (const auto& e : gm.foldEdges)
+                onLine = onLine && std::abs(gm.mesh.uvs[e.a].x - 0.15f) < 1e-4f && std::abs(gm.mesh.uvs[e.b].x - 0.15f) < 1e-4f;
+            CHECK(onLine);
+            // Simulation sans gravité ni obstacle : le tissu se plie d'environ 90°.
+            simulation::XpbdSolver solver;
+            solver.build(gm.mesh, simulation::fabricPresets()[0]);
+            solver.spheres().clear();
+            solver.settings().groundEnabled = false;
+            solver.settings().gravity = glm::vec3(0.0f);
+            solver.settings().selfCollision = false;
+            simulation::applyFolds(solver, gm);
+            CHECK(solver.foldCount() >= 8);
+            auto at = [&](glm::vec2 q) {
+                uint32_t best = 0;
+                float bd = 1e9f;
+                for (uint32_t v = 0; v < gm.mesh.uvs.size(); ++v)
+                    if (const float d = glm::distance(gm.mesh.uvs[v], q); d < bd) {
+                        bd = d;
+                        best = v;
+                    }
+                return best;
+            };
+            const uint32_t left = at({0.0f, 0.1f}), right = at({0.3f, 0.1f}), mid = at({0.15f, 0.1f});
+            const glm::vec3 n0 = glm::normalize(glm::cross(gm.mesh.positions[right] - gm.mesh.positions[left],
+                                                           gm.mesh.positions[at({0.0f, 0.2f})] - gm.mesh.positions[left]));
+            for (int k = 0; k < 120; ++k) solver.step(1.0f / 30.0f);
+            const auto& x = solver.positions();
+            const float span = glm::distance(x[left], x[right]);
+            {
+                // Pli net le long de la ligne : angle entre les deux côtés tout près de la ligne.
+                const uint32_t l1 = at({0.10f, 0.1f}), r1 = at({0.20f, 0.1f});
+                const float local = glm::degrees(std::acos(glm::dot(glm::normalize(x[l1] - x[mid]), glm::normalize(x[r1] - x[mid]))));
+                std::printf("    angle entre les côtés près du pli : %.1f° (visé : 90°)\n", static_cast<double>(local));
+                CHECK(local > 75.0f && local < 115.0f);
+            }
+            std::printf("    angle %.0f : écart des bords %.3f m (plié à 90° : 0.212), %zu plis\n", static_cast<double>(angle), static_cast<double>(span), solver.foldCount());
+            CHECK(span > 0.17f && span < 0.27f);   // à plat : 0.30
+            const float side = glm::dot((x[left] + x[right]) * 0.5f - x[mid], n0);
+            CHECK(angle > 0.0f ? side > 0.01f : side < -0.01f);
+            if (angle > 0.0f) {
+                garment::Garment back;
+                CHECK(io::parseProject(io::writeProject(g), back, error));
+                CHECK(back.panels[0].folds.size() == 1 && std::abs(back.panels[0].folds[0].angleDeg - 90.0f) < 1e-4f);
+            }
+        }
+    });
+
+    run("Fermeture éclair : bande à dents posée, curseur au bout, texture", [] {
+        garment::Garment g;
+        garment::Panel p;
+        p.name = "Rabat";
+        p.points = {{0, 0}, {0.3f, 0}, {0.3f, 0.2f}, {0, 0.2f}};
+        g.panels.push_back(p);
+        std::string error;
+        // Tracée au-delà de la pièce : raccourcie à 5 mm des bords.
+        const int zi = garment::addZipper(g, 0, {-0.1f, 0.15f}, {0.5f, 0.15f}, 0.025f, error);
+        CHECK(zi == 1 && error.empty() && g.panels.size() == 3 && g.attachments.size() == 2);
+        if (zi != 1) return;
+        const auto& z = g.panels[1];
+        CHECK(z.finish == garment::FabricFinish::Zipper);
+        CHECK(std::abs(glm::distance(z.points[0], z.points[1]) - 0.29f) < 1e-4f || std::abs(glm::distance(z.points[1], z.points[2]) - 0.29f) < 1e-4f);
+        CHECK(glm::distance(g.attachments[0].at, glm::vec2(0.15f, 0.15f)) < 1e-4f);
+        CHECK(g.attachKind(g.attachments[1]) == garment::AttachKind::Flap && std::abs(g.attachments[1].at.x - 0.295f) < 1e-4f);
+        garment::GarmentMesh gm;
+        CHECK(garment::buildGarmentMesh(g, garment::MeshingOptions{}, gm, error));
+        // Texture : dents claires au milieu de la bande, ruban sombre sur ses bords.
+        garment::PatternTexture tex;
+        CHECK(garment::buildPatternTexture(g, nullptr, garment::PatternTextureOptions{}, tex));
+        auto px = [&](glm::vec2 w) {
+            const int x = static_cast<int>((w.x - tex.origin.x) / tex.metersPerPixel), y = static_cast<int>((w.y - tex.origin.y) / tex.metersPerPixel);
+            return &tex.rgba[(static_cast<std::size_t>(y) * static_cast<std::size_t>(tex.width) + static_cast<std::size_t>(x)) * 4];
+        };
+        const glm::vec2 zc = garment::centroid(z.points);
+        int bright = 0;
+        for (int k = 0; k < 10; ++k) bright += px(zc + glm::vec2(0.0003f * static_cast<float>(k), 0.0f))[0] > 150 ? 1 : 0;
+        CHECK(bright >= 4);   // dents métalliques
+        CHECK(px(zc + glm::vec2(0.0f, 0.009f))[0] < 80);   // ruban
+        garment::Garment back;
+        CHECK(io::parseProject(io::writeProject(g), back, error));
+        CHECK(back.panels.size() == 3 && back.panels[1].finish == garment::FabricFinish::Zipper);
+        CHECK(garment::addZipper(g, 1, {0, 0}, {0.1f, 0}, 0.02f, error) < 0);   // pas sur une pièce posée
+    });
+
     run("Impressions et aspect : enregistrement et texture du patron", [] {
         garment::Garment g;
         garment::Panel p;
@@ -1001,6 +1208,22 @@ int main()
         CHECK(io::loadProject(path, g2, error));
         CHECK(g2.panels[0].finish == garment::FabricFinish::Ripstop && g2.panels[1].prints.size() == 1 && g2.attachments.size() == 1);
         call("supprimer_impression", R"({"piece":1,"index":0})");
+        {
+            garment::Garment g3;
+            CHECK(io::loadProject(path, g3, error));
+            const std::size_t before = g3.panels.size();
+            call("couper_piece", R"({"piece":1,"hauteur_cm":5,"recoudre":true})");
+            call("couper_piece", R"({"piece":1,"hauteur_cm":500})", false);   // hors de la pièce
+            call("ajouter_soufflet", R"({"piece":0,"bord":0,"nb_bords":2,"largeur_cm":4,"piece_b":1,"bord_b":0})");
+            call("ajouter_soufflet", R"({"piece":0,"bord":0,"piece_b":0,"bord_b":1})", false);
+            call("ajouter_pli", R"({"piece":0,"x1_cm":-500,"y1_cm":5,"x2_cm":500,"y2_cm":5,"angle":-120,"force":60})");
+            call("ajouter_pli", R"({"piece":0,"x1_cm":900,"y1_cm":900,"x2_cm":950,"y2_cm":900})", false);
+            call("supprimer_pli", R"({"piece":0,"index":3})", false);
+            call("ajouter_fermeture", R"({"piece":0,"x1_cm":-500,"y1_cm":8,"x2_cm":500,"y2_cm":8})");
+            CHECK(io::loadProject(path, g3, error));
+            CHECK(g3.panels.size() == before + 4);
+            CHECK(g3.panels[0].folds.size() == 1 && std::abs(g3.panels[0].folds[0].angleDeg + 120.0f) < 1e-3f);
+        }
         std::filesystem::remove(path);
         std::filesystem::remove(obj);
     });

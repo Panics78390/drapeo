@@ -15,6 +15,9 @@ namespace drapeo::simulation {
 /// À appeler une seule fois, juste après XpbdSolver::build.
 void applyShrinkage(XpbdSolver& solver, const garment::Garment& g, const garment::GarmentMesh& gm);
 
+/// Lignes de pli des pièces (arêtes de pli du maillage). À appeler juste après XpbdSolver::build.
+void applyFolds(XpbdSolver& solver, const garment::GarmentMesh& gm);
+
 /// Pièces figées, renforcées, épaisseur de contact, couche et pression (peut être rappelé).
 void applyPanelProperties(XpbdSolver& solver, const garment::Garment& g, const garment::GarmentMesh& gm);
 

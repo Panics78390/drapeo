@@ -729,6 +729,7 @@ void App::resetCloth(bool keepDrape, const ClothSnapshot* restore)
     garmentMesh_ = std::move(gm);
     solver_.build(garmentMesh_.mesh, material_);
     simulation::applyShrinkage(solver_, garment_, garmentMesh_);   // retrait trame / chaîne des pièces
+    simulation::applyFolds(solver_, garmentMesh_);   // lignes de pli
     solver_.spheres().clear();
     solver_.setMeshCollider(&avatarBvh_);
     solver_.setSeams(garmentMesh_.seamPairs, sewingSeconds_);
@@ -848,8 +849,9 @@ void App::updateClothPattern()
     char buf[96];
     for (std::size_t k = 0; k < garment_.panels.size(); ++k) {
         const auto& p = garment_.panels[k];
-        if (p.prints.empty() && !showStitches_) continue;
-        std::snprintf(buf, sizeof(buf), "#%zu:%.3f,%.3f,%.3f,%d:", k, p.color.r, p.color.g, p.color.b, garment_.attachmentOf(static_cast<int>(k)));
+        if (p.prints.empty() && !showStitches_ && p.finish != garment::FabricFinish::Zipper) continue;
+        std::snprintf(buf, sizeof(buf), "#%zu:%.3f,%.3f,%.3f,%d,%d:", k, p.color.r, p.color.g, p.color.b, garment_.attachmentOf(static_cast<int>(k)),
+                      static_cast<int>(p.finish));
         sig += buf;
         for (const auto& q : p.points) {
             std::snprintf(buf, sizeof(buf), "%.5f,%.5f;", q.x, q.y);
@@ -2285,6 +2287,52 @@ void App::drawToolbar()
             ImGui::DragFloat("##spread", &editor_.spreadDeg, 0.5f, -90.0f, 90.0f, "Écart %.1f°");
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Angle d'ouverture de « Fendre et écarter »");
         }
+        if (editor_.tool == Tool::Zipper) {
+            ImGui::SameLine(0, 6);
+            ImGui::SetCursorPosY(y + (b - ImGui::GetFrameHeight()) * 0.5f);
+            ImGui::SetNextItemWidth(std::round(120.0f * uiScale_));
+            float cm = editor_.zipperWidth * 100.0f;
+            if (ImGui::DragFloat("##zipw", &cm, 0.1f, 0.8f, 8.0f, "Largeur %.1f cm")) editor_.zipperWidth = std::clamp(cm, 0.8f, 8.0f) / 100.0f;
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Largeur de la bande de fermeture (ruban + dents)");
+        }
+        if (editor_.tool == Tool::Fold) {
+            const bool hasFold = editor_.foldPanel >= 0 && editor_.foldPanel < static_cast<int>(garment_.panels.size()) &&
+                                 editor_.foldIndex >= 0 &&
+                                 editor_.foldIndex < static_cast<int>(garment_.panels[static_cast<std::size_t>(editor_.foldPanel)].folds.size());
+            ImGui::SameLine(0, 6);
+            ImGui::SetCursorPosY(y + (b - ImGui::GetFrameHeight()) * 0.5f);
+            ImGui::SetNextItemWidth(std::round(110.0f * uiScale_));
+            bool edited = ImGui::DragFloat("##foldangle", &editor_.foldAngle, 1.0f, -180.0f, 180.0f, "Angle %.0f°");
+            bool done = ImGui::IsItemDeactivatedAfterEdit();
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Angle du pli : 0 = à plat, 180 = replié complètement.\n> 0 : les côtés se replient vers l'endroit, < 0 : vers l'envers.");
+            ImGui::SameLine(0, 4);
+            ImGui::SetNextItemWidth(std::round(100.0f * uiScale_));
+            float pct = editor_.foldStrength * 100.0f;
+            if (ImGui::DragFloat("##foldforce", &pct, 0.5f, 0.0f, 100.0f, "Force %.0f %%")) {
+                editor_.foldStrength = std::clamp(pct, 0.0f, 100.0f) / 100.0f;
+                edited = true;
+            }
+            done = done || ImGui::IsItemDeactivatedAfterEdit();
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Force du pli : 0 = souple, 100 = pli bien marqué.");
+            editor_.foldAngle = std::clamp(editor_.foldAngle, -180.0f, 180.0f);
+            if (hasFold) {
+                auto& f = garment_.panels[static_cast<std::size_t>(editor_.foldPanel)].folds[static_cast<std::size_t>(editor_.foldIndex)];
+                if (edited) {
+                    f.angleDeg = editor_.foldAngle;
+                    f.strength = editor_.foldStrength;
+                }
+                if (done) commitGarment();
+            }
+        }
+        if (editor_.tool == Tool::CutPanel) {
+            ImGui::SameLine(0, 6);
+            ImGui::SetCursorPosY(y + (b - ImGui::GetFrameHeight()) * 0.5f);
+            ImGui::Checkbox("Recoudre", &editor_.cutSew);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Coché : les deux morceaux restent cousus le long de la coupe.\n"
+                                  "Décoché : deux pièces séparées (par exemple pour faire une poche).");
+        }
     }
     ImGui::SameLine(0, 2);
     if (iconButton("poly", Icon::Polygon, "Polygone (P)\nTracer une pièce point par point", editor_.tool == Tool::Polygon, b))
@@ -2300,7 +2348,7 @@ void App::drawToolbar()
             if (t.tool == editor_.tool) cur = &t;
         char tip[256];
         std::snprintf(tip, sizeof(tip), "%s (%s)\n%s", cur->name, cur->key, cur->help);
-        const bool seamTool = editor_.tool == Tool::Seam || editor_.tool == Tool::FreeSeam;
+        const bool seamTool = editor_.tool == Tool::Seam || editor_.tool == Tool::FreeSeam || editor_.tool == Tool::Gusset;
         if (iconButton("seam", Icon::Seam, tip, seamTool, b)) editor_.tool = cur->tool;
         ImGui::SameLine(0, 0);
         ImGui::SetCursorPosY(y);
@@ -2320,6 +2368,14 @@ void App::drawToolbar()
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", t.help);
             }
             ImGui::EndPopup();
+        }
+        if (editor_.tool == Tool::Gusset) {
+            ImGui::SameLine(0, 6);
+            ImGui::SetCursorPosY(y + (b - ImGui::GetFrameHeight()) * 0.5f);
+            ImGui::SetNextItemWidth(std::round(120.0f * uiScale_));
+            float cm = editor_.gussetWidth * 100.0f;
+            if (ImGui::DragFloat("##gussetw", &cm, 0.1f, 0.5f, 40.0f, "Largeur %.1f cm")) editor_.gussetWidth = std::clamp(cm, 0.5f, 40.0f) / 100.0f;
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Largeur de la bande de soufflet (épaisseur de la poche)");
         }
     }
     ImGui::SameLine(0, 2);
@@ -2427,6 +2483,10 @@ void App::drawPatternPane()
     editor_.bodyScale = avatarHeight_ / 1.75f;
     editor_.torsoCenterX = bodyAxes_.torsoCenter.x;
     if (editor_.draw(garment_)) commitGarment();
+    if (!editor_.notice.empty()) {
+        setStatus(editor_.notice, editor_.noticeError);
+        editor_.notice.clear();
+    }
     if (editor_.traceRequested) {
         editor_.traceRequested = false;
         if (backdropImage_.width > 0)

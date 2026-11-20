@@ -25,6 +25,7 @@ const char* fabricFinishName(FabricFinish f)
     case FabricFinish::Ripstop: return "Toile technique (ripstop)";
     case FabricFinish::Twill: return "Sergé (denim)";
     case FabricFinish::Reflective: return "Réfléchissant";
+    case FabricFinish::Zipper: return "Fermeture éclair";
     }
     return "?";
 }
@@ -763,6 +764,10 @@ int Garment::addMirrorCopy(int panel, float gap)
     for (auto& pr : copy.prints) {
         pr.offset.x = -pr.offset.x;
         pr.angleDeg = -pr.angleDeg;
+    }
+    for (auto& f : copy.folds) {
+        f.a.x = -f.a.x;
+        f.b.x = -f.b.x;
     }
     copy.grainDeg = 180.0f - copy.grainDeg;   // le droit fil est retourné comme la pièce
     copy.placement.angleDeg = copy.placement.angleDeg + 180.0f;

@@ -12,7 +12,7 @@ Logiciel original de création de vêtements 3D : on dessine des **patrons 2D**,
 
 ## Fonctions
 
-- **Éditeur de patrons 2D** : outils d'édition (menu déroulant à côté de la flèche) : Éditer le patron (Z), Transformer points / arêtes (T, cadre avec poignées d'échelle et de rotation), Éditer les points de courbe (V), Éditer la courbure (C, tirer un bord pour le courber), Lisser la courbe (L : tirer un coin pour l'arrondir en arc de cercle, ou pinceau), Ajouter un point / couper un bord (A : fenêtre « Couper la ligne », au point cliqué ou en N parties égales, avec aperçu), Fendre et écarter (E, deux points puis angle d'écart), Tracer depuis l'image (I) ; clic droit sur un point : supprimer, ajouter une pince, convertir en point de courbe, aligner ; clic droit sur un bord : déplier la demi-pièce autour de ce bord (elle devient symétrique) ; outils Polygone (P), Rectangle (B), Couture bord à bord (S), Couture libre (G : début et fin n'importe où sur le contour, la portion peut passer par plusieurs bords — par exemple la bande d'un sac cousue tout autour du dos — longueurs des deux portions affichées, débuts cousus ensemble) ; double-clic sur un bord pour ajouter un point, Maj pour aimanter à la grille de 1 cm, copie miroir, cotes des bords.
+- **Éditeur de patrons 2D** : outils d'édition (menu déroulant à côté de la flèche) : Éditer le patron (Z), Transformer points / arêtes (T, cadre avec poignées d'échelle et de rotation), Éditer les points de courbe (V), Éditer la courbure (C, tirer un bord pour le courber), Lisser la courbe (L : tirer un coin pour l'arrondir en arc de cercle, ou pinceau), Ajouter un point / couper un bord (A : fenêtre « Couper la ligne », au point cliqué ou en N parties égales, avec aperçu), Fendre et écarter (E, deux points puis angle d'écart), Ligne de pli (K), Fermeture éclair (J), Couper la pièce (X), Tracer depuis l'image (I) ; clic droit sur un point : supprimer, ajouter une pince, convertir en point de courbe, aligner ; clic droit sur un bord : déplier la demi-pièce autour de ce bord (elle devient symétrique) ; outils Polygone (P), Rectangle (B), Couture bord à bord (S), Couture libre (G : début et fin n'importe où sur le contour, la portion peut passer par plusieurs bords — par exemple la bande d'un sac cousue tout autour du dos — longueurs des deux portions affichées, débuts cousus ensemble), Bande de soufflet (U) ; double-clic sur un bord pour ajouter un point, Maj pour aimanter à la grille de 1 cm, copie miroir, cotes des bords.
 - **Propriétés de simulation par pièce** (onglet Simulation, pièce sélectionnée) : espacement des particules (mm), couche (posée par-dessus et prioritaire dans les contacts), retrait trame / chaîne (%, selon le droit fil), épaisseur ajoutée aux contacts et à l'affichage (mm), pression (Pa, gonfle un volume fermé vers l'endroit).
 - **Plusieurs points** : un rectangle tracé autour de quelques points (sans entourer toute la pièce) les choisit ; Maj+clic ou Ctrl+clic ajoute ou retire un point ; Ctrl+rectangle choisit des points même en partant sur une pièce. On glisse ensuite l'un d'eux (ou les flèches) pour les déplacer ensemble. Un rectangle qui entoure des pièces entières sélectionne ces pièces.
 - **Coutures** numérotées et colorées, inversion du sens, alerte quand les deux côtés n'ont pas la même longueur. Une couture peut suivre **plusieurs bords** (emmanchure, encolure, entrejambe) : boutons + / − de l'inspecteur, ou Maj + clic sur le bord voisin.
@@ -57,6 +57,10 @@ Redémarrer Claude Desktop. Sans `--projet`, le serveur travaille sur `Documents
 | `poser_piece` | Pose une poche, un rabat, un renfort ou une bande sur une autre pièce |
 | `ajouter_impression`, `supprimer_impression` | Logo, inscription, drapeau ou bande imprimés sur une pièce |
 | `allonger_piece` | Allonge ou raccourcit une pièce à une hauteur donnée (poses et impressions suivent) |
+| `couper_piece` | Coupe une pièce en deux le long d'une ligne (horizontale, verticale ou quelconque), coutures gardées |
+| `ajouter_soufflet` | Bande de soufflet aussi longue que les bords choisis, cousue dessus (et sur une autre pièce) |
+| `ajouter_pli`, `supprimer_pli` | Lignes de pli : le tissu se plie le long d'une ligne, d'un angle donné |
+| `ajouter_fermeture` | Fermeture éclair (bande à dents, curseur et tirette) posée sur une pièce |
 | `deplacer_point`, `ajouter_point`, `supprimer_point` | Édition du contour |
 | `coudre`, `inverser_couture`, `supprimer_couture` | Coutures bord à bord (sur plusieurs bords si besoin) |
 | `arrondir_coin`, `couper_bord`, `ajouter_pince`, `deplier`, `agrandir_piece` | Opérations de forme |
@@ -150,6 +154,27 @@ La flèche de la pièce sélectionnée est aussi reportée sur le tissu dans la 
 Glissez la poche dans le patron pour la déplacer sur sa base ; déplacer la base emporte ses poches.
 **Détacher de la pièce** la libère.
 
+## Poches en volume, plis et fermetures
+
+Les outils de la vue patron permettent de monter une poche comme un vrai sac (devant, soufflet, fond, fermeture) :
+
+- **Couper la pièce (X)** : tracez une ligne à travers une pièce, elle devient deux pièces. Les coutures sont gardées :
+  une couture qui passe par la coupe est partagée entre les deux morceaux, en proportion de sa longueur. Les poches
+  posées et les impressions suivent leur morceau, et chaque morceau reste à sa place en 3D. Case **Recoudre** dans la
+  barre d'outils : les deux morceaux restent cousus le long de la coupe (décochée : deux pièces séparées, par exemple
+  pour séparer le haut et le bas d'une poche). Pour partir d'une copie : Ctrl+C / Ctrl+V, puis coupez la copie.
+- **Bande de soufflet (U, menu Couture)** : cliquez le début puis la fin d'une portion de contour (elle peut faire le
+  tour d'un bord courbe) ; une bande de cette longueur, de la largeur choisie dans la barre d'outils, y est cousue et
+  posée debout vers le corps. Choisissez ensuite la même portion sur le fond de la poche pour y coudre l'autre côté
+  (Échap pour la laisser libre). Le fond peut être posé sur le vêtement (« Tout le tour ») : la poche prend alors de
+  l'épaisseur comme un soufflet.
+- **Ligne de pli (K)** : tracez une ligne sur une pièce ; le tissu s'y plie de l'angle choisi (0° = à plat,
+  180° = replié ; positif = les côtés se replient vers l'endroit, négatif = vers l'envers) avec une force de 0 à 100 %.
+  Utile pour un passepoil, un ruban de fermeture replié, un bord de poche retourné. Clic sur une ligne pour la choisir
+  et changer son angle, Suppr pour la retirer. Les lignes de pli sont dessinées en vert (vers l'endroit) ou en orange.
+- **Fermeture éclair (J)** : tracez la fermeture sur une pièce, en finissant du côté du curseur. Une bande à dents
+  (aspect « Fermeture éclair ») est cousue dessus, avec un curseur et sa tirette qui pend au bout.
+
 ## Impressions et aspect du tissu
 
 - **Impressions** (Propriétés > Pièce > *Ajouter une image...*) : un PNG, JPEG, BMP ou TGA est imprimé sur la pièce —
@@ -162,8 +187,8 @@ Glissez la poche dans le patron pour la déplacer sur sa base ; déplacer la bas
   assombri sur le tissu et les pièces posées (poches, rabats, renforts) reçoivent une surpiqûre en tirets.
 - **Volume des poches** : une petite pression (Propriétés ou `modifier_piece`, paramètre `pression`) sur une
   poche cousue tout autour la gonfle comme une poche à soufflets.
-- **Aspect** : *Uni*, *Toile technique (ripstop)* (petit quadrillage), *Sergé (denim)* (côtes en diagonale) ou
-  *Réfléchissant* (reflet brillant), par pièce.
+- **Aspect** : *Uni*, *Toile technique (ripstop)* (petit quadrillage), *Sergé (denim)* (côtes en diagonale),
+  *Réfléchissant* (reflet brillant) ou *Fermeture éclair* (ruban et dents dessinés le long de la pièce), par pièce.
 - **Allonger / raccourcir** une pièce à une hauteur : outil `allonger_piece` du serveur MCP.
 
 ## Guides d'alignement et sélection en 3D

@@ -308,6 +308,54 @@ bool buildGarmentMesh(const Garment& garment, const MeshingOptions& options, Gar
             lo = glm::min(lo, q);
             hi = glm::max(hi, q);
         }
+        // --- 2a''. Lignes de pli : sommets le long de la ligne, arêtes imposées à la triangulation.
+        struct FoldSeg {
+            glm::vec2 a, b;
+            const FoldLine* f;
+        };
+        std::vector<FoldSeg> foldSegs;
+        {
+            const glm::vec2 c0 = panelBoxCenter(panel);
+            for (const auto& f : panel.folds) {
+                glm::vec2 a = c0 + f.a, b = c0 + f.b;
+                // Partie de la ligne à l'intérieur de la pièce (le plus long morceau).
+                std::vector<float> ts{0.0f, 1.0f};
+                for (int e = 0; e < n; ++e) {
+                    const glm::vec2 p = panel.points[static_cast<std::size_t>(e)], q = panel.points[static_cast<std::size_t>((e + 1) % n)];
+                    const glm::vec2 d = b - a, ed = q - p, w = p - a;
+                    const float den = d.x * ed.y - d.y * ed.x;
+                    if (std::abs(den) < 1e-12f) continue;
+                    const float t = (w.x * ed.y - w.y * ed.x) / den, u = (w.x * d.y - w.y * d.x) / den;
+                    if (t > 0.0f && t < 1.0f && u >= 0.0f && u <= 1.0f) ts.push_back(t);
+                }
+                std::sort(ts.begin(), ts.end());
+                float best = 0.0f, t0 = 0.0f, t1 = 0.0f;
+                for (std::size_t k = 0; k + 1 < ts.size(); ++k)
+                    if (ts[k + 1] - ts[k] > best && pointInPolygon(panel.points, a + (b - a) * (0.5f * (ts[k] + ts[k + 1])))) {
+                        best = ts[k + 1] - ts[k];
+                        t0 = ts[k];
+                        t1 = ts[k + 1];
+                    }
+                const glm::vec2 na = a + (b - a) * t0, nb = a + (b - a) * t1;
+                if (best <= 0.0f || glm::distance(na, nb) < h) continue;
+                // Pas de croisement avec un pli déjà gardé.
+                bool crosses = false;
+                for (const auto& o : foldSegs) {
+                    const glm::vec2 d = nb - na, ed = o.b - o.a, w = o.a - na;
+                    const float den = d.x * ed.y - d.y * ed.x;
+                    if (std::abs(den) < 1e-12f) continue;
+                    const float t = (w.x * ed.y - w.y * ed.x) / den, u = (w.x * d.y - w.y * d.x) / den;
+                    crosses = crosses || (t > -0.01f && t < 1.01f && u > -0.01f && u < 1.01f);
+                }
+                if (!crosses) foldSegs.push_back({na, nb, &f});
+            }
+        }
+        auto nearFold = [&](glm::vec2 q, float r) {
+            for (const auto& fs : foldSegs)
+                if (distanceToSegment(q, fs.a, fs.b) < r) return true;
+            return false;
+        };
+
         for (float y = lo.y + h * 0.5f; y < hi.y; y += h) {
             // une ligne sur deux décalée : triangles quasi équilatéraux
             const float shift = (static_cast<int>(std::lround((y - lo.y) / h)) % 2) ? h * 0.5f : 0.0f;
@@ -320,8 +368,47 @@ bool buildGarmentMesh(const Garment& garment, const MeshingOptions& options, Gar
                                                             panel.points[static_cast<std::size_t>((e + 1) % n)]));
                 bool farFromAttach = true;
                 for (const auto& ap : attachPts) farFromAttach = farFromAttach && glm::distance(ap.second, q) > 0.5f * h;
-                if (dmin > 0.6f * h && farFromAttach) local.push_back(q);
+                if (dmin > 0.6f * h && farFromAttach && !nearFold(q, 0.5f * h)) local.push_back(q);
             }
+        }
+        // Sommets des plis : une extrémité près du bord prend le sommet du contour le plus proche.
+        struct LocalFold {
+            std::vector<int> ids;
+            const FoldLine* f;
+        };
+        std::vector<LocalFold> localFolds;
+        for (const auto& fs : foldSegs) {
+            LocalFold lf{{}, fs.f};
+            const int k = std::max(1, static_cast<int>(std::lround(glm::distance(fs.a, fs.b) / h)));
+            for (int j = 0; j <= k; ++j) {
+                const glm::vec2 q = fs.a + (fs.b - fs.a) * (static_cast<float>(j) / static_cast<float>(k));
+                float dmin = 1e9f;
+                for (int e = 0; e < n; ++e)
+                    dmin = std::min(dmin, distanceToSegment(q, panel.points[static_cast<std::size_t>(e)],
+                                                            panel.points[static_cast<std::size_t>((e + 1) % n)]));
+                if (dmin < 0.6f * h) {
+                    if (j != 0 && j != k) continue;   // sommet intermédiaire trop près du bord : sauté
+                    int bestV = 0;
+                    float bd = 1e9f;
+                    for (uint32_t v = 0; v < boundaryCount; ++v)
+                        if (const float d = glm::distance(local[v], q); d < bd) {
+                            bd = d;
+                            bestV = static_cast<int>(v);
+                        }
+                    // Le sommet du contour (hors coin) est glissé sur l'extrémité du pli.
+                    if (dmin < 1e-4f && std::find(cornerIndex.begin(), cornerIndex.end(), bestV) == cornerIndex.end())
+                        local[static_cast<std::size_t>(bestV)] = q;
+                    lf.ids.push_back(bestV);
+                } else {
+                    lf.ids.push_back(static_cast<int>(local.size()));
+                    local.push_back(q);
+                }
+            }
+            lf.ids.erase(std::unique(lf.ids.begin(), lf.ids.end()), lf.ids.end());
+            if (lf.ids.size() < 2) continue;
+            for (std::size_t j = 0; j + 1 < lf.ids.size(); ++j)
+                cons.emplace_back(static_cast<CDT::VertInd>(lf.ids[j]), static_cast<CDT::VertInd>(lf.ids[j + 1]));
+            localFolds.push_back(std::move(lf));
         }
 
         const std::size_t attachStart = local.size();
@@ -351,6 +438,10 @@ bool buildGarmentMesh(const Garment& garment, const MeshingOptions& options, Gar
             for (const int slot : attachSlots[k])
                 ids.push_back(slot < 0 ? -1 : static_cast<int>(base + attachStart + static_cast<std::size_t>(slot)));
         }
+        for (const auto& lf : localFolds)
+            for (std::size_t j = 0; j + 1 < lf.ids.size(); ++j)
+                out.foldEdges.push_back({base + static_cast<uint32_t>(lf.ids[j]), base + static_cast<uint32_t>(lf.ids[j + 1]), lf.f->angleDeg,
+                                         lf.f->strength});
         for (const auto& q : local) {
             out.mesh.positions.push_back(placeGarmentPoint(garment, static_cast<int>(pi), q, options));
             out.mesh.uvs.push_back(q);

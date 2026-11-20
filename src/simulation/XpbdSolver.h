@@ -68,6 +68,16 @@ public:
     [[nodiscard]] float seamProgress() const { return 1.0f - seamFactor_; }
     [[nodiscard]] std::size_t seamCount() const { return seams_.size(); }
 
+    /// Lignes de pli : paires de sommets opposés de part et d'autre d'une arête de pli, avec la longueur
+    /// qu'elles ont une fois pliées et la force du pli (0..1). Remplacent les paires de flexion à plat.
+    /// `push` : sommets de la ligne de pli et sens (+1 / -1 le long de la normale) pour amorcer le pli.
+    struct FoldConstraint {
+        uint32_t a, b;
+        float rest, strength;
+    };
+    void setFolds(const std::vector<FoldConstraint>& folds, const std::vector<std::pair<uint32_t, float>>& push);
+    [[nodiscard]] std::size_t foldCount() const { return folds_.size(); }
+
     /// Change de matériau sans reconstruire (masses recalculées).
     void setMaterial(const FabricMaterial& material);
 
@@ -144,6 +154,13 @@ private:
 
     std::vector<uint32_t>           indices_;
     std::vector<DistanceConstraint> stretch_, bend_, seams_;
+    std::vector<DistanceConstraint> folds_;
+    std::vector<float> foldStrength_;
+    std::vector<std::pair<uint32_t, float>> foldPush_;
+    std::vector<std::vector<uint32_t>> foldPushTris_;   // triangles autour de chaque sommet amorcé
+    float foldPushTime_ = 0.0f;
+    void solveFolds(float dt);
+    void pushFolds(float dt);
     std::unordered_set<uint64_t>    seamKeys_;      // paires cousues : pas d'auto-collision entre elles
     float seamFactor_ = 0.0f;                       // 1 -> 0 pendant la fermeture
     float seamCloseSeconds_ = 1.0f;

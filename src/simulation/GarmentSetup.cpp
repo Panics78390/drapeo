@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_map>
 
 namespace drapeo::simulation {
 
@@ -24,6 +25,50 @@ void applyShrinkage(XpbdSolver& solver, const garment::Garment& g, const garment
         const glm::vec2 s(glm::dot(d, warp) * pn.shrinkWarp, glm::dot(d, weft) * pn.shrinkWeft);
         return glm::length(s) / len;
     });
+}
+
+void applyFolds(XpbdSolver& solver, const garment::GarmentMesh& gm)
+{
+    if (gm.foldEdges.empty()) return;
+    const auto& idx = gm.mesh.indices;
+    const auto& uv = gm.mesh.uvs;
+    auto key = [](uint32_t a, uint32_t b) { return (static_cast<uint64_t>(std::min(a, b)) << 32) | std::max(a, b); };
+    std::unordered_map<uint64_t, std::vector<uint32_t>> opposite;   // arête -> sommets opposés
+    for (const auto& f : gm.foldEdges) opposite[key(f.a, f.b)];
+    for (std::size_t t = 0; t + 2 < idx.size(); t += 3)
+        for (int j = 0; j < 3; ++j) {
+            const uint32_t a = idx[t + static_cast<std::size_t>(j)], b = idx[t + static_cast<std::size_t>((j + 1) % 3)],
+                           c = idx[t + static_cast<std::size_t>((j + 2) % 3)];
+            if (const auto it = opposite.find(key(a, b)); it != opposite.end()) it->second.push_back(c);
+        }
+    std::vector<XpbdSolver::FoldConstraint> folds;
+    std::unordered_map<uint32_t, float> push;
+    for (const auto& f : gm.foldEdges) {
+        const auto& opp = opposite[key(f.a, f.b)];
+        if (opp.size() != 2 || f.a >= uv.size() || f.b >= uv.size()) continue;
+        const uint32_t p = opp[0], q = opp[1];
+        // Longueur entre les deux sommets opposés une fois le tissu plié de l'angle voulu autour de l'arête.
+        const glm::vec2 e = uv[f.b] - uv[f.a];
+        const float el = glm::length(e);
+        if (el < 1e-7f) continue;
+        const glm::vec2 dir = e / el;
+        auto split = [&](uint32_t v, float& along, float& height) {
+            const glm::vec2 d = uv[v] - uv[f.a];
+            along = glm::dot(d, dir);
+            height = std::abs(d.x * dir.y - d.y * dir.x);
+        };
+        float ap = 0, hp = 0, aq = 0, hq = 0;
+        split(p, ap, hp);
+        split(q, aq, hq);
+        const float phi = glm::radians(std::min(std::abs(f.angleDeg), 175.0f));
+        const float rest = std::sqrt(std::max(0.0f, (ap - aq) * (ap - aq) + hp * hp + hq * hq + 2.0f * hp * hq * std::cos(phi)));
+        folds.push_back({p, q, rest, f.strength});
+        // Côtés repliés vers l'endroit (angle > 0) : la ligne de pli recule.
+        const float sign = f.angleDeg > 0.0f ? -1.0f : 1.0f;
+        if (f.angleDeg != 0.0f) push[f.a] = push[f.b] = sign;
+    }
+    std::vector<std::pair<uint32_t, float>> pushList(push.begin(), push.end());
+    solver.setFolds(folds, pushList);
 }
 
 void applyPanelProperties(XpbdSolver& solver, const garment::Garment& g, const garment::GarmentMesh& gm)
