@@ -166,6 +166,7 @@ private:
     float spacing_ = 0.02f;                      // distance entre particules (m)
     float sewingSeconds_ = 1.0f;
     bool panelColors_ = true;
+    bool showStitches_ = true;                   // coutures et surpiqûres dessinées sur le tissu
 
     bool playing_ = true;
     bool stepOnce_ = false;

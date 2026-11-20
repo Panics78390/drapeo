@@ -35,6 +35,7 @@ struct PatternTextureOptions {
     float metersPerPixel = 0.001f;   // résolution voulue (1 mm par pixel)
     int maxSize = 4096;              // la résolution est réduite si la texture dépasse cette taille
     bool fillPanels = false;         // export : chaque pièce est peinte de sa couleur et de son aspect
+    bool stitches = false;           // bords de pièce assombris (coutures) et surpiqûres sur les pièces posées
 };
 
 /// Image d'une impression (nullptr si introuvable). `path` est le chemin enregistré dans la pièce.

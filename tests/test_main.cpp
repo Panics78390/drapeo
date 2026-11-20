@@ -917,6 +917,19 @@ int main()
         CHECK(pixel({0.15f, 0.15f})[0] > 200 && pixel({0.15f, 0.15f})[3] > 200);   // centre : rouge
         CHECK(pixel({0.15f, 0.22f})[3] == 0);   // au-dessus de l'image (hauteur 5 cm) : transparent
         CHECK(garment::printSize(back.panels[0].prints[0], &red).y > 0.049f);
+        // Coutures : bord assombri même sans impression.
+        garment::Garment plain;
+        plain.panels.push_back(p);
+        plain.panels[0].prints.clear();
+        garment::PatternTextureOptions so;
+        so.stitches = true;
+        garment::PatternTexture st;
+        CHECK(garment::buildPatternTexture(plain, [](const std::string&) { return nullptr; }, so, st));
+        {
+            const glm::vec2 uv = st.uv({0.15f, 0.0005f});
+            const int x = static_cast<int>(uv.x * static_cast<float>(st.width)), y = static_cast<int>(uv.y * static_cast<float>(st.height));
+            CHECK(st.rgba[(static_cast<std::size_t>(y) * static_cast<std::size_t>(st.width) + static_cast<std::size_t>(x)) * 4 + 3] > 0);
+        }
         garment::Garment none;
         none.panels.push_back(p);
         none.panels[0].prints.clear();

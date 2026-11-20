@@ -759,12 +759,12 @@ void App::updateClothPattern()
     if (clothValid_) renderer_.setClothPattern(garmentMesh_.mesh.uvs, finish);
 
     // Texture des impressions : reconstruite seulement si une impression ou une pièce imprimée a changé.
-    std::string sig = projectDirectory();
+    std::string sig = projectDirectory() + (showStitches_ ? "+s" : "-s");
     char buf[96];
     for (std::size_t k = 0; k < garment_.panels.size(); ++k) {
         const auto& p = garment_.panels[k];
-        if (p.prints.empty()) continue;
-        std::snprintf(buf, sizeof(buf), "#%zu:", k);
+        if (p.prints.empty() && !showStitches_) continue;
+        std::snprintf(buf, sizeof(buf), "#%zu:%.3f,%.3f,%.3f,%d:", k, p.color.r, p.color.g, p.color.b, garment_.attachmentOf(static_cast<int>(k)));
         sig += buf;
         for (const auto& q : p.points) {
             std::snprintf(buf, sizeof(buf), "%.5f,%.5f;", q.x, q.y);
@@ -806,6 +806,7 @@ void App::updateClothPattern()
     garment::PatternTextureOptions opt;
     opt.metersPerPixel = 0.001f;
     opt.maxSize = 4096;
+    opt.stitches = showStitches_;
     if (!garment::buildPatternTexture(garment_, load, opt, printAtlas_)) {
         printAtlas_ = {};
         renderer_.setPrintTexture(0, 0, nullptr, {}, {});
@@ -2110,6 +2111,10 @@ void App::drawMenuBar()
     }
     if (ImGui::BeginMenu("Affichage")) {
         if (ImGui::MenuItem("Couleurs des pièces", nullptr, &panelColors_)) updateClothColors();
+        if (ImGui::MenuItem("Coutures et surpiqûres", nullptr, &showStitches_)) {
+            printSignature_.clear();
+            updateClothPattern();
+        }
         ImGui::MenuItem("Fil de fer", nullptr, &appearance_.wireframe);
         ImGui::MenuItem("Carte de tension", nullptr, &appearance_.showStrain);
         ImGui::MenuItem("Envers du tissu en bleu", nullptr, &appearance_.showBackSide);

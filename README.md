@@ -158,6 +158,10 @@ Glissez la poche dans le patron pour la déplacer sur sa base ; déplacer la bas
   taille (hauteur 0 = proportions de l'image) et rotation se règlent dans l'inspecteur ; l'impression est visible
   aussi dans le patron 2D. Les images placées dans le dossier du projet y sont référencées par un chemin relatif :
   copiez le dossier entier pour déplacer le projet.
+- **Coutures et surpiqûres** (menu Affichage, activé par défaut) : le bord de chaque pièce est légèrement
+  assombri sur le tissu et les pièces posées (poches, rabats, renforts) reçoivent une surpiqûre en tirets.
+- **Volume des poches** : une petite pression (Propriétés ou `modifier_piece`, paramètre `pression`) sur une
+  poche cousue tout autour la gonfle comme une poche à soufflets.
 - **Aspect** : *Uni*, *Toile technique (ripstop)* (petit quadrillage), *Sergé (denim)* (côtes en diagonale) ou
   *Réfléchissant* (reflet brillant), par pièce.
 - **Allonger / raccourcir** une pièce à une hauteur : outil `allonger_piece` du serveur MCP.

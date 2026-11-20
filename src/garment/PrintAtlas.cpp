@@ -86,7 +86,7 @@ bool buildPatternTexture(const Garment& g, const PrintImageLoader& load, const P
         }
         if (!p.prints.empty()) anyPrint = true;
     }
-    if (g.panels.empty() || (!anyPrint && !options.fillPanels)) return false;
+    if (g.panels.empty() || (!anyPrint && !options.fillPanels && !options.stitches)) return false;
     lo -= glm::vec2(0.01f);
     hi += glm::vec2(0.01f);
     const glm::vec2 ext = hi - lo;
@@ -130,6 +130,55 @@ bool buildPatternTexture(const Garment& g, const PrintImageLoader& load, const P
                         d[3] = 255;
                     }
                 }
+            }
+        }
+    }
+
+    // Coutures : bord de chaque pièce légèrement assombri ; surpiqûre en tirets sur les pièces posées
+    // (poches, rabats, renforts), à 4 mm du bord. Le tout reste découpé au contour de la pièce.
+    if (options.stitches) {
+        auto blend = [&](int x, int y, glm::vec3 c, float a) {
+            unsigned char* dst = at(x, y);
+            const float da = static_cast<float>(dst[3]) / 255.0f;
+            const float oa = a + da * (1.0f - a);
+            for (int k = 0; k < 3; ++k) {
+                const float dc = static_cast<float>(dst[k]) / 255.0f;
+                const float oc = oa > 0.0f ? (c[k] * a + dc * da * (1.0f - a)) / oa : 0.0f;
+                dst[k] = static_cast<unsigned char>(std::lround(std::clamp(oc, 0.0f, 1.0f) * 255.0f));
+            }
+            dst[3] = static_cast<unsigned char>(std::lround(oa * 255.0f));
+        };
+        const float edgeW = std::max(0.0012f, mpp * 0.9f), stitchAt = 0.004f, stitchW = std::max(0.0005f, mpp * 0.45f);
+        for (std::size_t pi = 0; pi < g.panels.size(); ++pi) {
+            const auto& p = g.panels[pi];
+            const std::size_t n = p.points.size();
+            if (n < 3) continue;
+            const bool patch = g.attachmentOf(static_cast<int>(pi)) >= 0;
+            const float orient = signedArea(p.points) > 0.0f ? 1.0f : -1.0f;
+            const glm::vec3 dark = p.color * 0.45f, thread = glm::min(p.color * 1.9f + 0.06f, glm::vec3(1.0f));
+            float along = 0.0f;   // abscisse curviligne (tirets continus d'un bord à l'autre)
+            for (std::size_t e = 0; e < n; ++e) {
+                const glm::vec2 a = p.points[e], b = p.points[(e + 1) % n];
+                const float L = glm::distance(a, b);
+                if (L < 1e-6f) continue;
+                const glm::vec2 dir = (b - a) / L, nrm = glm::vec2(-dir.y, dir.x) * orient;   // vers l'intérieur
+                const float reach = patch ? stitchAt + stitchW + mpp : edgeW + mpp;
+                const glm::vec2 blo = glm::min(a, b) - reach, bhi = glm::max(a, b) + reach;
+                const int x0 = std::max(0, static_cast<int>((blo.x - lo.x) / mpp)), x1 = std::min(out.width - 1, static_cast<int>((bhi.x - lo.x) / mpp));
+                const int y0 = std::max(0, static_cast<int>((blo.y - lo.y) / mpp)), y1 = std::min(out.height - 1, static_cast<int>((bhi.y - lo.y) / mpp));
+                for (int y = y0; y <= y1; ++y)
+                    for (int x = x0; x <= x1; ++x) {
+                        const glm::vec2 w = pixelCenter(x, y);
+                        const float t = glm::dot(w - a, dir);
+                        if (t < -edgeW || t > L + edgeW) continue;
+                        const float dn = glm::dot(w - a, nrm);
+                        if (dn < 0.0f || !pointInPolygon(p.points, w)) continue;
+                        if (dn < edgeW && t >= 0.0f && t <= L) blend(x, y, dark, 0.55f * (1.0f - dn / edgeW) + 0.15f);
+                        else if (patch && t >= stitchAt * 0.5f && t <= L - stitchAt * 0.5f && std::abs(dn - stitchAt) < stitchW &&
+                                 std::fmod(along + t, 0.004f) < 0.0026f)
+                            blend(x, y, thread, 0.7f);
+                    }
+                along += L;
             }
         }
     }
