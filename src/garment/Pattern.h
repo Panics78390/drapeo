@@ -189,6 +189,10 @@ struct Garment {
     /// Change les bords cousus d'une pose selon `kind`.
     void setAttachKind(Attachment& a, AttachKind kind) const;
     [[nodiscard]] AttachKind attachKind(const Attachment& a) const;
+    /// Coud ou découd un bord d'une pièce posée (outil Couture sur la pièce posée). Les bords cousus restent
+    /// d'un seul tenant : on peut ouvrir un bord quand tout est cousu, ou retirer / ajouter un bord au bout
+    /// de la partie cousue. Renvoie false si ce n'est pas possible (deux ouvertures, ou plus rien de cousu).
+    bool toggleAttachedEdge(int attachment, int edge);
 };
 
 /// Cintrage : où la pièce est le plus resserrée (ou élargie) et autour de quel bord.

@@ -228,8 +228,16 @@ L'outil **Poche** (bouton à côté du Rectangle, touche **O**) pose une poche e
    et reste dessinée sur la pièce ; ses cotes s'affichent pendant le tracé.
 3. La glisser ensuite (outil Z) pour la placer : elle glisse sur sa pièce.
 
-Une pièce déjà dessinée (forme libre) se coud aussi sans passer par les propriétés : la poser sur la pièce
-dans le patron, puis clic droit › **Coudre sur « … »** › type. Clic droit › **Découdre** la rend libre.
+Pour une pièce de forme libre, ou pour reprendre la forme d'un objet existant :
+
+1. Clic droit sur l'objet › **Créer un patron** : une copie libre de sa forme apparaît à côté.
+2. La glisser sur la pièce qui doit la recevoir (vue patron).
+3. Clic droit › **Fixer / coudre sur « … »** : elle est cousue tout le tour, à sa place.
+
+Ces coutures de pose s'affichent comme les autres coutures : couleur et pastille numérotée (P1, P2...) sur les
+bords cousus, ligne dans la liste **Coutures** (x pour découdre). Avec l'outil **Couture (S)**, un clic sur un bord
+de la pièce posée le découd (ouverture de poche) ou le recoud ; les bords cousus restent d'un seul tenant.
+Clic droit › **Découdre** rend la pièce libre ; **Effacer les coutures** découd aussi les pièces sélectionnées.
 L'assistant dispose de l'outil `ajouter_poche`.
 
 ## Calques (objets séparés)

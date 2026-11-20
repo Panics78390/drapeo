@@ -1066,6 +1066,21 @@ bool PatternEditor::draw(garment::Garment& g)
                         }
                         break;
                     }
+                    // Bord d'une pièce posée (poche...) : un clic le coud ou le découd sur sa base.
+                    if (const int ai = g.attachmentOf(hoverEdge_.panel); ai >= 0 && pendingSeam_.panel < 0) {
+                        const auto before = g.attachedEdges(g.attachments[static_cast<std::size_t>(ai)]);
+                        const bool wasSewn = std::find(before.begin(), before.end(), hoverEdge_.edge) != before.end();
+                        if (g.toggleAttachedEdge(ai, hoverEdge_.edge)) {
+                            committed = true;
+                            notice = wasSewn ? "Bord décousu : il reste ouvert (ouverture de poche)." : "Bord cousu sur la pièce de dessous.";
+                            noticeError = false;
+                        } else {
+                            notice = "Les bords cousus d'une pièce posée restent d'un seul tenant : découdre ou recoudre un bord au bout "
+                                     "de la partie cousue (une seule ouverture).";
+                            noticeError = true;
+                        }
+                        break;
+                    }
                     if (pendingSeam_.panel < 0) {
                         pendingSeam_ = hoverEdge_;
                     } else if (!(pendingSeam_ == hoverEdge_)) {
@@ -1796,6 +1811,34 @@ bool PatternEditor::draw(garment::Garment& g)
         }
         const glm::vec2 shift = at.at - (lo + hi) * 0.5f;
         const auto edges = g.attachedEdges(at);
+        // Couture de pose dessinée comme les autres coutures : couleur et numéro (P1, P2...) sur les bords cousus de la pièce.
+        {
+            const int ai = static_cast<int>(&at - g.attachments.data());
+            const ImU32 col = seamColor(static_cast<int>(g.seams.size()) + ai);
+            float total = 0.0f;
+            for (const int e : edges) total += glm::distance(pp[static_cast<std::size_t>(e)], pp[(static_cast<std::size_t>(e) + 1) % pp.size()]);
+            float acc = 0.0f;
+            glm::vec2 mid = pp.empty() ? glm::vec2(0.0f) : pp[0];
+            bool midSet = false;
+            for (const int e : edges) {
+                const glm::vec2 a0 = pp[static_cast<std::size_t>(e)], b0 = pp[(static_cast<std::size_t>(e) + 1) % pp.size()];
+                dl->AddLine(toScreen(a0), toScreen(b0), col, 3.0f);
+                const float l = glm::distance(a0, b0);
+                if (!midSet && acc + l >= total * 0.5f && l > 0.0f) {
+                    mid = a0 + (b0 - a0) * ((total * 0.5f - acc) / l);
+                    midSet = true;
+                }
+                acc += l;
+            }
+            if (!edges.empty()) {
+                const ImVec2 m = toScreen(mid);
+                dl->AddCircleFilled(m, 8.5f, col, 16);
+                char label[12];
+                std::snprintf(label, sizeof(label), "P%d", ai + 1);
+                const ImVec2 ts = ImGui::CalcTextSize(label);
+                dl->AddText({m.x - ts.x * 0.5f, m.y - ts.y * 0.5f}, IM_COL32(20, 20, 24, 255), label);
+            }
+        }
         for (std::size_t e = 0; e < pp.size(); ++e) {
             const bool sewn = std::find(edges.begin(), edges.end(), static_cast<int>(e)) != edges.end();
             const ImVec2 a = toScreen(pp[e] + shift), b = toScreen(pp[(e + 1) % pp.size()] + shift);

@@ -683,6 +683,55 @@ AttachKind Garment::attachKind(const Attachment& a) const
     return a.count == 1 ? AttachKind::Flap : AttachKind::Pocket;
 }
 
+bool Garment::toggleAttachedEdge(int attachment, int edge)
+{
+    if (attachment < 0 || attachment >= static_cast<int>(attachments.size())) return false;
+    Attachment& a = attachments[static_cast<std::size_t>(attachment)];
+    if (a.patch < 0 || a.patch >= static_cast<int>(panels.size())) return false;
+    const int n = static_cast<int>(panels[static_cast<std::size_t>(a.patch)].points.size());
+    if (edge < 0 || edge >= n || n < 2) return false;
+    const bool all = a.count <= 0 || a.count >= n;
+    const int start = all ? 0 : ((a.startEdge % n) + n) % n, count = all ? n : a.count;
+    auto sewn = [&](int e) { return ((e - start) % n + n) % n < count; };
+    auto normalize = [&]() {
+        if (a.count >= n) {
+            a.startEdge = 0;
+            a.count = 0;   // tout le tour
+        }
+    };
+    if (sewn(edge)) {
+        if (all) {   // première ouverture : tout sauf ce bord
+            a.startEdge = (edge + 1) % n;
+            a.count = n - 1;
+            return true;
+        }
+        if (count <= 1) return false;   // il ne resterait rien de cousu
+        if (edge == start) {
+            a.startEdge = (start + 1) % n;
+            a.count = count - 1;
+            return true;
+        }
+        if (edge == (start + count - 1) % n) {
+            a.count = count - 1;
+            return true;
+        }
+        return false;   // ouvrir au milieu ferait deux ouvertures
+    }
+    if (edge == (start + count) % n) {
+        a.startEdge = start;
+        a.count = count + 1;
+        normalize();
+        return true;
+    }
+    if (edge == (start - 1 + n) % n) {
+        a.startEdge = edge;
+        a.count = count + 1;
+        normalize();
+        return true;
+    }
+    return false;
+}
+
 int Garment::attachPatch(int patch, int base, glm::vec2 at, AttachKind kind)
 {
     const int n = static_cast<int>(panels.size());

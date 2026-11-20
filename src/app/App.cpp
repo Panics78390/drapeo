@@ -2693,7 +2693,9 @@ void App::pieceAction(PieceAction a)
         std::erase_if(garment_.seams, [&](const garment::Seam& s) {
             return std::find(t.begin(), t.end(), s.a.panel) != t.end() || std::find(t.begin(), t.end(), s.b.panel) != t.end();
         });
-        const auto removed = before - garment_.seams.size();
+        const auto beforeAt = garment_.attachments.size();   // pièces cousues dessus (poches...) : décousues aussi
+        std::erase_if(garment_.attachments, [&](const garment::Attachment& a) { return std::find(t.begin(), t.end(), a.patch) != t.end(); });
+        const auto removed = before - garment_.seams.size() + (beforeAt - garment_.attachments.size());
         editor_.selectedSeam = -1;
         if (removed > 0) {
             commitGarment();
@@ -3074,6 +3076,25 @@ void App::drawPieceMenu()
         ImGui::EndMenu();
     }
     item("Nouvelle couleur de tissu", nullptr, A::NewFabric, has);
+    // Créer un patron : copie libre de la forme de la pièce, posée à côté, à glisser sur la pièce qui la recevra.
+    if (t.size() == 1 && ImGui::MenuItem("Créer un patron")) {
+        const auto& src = garment_.panels[static_cast<std::size_t>(t[0])];
+        garment::Panel copy = src;
+        copy.name = src.name + " (patron)";
+        copy.linkGroup = 0;
+        glm::vec2 lo(1e9f), hi(-1e9f);
+        for (const auto& q : copy.points) {
+            lo = glm::min(lo, q);
+            hi = glm::max(hi, q);
+        }
+        const glm::vec2 d((hi.x - lo.x) + 0.03f, 0.0f);
+        for (auto& q : copy.points) q += d;
+        copy.symAxisX += d.x;
+        garment_.panels.push_back(copy);
+        editor_.select({static_cast<int>(garment_.panels.size()) - 1});
+        commitGarment();
+        setStatus("Patron créé à côté. Glissez-le sur la pièce qui doit le recevoir, puis clic droit › Fixer / coudre.", false);
+    }
     // Poche : coudre la pièce sur celle qui est dessous dans le patron, ou la découdre.
     if (t.size() == 1) {
         const int p = t[0];
@@ -3100,20 +3121,17 @@ void App::drawPieceMenu()
                 if (q != p && garment_.attachmentOf(q) < 0 && garment_.panelEditable(q) &&
                     garment::pointInPolygon(garment_.panels[static_cast<std::size_t>(q)].points, c))
                     under = q;
-            if (under >= 0 && ImGui::BeginMenu(("Coudre sur « " + garment_.panels[static_cast<std::size_t>(under)].name + " »").c_str())) {
-                int kind = -1;
-                if (ImGui::MenuItem("Poche (ouverte en haut)")) kind = 0;
-                if (ImGui::MenuItem("Rabat (cousu en haut)")) kind = 1;
-                if (ImGui::MenuItem("Tout le tour (renfort, écusson)")) kind = 2;
-                ImGui::EndMenu();
-                if (kind >= 0 && garment_.attachPatch(p, under, c, static_cast<garment::AttachKind>(kind)) >= 0) {
+            if (under >= 0 && ImGui::MenuItem(("Fixer / coudre sur « " + garment_.panels[static_cast<std::size_t>(under)].name + " »").c_str())) {
+                if (garment_.attachPatch(p, under, c, garment::AttachKind::AllRound) >= 0) {
                     auto& col = garment_.panels[static_cast<std::size_t>(p)].color;
                     const glm::vec3 baseCol = garment_.panels[static_cast<std::size_t>(under)].color;
                     if (glm::distance(col, baseCol) < 0.1f) col = baseCol * 0.82f;
                     commitGarment();
-                    setStatus("Pièce cousue à sa place. Glissez-la pour la déplacer sur « " + garment_.panels[static_cast<std::size_t>(under)].name + " ».", false);
+                    setStatus("Cousue tout le tour, à sa place. Outil Couture (S) : clic sur un bord de la pièce pour le découdre "
+                              "(ouverture de poche), ou pour le recoudre.", false);
                 }
             }
+            if (under < 0) ImGui::MenuItem("Fixer / coudre (posez-la d'abord sur une pièce)", nullptr, false, false);
         }
     }
     if (ImGui::BeginMenu("Calque", has)) {
@@ -3141,9 +3159,11 @@ void App::drawPieceMenu()
     item("Supprimer", "Suppr", A::Delete, has);
     {
         // Coutures touchant la sélection (une sélection de toutes les pièces efface toutes les coutures).
-        const bool seamed = has && std::any_of(garment_.seams.begin(), garment_.seams.end(), [&](const garment::Seam& s) {
+        const bool seamed = has && (std::any_of(garment_.seams.begin(), garment_.seams.end(), [&](const garment::Seam& s) {
             return std::find(t.begin(), t.end(), s.a.panel) != t.end() || std::find(t.begin(), t.end(), s.b.panel) != t.end();
-        });
+        }) || std::any_of(garment_.attachments.begin(), garment_.attachments.end(), [&](const garment::Attachment& a) {
+            return std::find(t.begin(), t.end(), a.patch) != t.end();
+        }));
         item("Effacer les coutures", nullptr, A::DeleteSeams, seamed);
     }
     ImGui::Separator();
@@ -4162,9 +4182,9 @@ void App::inspectorSewOn(int idx)
 void App::inspectorSeams()
 {
     char header[48];
-    std::snprintf(header, sizeof(header), "Coutures (%zu)###coutures", garment_.seams.size());
+    std::snprintf(header, sizeof(header), "Coutures (%zu)###coutures", garment_.seams.size() + garment_.attachments.size());
     if (!ImGui::CollapsingHeader(header, ImGuiTreeNodeFlags_DefaultOpen)) return;
-    if (garment_.seams.empty()) {
+    if (garment_.seams.empty() && garment_.attachments.empty()) {
         ImGui::TextDisabled("Aucune couture. Outil Couture (S) :");
         ImGui::TextDisabled("cliquez deux bords dans le patron.");
         ImGui::Spacing();
@@ -4246,6 +4266,45 @@ void App::inspectorSeams()
     if (removeIndex >= 0) {
         garment_.seams.erase(garment_.seams.begin() + removeIndex);
         editor_.selectedSeam = -1;
+        commitGarment();
+    }
+    // Pièces fixées / cousues sur une autre (poches, rabats, renforts) : même liste que les coutures.
+    int unsew = -1;
+    const int np = static_cast<int>(garment_.panels.size());
+    for (std::size_t k = 0; k < garment_.attachments.size(); ++k) {
+        const auto& at = garment_.attachments[k];
+        if (at.patch < 0 || at.base < 0 || at.patch >= np || at.base >= np) continue;
+        ImGui::PushID(100000 + static_cast<int>(k));
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        const float h = ImGui::GetFrameHeight();
+        const ImU32 col = ui::PatternEditor::seamColor(static_cast<int>(garment_.seams.size() + k));
+        ImGui::GetWindowDrawList()->AddCircleFilled({p.x + h * 0.4f, p.y + h * 0.5f}, h * 0.36f, col);
+        char num[24];
+        std::snprintf(num, sizeof(num), "P%zu", k + 1);
+        const ImVec2 ns = ImGui::CalcTextSize(num);
+        ImGui::GetWindowDrawList()->AddText({p.x + h * 0.4f - ns.x * 0.5f, p.y + (h - ns.y) * 0.5f}, IM_COL32(20, 20, 24, 255), num);
+        ImGui::Dummy(ImVec2(h * 0.85f, h));
+        ImGui::SameLine();
+        const auto edges = garment_.attachedEdges(at);
+        const int n = static_cast<int>(garment_.panels[static_cast<std::size_t>(at.patch)].points.size());
+        char text[200];
+        std::snprintf(text, sizeof(text), "%s  sur  %s  (%s)", garment_.panels[static_cast<std::size_t>(at.patch)].name.c_str(),
+                      garment_.panels[static_cast<std::size_t>(at.base)].name.c_str(),
+                      static_cast<int>(edges.size()) >= n ? "tout le tour" : (std::to_string(edges.size()) + " bord(s)").c_str());
+        ImGui::AlignTextToFramePadding();
+        if (ImGui::Selectable(text, editor_.isSelected(at.patch), ImGuiSelectableFlags_AllowOverlap,
+                              ImVec2(ImGui::GetContentRegionAvail().x - h - 4, h)) &&
+            garment_.panelEditable(at.patch))
+            editor_.select({at.patch});
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+            ImGui::SetTooltip("Pièce cousue sur une autre.\nOutil Couture (S) : clic sur un de ses bords pour le découdre (ouverture)\nou le recoudre.");
+        ImGui::SameLine();
+        if (ImGui::Button("x", ImVec2(h, h))) unsew = static_cast<int>(k);
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("Découdre (la pièce redevient libre)");
+        ImGui::PopID();
+    }
+    if (unsew >= 0) {
+        garment_.attachments.erase(garment_.attachments.begin() + unsew);
         commitGarment();
     }
     ImGui::Spacing();

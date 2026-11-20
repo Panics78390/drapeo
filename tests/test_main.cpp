@@ -1265,6 +1265,26 @@ int main()
         CHECK(garment::addPocket(g, 0, {0.1f, 0.1f}, {0.105f, 0.2f}, garment::AttachKind::Pocket, false, error) < 0);    // trop étroite
     });
 
+    run("Pièce posée : bords cousus / décousus un par un (outil Couture), toujours d'un seul tenant", [] {
+        garment::Garment g;
+        g.panels.resize(2);
+        g.panels[0].points = {{0, 0}, {0.4f, 0}, {0.4f, 0.4f}, {0, 0.4f}};
+        g.panels[1].points = {{0.1f, 0.1f}, {0.2f, 0.1f}, {0.2f, 0.2f}, {0.1f, 0.2f}};
+        const int ai = g.attachPatch(1, 0, {0.15f, 0.15f}, garment::AttachKind::AllRound);
+        CHECK(ai == 0 && g.attachedEdges(g.attachments[0]).size() == 4);
+        CHECK(g.toggleAttachedEdge(ai, 2));   // ouvrir le haut
+        auto e = g.attachedEdges(g.attachments[0]);
+        CHECK(e.size() == 3 && std::find(e.begin(), e.end(), 2) == e.end() && g.attachKind(g.attachments[0]) == garment::AttachKind::Pocket);
+        CHECK(!g.toggleAttachedEdge(ai, 0));   // au milieu de la partie cousue : deux ouvertures, refusé
+        CHECK(g.toggleAttachedEdge(ai, 3));    // bout de la partie cousue
+        CHECK(g.attachedEdges(g.attachments[0]).size() == 2);
+        CHECK(g.toggleAttachedEdge(ai, 3) && g.toggleAttachedEdge(ai, 2));   // recousu tout le tour
+        CHECK(g.attachments[0].count == 0 && g.attachedEdges(g.attachments[0]).size() == 4);
+        g.attachments[0].startEdge = 2;
+        g.attachments[0].count = 1;
+        CHECK(!g.toggleAttachedEdge(ai, 2));   // dernier bord cousu : on garde au moins un bord
+    });
+
     run("Calques : objets séparés, masqués (non simulés), verrouillés, enregistrés", [] {
         garment::Garment g;
         for (int k = 0; k < 3; ++k) {
