@@ -78,7 +78,9 @@ private:
     /// leur position drapée (ou celles de `restore`, état enregistré pour Annuler / Rétablir).
     void resetCloth(bool keepDrape = false, const ClothSnapshot* restore = nullptr);
     ClothSnapshot clothSnapshot() const;
+    void commitLight();                    // valide une modification sans remailler (nom, couleur...), annulable
     void pushUndo(const ClothSnapshot* cloth = nullptr);   // état validé + drapé (courant par défaut) dans la pile d'annulation
+    ClothSnapshot grabStartCloth_;         // drapé avant de tirer le tissu au clic droit
     ClothSnapshot dragStartCloth_;         // drapé au début d'un déplacement 3D (rendu par Annuler)
     void setGarment(garment::Garment g);   // nouveau patron (modèle, fichier...)
     void commitGarment();                  // une modification est terminée

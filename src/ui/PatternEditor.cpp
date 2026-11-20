@@ -989,7 +989,7 @@ bool PatternEditor::draw(garment::Garment& g)
             dragApplied_ = total;
             dragLast_ = mw;
         } else {
-            if (attachMoved_) committed = true;
+            if (attachMoved_ || glm::length(dragApplied_) > 1e-5f) committed = true;
             attachMoved_ = false;
             drag_ = Drag::None;
         }
@@ -1226,7 +1226,7 @@ bool PatternEditor::draw(garment::Garment& g)
                     if (symPartner_ >= 0 && symPartner_ < static_cast<int>(pts.size()))
                         pts[static_cast<std::size_t>(symPartner_)] = {2.0f * pn.symAxisX - np.x, np.y};
                 } else if (drag_ == Drag::Panel) {
-                    // Déplacer une pièce ne change pas le vêtement 3D, sauf si une poche glisse sur sa base.
+                    // Déplacer une pièce ne change pas sa forme : le drapé 3D est gardé au remaillage.
                     const glm::vec2 want = mw - dragStart_;
                     const glm::vec2 total = want + magnetOffset(g, {selectedPanel}, want - dragApplied_);
                     movePanels(g, {selectedPanel}, total - dragApplied_);
@@ -1240,6 +1240,8 @@ bool PatternEditor::draw(garment::Garment& g)
                 applySymmetry(g, selectedPanel, selectedPoint);
             }
             if (attachMoved_) committed = true;
+            // Pièce déplacée dans le patron : nouvel état (annulable) ; le drapé 3D est gardé.
+            if (drag_ == Drag::Panel && glm::length(dragApplied_) > 1e-5f) committed = true;
             snapExcludePanel_ = symPartner_ = -1;
             symOnAxis_ = false;
             snapped_ = false;

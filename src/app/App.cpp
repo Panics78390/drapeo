@@ -680,6 +680,14 @@ void App::applyDrape(const ClothSnapshot& prev, const garment::Garment* prevGarm
     }
 }
 
+void App::commitLight()
+{
+    pushUndo();
+    redoStack_.clear();
+    redoCloth_.clear();
+    committed_ = garment_;
+}
+
 void App::pushUndo(const ClothSnapshot* cloth)
 {
     undoStack_.push_back(committed_);
@@ -765,7 +773,10 @@ void App::commitGarment()
 
 void App::undo()
 {
-    if (undoStack_.empty()) return;
+    if (undoStack_.empty()) {
+        setStatus("Rien à annuler.", false);
+        return;
+    }
     redoStack_.push_back(garment_);
     redoCloth_.push_back(clothSnapshot());
     garment_ = undoStack_.back();
@@ -775,11 +786,15 @@ void App::undo()
     committed_ = garment_;
     editor_.clearSelection();
     resetCloth(true, &snap);   // seul le dernier changement est annulé : le drapé d'avant revient
+    setStatus("Annulé (" + std::to_string(undoStack_.size()) + " étape(s) encore annulable(s), Ctrl+Y pour rétablir).", false);
 }
 
 void App::redo()
 {
-    if (redoStack_.empty()) return;
+    if (redoStack_.empty()) {
+        setStatus("Rien à rétablir.", false);
+        return;
+    }
     undoStack_.push_back(garment_);
     undoCloth_.push_back(clothSnapshot());
     garment_ = redoStack_.back();
@@ -1570,6 +1585,7 @@ void App::handleViewportInput()
             float bestT = 0.0f;
             const int best = pickParticle(bestT);
             if (best >= 0) {
+                grabStartCloth_ = clothSnapshot();   // tissu tiré à la souris : Ctrl+Z le remet comme avant
                 solver_.grab(static_cast<uint32_t>(best));
                 grabDepth_ = bestT;
             }
@@ -1618,6 +1634,12 @@ void App::handleViewportInput()
             solver_.moveGrabbed(o + d * grabDepth_);
         } else {
             solver_.release();
+            if (!grabStartCloth_.positions.empty()) {
+                pushUndo(&grabStartCloth_);
+                redoStack_.clear();
+                redoCloth_.clear();
+                grabStartCloth_ = {};
+            }
         }
     }
 }
@@ -3239,11 +3261,11 @@ void App::inspectorPanel()
     std::snprintf(name, sizeof(name), "%s", panel.name.c_str());
     label("Nom");
     if (ImGui::InputText("##nom", name, sizeof(name))) panel.name = name;
-    if (ImGui::IsItemDeactivatedAfterEdit()) committed_ = garment_;
+    if (ImGui::IsItemDeactivatedAfterEdit()) commitLight();
     label("Couleur");
     if (ImGui::ColorEdit3("##couleur", &panel.color.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel)) {
         updateClothColors();
-        committed_ = garment_;
+        commitLight();
     }
     label("Aspect");
     {
@@ -3254,7 +3276,7 @@ void App::inspectorPanel()
         if (ImGui::Combo("##aspect", &finish, finishes, garment::kFabricFinishCount)) {
             pushUndo();
             panel.finish = static_cast<garment::FabricFinish>(finish);
-            committed_ = garment_;
+            commitLight();
             updateClothPattern();
         }
         if (ImGui::IsItemHovered())
@@ -3266,12 +3288,12 @@ void App::inspectorPanel()
     const float fw = (ImGui::GetContentRegionAvail().x - 3 * ImGui::GetStyle().ItemSpacing.x) / 4.0f;
     ImGui::SetNextItemWidth(fw * 2.0f + ImGui::GetStyle().ItemSpacing.x);
     ImGui::SliderFloat("##droitfil", &panel.grainDeg, 0.0f, 180.0f, "%.0f°");
-    if (ImGui::IsItemDeactivatedAfterEdit()) committed_ = garment_;
+    if (ImGui::IsItemDeactivatedAfterEdit()) commitLight();
     for (const auto& [text, deg] : {std::pair{"|", 90.0f}, std::pair{"/", 45.0f}, std::pair{"--", 0.0f}}) {
         ImGui::SameLine();
         if (ImGui::Button(text, ImVec2((fw * 2.0f - 2 * ImGui::GetStyle().ItemSpacing.x) / 3.0f, 0))) {
             panel.grainDeg = deg;
-            committed_ = garment_;
+            commitLight();
         }
     }
 
@@ -3469,7 +3491,7 @@ void App::setPanelSymmetric(int idx, bool on)
         }
         panel.symAxisX = (lo + hi) * 0.5f;
     }
-    committed_ = garment_;
+    commitLight();
 }
 
 void App::inspectorCombine(int idx)
