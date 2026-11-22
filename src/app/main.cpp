@@ -30,6 +30,24 @@ int main(int argc, char** argv)
             options.zoom = static_cast<float>(std::atof(argv[++i]));
         } else if (arg == "--modele" && i + 1 < argc) {
             options.model = argv[++i];
+        } else if (arg == "--focus" && i + 1 < argc) {
+            options.focus = argv[++i];
+        } else if (arg == "--motif" && i + 1 < argc) {
+            options.motif = argv[++i];
+        } else if (arg == "--pose" && i + 1 < argc) {
+            options.pose = argv[++i];
+        } else if (arg == "--tension") {
+            options.showStrain = true;
+        } else if (arg == "--grader" && i + 1 < argc) {
+            options.gradeTo = std::atoi(argv[++i]);
+        } else if (arg == "--tutoriel") {
+            options.showTutorial = true;
+        } else if (arg == "--planche" && i + 1 < argc) {
+            options.sheetPng = argv[++i];
+        } else if (arg == "--photo" && i + 1 < argc) {
+            options.photoPng = argv[++i];
+        } else if (arg == "--tour" && i + 1 < argc) {
+            options.tourGif = argv[++i];
         } else if (arg == "--size" && i + 1 < argc) {
             std::sscanf(argv[++i], "%dx%d", &options.width, &options.height);
         } else if (!arg.empty() && arg[0] != '-') {

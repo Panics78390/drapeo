@@ -27,6 +27,10 @@
 #include "garment/PatternOps.h"
 #include "garment/PrintAtlas.h"
 #include "geometry/Mannequin.h"
+#include "geometry/BodyShape.h"
+#include "garment/Grading.h"
+#include "io/SewingSheet.h"
+#include "io/Gif.h"
 #include "simulation/Materials.h"
 #include "simulation/SpatialHash.h"
 #include "simulation/XpbdSolver.h"
@@ -1359,6 +1363,128 @@ int main()
         CHECK(g.groups.size() == 1 && g.panels[1].group == -1 && g.panels[0].group == 0);
         // Index invalide dans un fichier : pièce sans calque
         CHECK(io::parseProject("drapeo-projet 1\npiece\ngroupe 7\npoints 3\n0 0\n0.1 0\n0 0.1\n", back, error) && back.panels[0].group == -1);
+    });
+
+    run("Mensurations : les tailles 34 à 46 existent et élargissent le buste", [] {
+        const auto presets = geometry::sizePresets();
+        CHECK(presets.size() == 7 && presets.front().size == 34 && presets.back().size == 46);
+        CHECK(geometry::findSizePreset(38) != nullptr && geometry::findSizePreset(38)->measures.chestCm == 90.0f);
+        CHECK(geometry::findSizePreset(99) == nullptr);
+        std::vector<glm::vec3> rest;
+        std::vector<uint32_t> idx;
+        geometry::makeMannequin(rest, idx);
+        geometry::BodyRig rig;
+        rig.build(rest);
+        int counts[6] = {};
+        for (auto r : rig.region) ++counts[static_cast<int>(r)];
+        CHECK(counts[0] > 80 && counts[1] > 40 && counts[2] > 40 && counts[3] > 40 && counts[4] > 40 && counts[5] > 40);
+        const auto ref = geometry::measureBands(rest);
+        CHECK(ref.chest > 0.4f && ref.waist > 0.3f && ref.hips > 0.4f);
+        std::vector<glm::vec3> shaped;
+        geometry::shapeBody(rest, rig, ref, geometry::findSizePreset(46)->measures, shaped);
+        const auto big = geometry::measureBands(shaped);
+        CHECK(big.chest > ref.chest * 1.04f);
+        CHECK(shaped.size() == rest.size() && allFinite(shaped));
+        std::vector<glm::vec3> posed;
+        rig.pose(rest, geometry::BodyPose::Walk, 0.3f, posed);
+        float dz = 0.0f;
+        for (std::size_t i = 0; i < rest.size(); ++i)
+            if (rig.region[i] == geometry::BodyRegion::LegL) dz = std::max(dz, std::abs(posed[i].z - rest[i].z));
+        CHECK(dz > 0.02f && allFinite(posed));
+        rig.pose(rest, geometry::BodyPose::ArmsUp, 0.0f, posed);
+        float dy = 0.0f;
+        for (std::size_t i = 0; i < rest.size(); ++i)
+            if (rig.region[i] == geometry::BodyRegion::ArmL) dy = std::max(dy, posed[i].y - rest[i].y);
+        CHECK(dy > 0.05f);
+    });
+
+    run("Tissus : coton, jersey, soie, jean et lin, du plus souple au plus raide", [] {
+        const auto presets = simulation::fabricPresets();
+        auto named = [&](const char* n) -> const simulation::FabricMaterial* {
+            for (const auto& m : presets)
+                if (m.name == n) return &m;
+            return nullptr;
+        };
+        const auto* coton = named("Coton");
+        const auto* jersey = named("Jersey");
+        const auto* soie = named("Soie");
+        const auto* jean = named("Jean");
+        const auto* lin = named("Lin");
+        CHECK(coton && jersey && soie && jean && lin);
+        CHECK(jersey->bendCompliance > jean->bendCompliance);
+        CHECK(soie->density < coton->density && jean->density > lin->density);
+        CHECK(jersey->density > soie->density);
+    });
+
+    run("Gradation : la taille 42 est plus large, non simulée, coutures recopiées", [] {
+        auto g = garment::makeDress();
+        const int n = static_cast<int>(g.panels.size());
+        const int seams = static_cast<int>(g.seams.size());
+        float width = 0.0f;
+        for (const auto& p : g.panels[0].points) width = std::max(width, p.x);
+        CHECK(garment::appendGradedSize(g, 38, 38) == 0);
+        CHECK(garment::appendGradedSize(g, 38, 42) == n);
+        CHECK(static_cast<int>(g.panels.size()) == n * 2);
+        CHECK(static_cast<int>(g.seams.size()) == seams * 2);
+        CHECK(!g.panels[static_cast<std::size_t>(n)].active3D);
+        CHECK(g.panels[static_cast<std::size_t>(n)].name.find("42") != std::string::npos);
+        float graded = 0.0f;
+        const auto& copy = g.panels[static_cast<std::size_t>(n)];
+        float minX = 1e9f, maxX = -1e9f;
+        for (const auto& p : copy.points) {
+            minX = std::min(minX, p.x);
+            maxX = std::max(maxX, p.x);
+        }
+        graded = maxX - minX;
+        float baseW = 0.0f, baseMin = 1e9f, baseMax = -1e9f;
+        for (const auto& p : g.panels[0].points) {
+            baseMin = std::min(baseMin, p.x);
+            baseMax = std::max(baseMax, p.x);
+        }
+        baseW = baseMax - baseMin;
+        CHECK(graded > baseW * 1.07f);
+        CHECK(minX > width);
+        (void)width;
+    });
+
+    run("Planche de couture : PDF 1:1, pages A4 ou traceur, aperçu", [] {
+        auto g = garment::makeTankTop();
+        io::SewingOptions a4;
+        a4.allowanceMm = 10.0f;
+        a4.a4 = true;
+        std::vector<unsigned char> pdf;
+        std::string error;
+        CHECK(io::writeSewingPdf(g, a4, pdf, error));
+        const std::string text(pdf.begin(), pdf.end());
+        CHECK(text.rfind("%PDF-1.4", 0) == 0);
+        CHECK(text.find("1:1") != std::string::npos);
+        CHECK(text.find("/MediaBox [0 0 595") != std::string::npos || text.find("595.") != std::string::npos);
+        io::SewingOptions plot = a4;
+        plot.a4 = false;
+        std::vector<unsigned char> big;
+        CHECK(io::writeSewingPdf(g, plot, big, error));
+        const std::string plotText(big.begin(), big.end());
+        CHECK(plotText.find("/Count 1") != std::string::npos);
+        std::vector<unsigned char> png;
+        CHECK(io::writeSewingPreviewPng(g, a4, png, error) && png.size() > 100);
+        CHECK(png[0] == 137 && png[1] == 'P' && png[2] == 'N' && png[3] == 'G');
+        garment::Garment empty;
+        CHECK(!io::writeSewingPdf(empty, a4, pdf, error));
+    });
+
+    run("GIF : en-tête, boucle et fin de fichier", [] {
+        const int w = 4, h = 2;
+        std::vector<std::uint8_t> red(w * h * 3, 0), blue = red;
+        for (int i = 0; i < w * h; ++i) {
+            red[i * 3] = 220;
+            blue[i * 3 + 2] = 220;
+        }
+        std::vector<std::uint8_t> gif;
+        CHECK(io::encodeGif({red, blue}, w, h, 10, gif));
+        CHECK(gif.size() > 32);
+        CHECK(gif[0] == 'G' && gif[1] == 'I' && gif[2] == 'F' && gif[3] == '8' && gif[4] == '9' && gif[5] == 'a');
+        CHECK(gif.back() == 0x3B);
+        CHECK(!io::encodeGif({}, w, h, 10, gif));
     });
 
     std::printf("\n%d vérifications, %d échec(s)\n", g_checks, g_failures);

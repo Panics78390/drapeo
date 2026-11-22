@@ -66,24 +66,38 @@ std::string executableDirectory()
 #endif
 }
 
-bool rememberedAvatar(std::string& path)
+struct Store {
+    bool present = false;
+    std::string avatar;
+    bool tutorial = false;
+    float heightM = -1.0f, chest = -1.0f, waist = -1.0f, hips = -1.0f;
+};
+
+Store readStore()
 {
-    path.clear();
+    Store s;
     const fs::path file = settingsFile();
-    if (!isFile(file)) return false;
+    if (!isFile(file)) return s;
+    s.present = true;
     std::ifstream in(file, std::ios::binary);
     std::string line;
     while (std::getline(in, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
-        if (line.rfind("avatar ", 0) == 0) {
-            path = line.substr(7);
-            if (!isFile(fromUtf8(path))) path.clear();
-        }
+        auto val = [&](const char* key) -> const char* {
+            const std::size_t n = std::char_traits<char>::length(key);
+            return line.rfind(key, 0) == 0 ? line.c_str() + n : nullptr;
+        };
+        if (const char* v = val("avatar ")) s.avatar = v;
+        else if (const char* v = val("tutoriel ")) s.tutorial = v[0] == '1';
+        else if (const char* v = val("stature ")) s.heightM = std::strtof(v, nullptr);
+        else if (const char* v = val("poitrine ")) s.chest = std::strtof(v, nullptr);
+        else if (const char* v = val("taille ")) s.waist = std::strtof(v, nullptr);
+        else if (const char* v = val("hanches ")) s.hips = std::strtof(v, nullptr);
     }
-    return true;
+    return s;
 }
 
-void rememberAvatar(const std::string& utf8Path)
+void writeStore(const Store& s)
 {
     const fs::path file = settingsFile();
     if (file.empty()) return;
@@ -91,8 +105,94 @@ void rememberAvatar(const std::string& utf8Path)
     fs::create_directories(file.parent_path(), ec);
     std::ofstream out(file, std::ios::binary | std::ios::trunc);
     if (!out) return;
-    out << "drapeo-reglages 1\n";
-    if (!utf8Path.empty()) out << "avatar " << utf8Path << "\n";
+    out << "drapeo-reglages 2\n";
+    if (!s.avatar.empty()) out << "avatar " << s.avatar << '\n';
+    out << "tutoriel " << (s.tutorial ? 1 : 0) << '\n';
+    if (s.heightM > 0.0f) out << "stature " << s.heightM << '\n';
+    if (s.chest > 0.0f) out << "poitrine " << s.chest << '\n';
+    if (s.waist > 0.0f) out << "taille " << s.waist << '\n';
+    if (s.hips > 0.0f) out << "hanches " << s.hips << '\n';
+}
+
+bool rememberedAvatar(std::string& path)
+{
+    path.clear();
+    const Store s = readStore();
+    if (!s.present) return false;
+    path = s.avatar;
+    if (!path.empty() && !isFile(fromUtf8(path))) path.clear();
+    return true;
+}
+
+void rememberAvatar(const std::string& utf8Path)
+{
+    Store s = readStore();
+    s.avatar = utf8Path;
+    writeStore(s);
+}
+
+bool tutorialDone()
+{
+    return readStore().tutorial;
+}
+
+void setTutorialDone(bool done)
+{
+    Store s = readStore();
+    s.tutorial = done;
+    writeStore(s);
+}
+
+BodyPrefs loadBodyPrefs()
+{
+    const Store s = readStore();
+    return {s.heightM, s.chest, s.waist, s.hips};
+}
+
+void saveBodyPrefs(const BodyPrefs& prefs)
+{
+    Store s = readStore();
+    s.heightM = prefs.heightM;
+    s.chest = prefs.chestCm;
+    s.waist = prefs.waistCm;
+    s.hips = prefs.hipsCm;
+    writeStore(s);
+}
+
+fs::path recoveryPath()
+{
+    const fs::path file = settingsFile();
+    if (file.empty()) return {};
+    return file.parent_path() / "reprise.drapeo";
+}
+
+std::string recoveryFilePath()
+{
+    const fs::path p = recoveryPath();
+    return p.empty() ? std::string() : toUtf8(p);
+}
+
+bool hasRecovery()
+{
+    return isFile(recoveryPath());
+}
+
+bool writeRecovery(const std::string& projectText)
+{
+    const fs::path p = recoveryPath();
+    if (p.empty()) return false;
+    std::error_code ec;
+    fs::create_directories(p.parent_path(), ec);
+    std::ofstream out(p, std::ios::binary | std::ios::trunc);
+    if (!out) return false;
+    out << projectText;
+    return static_cast<bool>(out);
+}
+
+void clearRecovery()
+{
+    std::error_code ec;
+    fs::remove(recoveryPath(), ec);
 }
 
 std::string avatarNextToExecutable()

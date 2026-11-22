@@ -56,10 +56,14 @@ add_library(drapeo_core STATIC
   src/io/ProjectFile.cpp
   src/io/Settings.cpp
   src/io/ViewCapture.cpp
+  src/io/SewingSheet.cpp
+  src/io/Gif.cpp
   src/garment/BodyAxes.cpp
   src/geometry/Mannequin.cpp
+  src/geometry/BodyShape.cpp
   src/garment/Pattern.cpp
   src/garment/PatternOps.cpp
+  src/garment/Grading.cpp
   src/garment/PrintAtlas.cpp
   src/garment/GarmentMesher.cpp
   src/simulation/SpatialHash.cpp

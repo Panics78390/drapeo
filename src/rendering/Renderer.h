@@ -27,6 +27,10 @@ struct ClothAppearance {
     float strainScale = 0.10f;   // étirement affiché en rouge (10 %)
     bool wireframe = false;
     bool showBackSide = true;    // envers du tissu (intérieur du vêtement) plus sombre et bleuté
+    int motif = 0;               // 0 uni, 1 rayures, 2 carreaux (ignoré si la carte de tension est affichée)
+    glm::vec3 motifColor{0.16f, 0.14f, 0.12f};
+    unsigned int motifTexture = 0;
+    float motifRepeat = 0.15f;   // mètres
 };
 
 struct SceneView {

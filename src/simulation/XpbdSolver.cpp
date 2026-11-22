@@ -483,9 +483,10 @@ void XpbdSolver::computeStrain(std::vector<float>& outStrain) const
 {
     outStrain.assign(x_.size(), 0.0f);
     for (const auto& c : stretch_) {
-        const float s = std::abs(glm::distance(x_[c.a], x_[c.b]) / c.rest - 1.0f);
-        outStrain[c.a] = std::max(outStrain[c.a], s);
-        outStrain[c.b] = std::max(outStrain[c.b], s);
+        const float rest = c.rest > 1e-8f ? c.rest : 1e-8f;
+        const float s = glm::distance(x_[c.a], x_[c.b]) / rest - 1.0f;   // < 0 lâche, > 0 serré
+        if (std::abs(s) > std::abs(outStrain[c.a])) outStrain[c.a] = s;
+        if (std::abs(s) > std::abs(outStrain[c.b])) outStrain[c.b] = s;
     }
 }
 

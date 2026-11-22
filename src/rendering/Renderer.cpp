@@ -64,6 +64,11 @@ uniform float uRoughness;
 uniform float uSheen;
 uniform int   uShowStrain;
 uniform float uStrainScale;
+uniform int   uMotif;          // 0 uni, 1 rayures, 2 carreaux
+uniform vec3  uMotifColor;
+uniform int   uHasMotifTex;
+uniform sampler2D uMotifTex;
+uniform float uMotifRepeat;    // taille d'un motif, en mètres
 uniform int   uBackSide;      // 1 = envers du tissu teinté
 uniform vec3  uSphereCenter;  // pour l'ombre analytique sur le sol
 uniform float uSphereRadius;
@@ -71,9 +76,10 @@ uniform float uSphereRadius;
 const float PI = 3.14159265;
 
 vec3 heatmap(float t) {
-    t = clamp(t, 0.0, 1.0);
-    vec3 cold = vec3(0.16, 0.36, 0.86), mid = vec3(0.22, 0.78, 0.42), hot = vec3(0.92, 0.22, 0.16);
-    return t < 0.5 ? mix(cold, mid, t * 2.0) : mix(mid, hot, (t - 0.5) * 2.0);
+    // Négatif : tissu lâche (comprimé). Positif : tissu serré (étiré).
+    t = clamp(t, -1.0, 1.0);
+    vec3 loose = vec3(0.25, 0.45, 0.86), ok = vec3(0.42, 0.74, 0.38), tight = vec3(0.88, 0.22, 0.16);
+    return t < 0.0 ? mix(ok, loose, -t) : mix(ok, tight, t);
 }
 
 float distributionGGX(float NoH, float a) {
@@ -149,6 +155,22 @@ void main() {
         if (uHasPrints == 1 && gl_FrontFacing) {
             vec4 p = texture(uPrints, (vUv - uPrintOrigin) / uPrintSize);
             albedo = mix(albedo, p.rgb, p.a);
+        }
+        if (int(vFinish + 0.5) != 4) {
+            if (uMotif == 1) {
+                float band = fract(vUv.x / 0.012);
+                float stripe = 1.0 - smoothstep(0.08, 0.16, band) + smoothstep(0.55, 0.64, band);
+                albedo = mix(albedo, uMotifColor, clamp(stripe, 0.0, 1.0) * 0.9);
+            } else if (uMotif == 2) {
+                vec2 cell = fract(vUv / 0.018);
+                float d = min(min(cell.x, 1.0 - cell.x), min(cell.y, 1.0 - cell.y));
+                float line = 1.0 - smoothstep(0.015, 0.045, d);
+                albedo = mix(albedo, uMotifColor, line * 0.92);
+            }
+            if (uHasMotifTex == 1) {
+                vec4 tex = texture(uMotifTex, fract(vUv / max(uMotifRepeat, 0.01)));
+                albedo = mix(albedo, tex.rgb, tex.a * 0.92);
+            }
         }
     }
     if (uMode == 0 && uShowStrain == 1) albedo = heatmap(vScalar / uStrainScale);
@@ -393,6 +415,10 @@ void Renderer::render(const SceneView& scene, const ClothAppearance& cloth)
     shader_.set("uCameraPos", scene.camera->position());
     shader_.set("uLightDir", glm::normalize(glm::vec3(-0.30f, -1.0f, -0.46f)));
     shader_.set("uShowStrain", 0);
+    shader_.set("uMotif", 0);
+    shader_.set("uHasMotifTex", 0);
+    shader_.set("uMotifRepeat", 0.15f);
+    shader_.set("uMotifColor", glm::vec3(0.15f));
     shader_.set("uBackSide", 0);
     shader_.set("uHasPrints", 0);
     shader_.set("uVertexColor", 0);
@@ -445,6 +471,16 @@ void Renderer::render(const SceneView& scene, const ClothAppearance& cloth)
     shader_.set("uShowStrain", cloth.showStrain ? 1 : 0);
     shader_.set("uVertexColor", clothHasColors_ ? 1 : 0);
     shader_.set("uStrainScale", cloth.strainScale);
+    shader_.set("uMotif", cloth.motif);
+    shader_.set("uMotifColor", cloth.motifColor);
+    shader_.set("uMotifRepeat", cloth.motifRepeat);
+    shader_.set("uHasMotifTex", cloth.motifTexture != 0 ? 1 : 0);
+    if (cloth.motifTexture != 0) {
+        gl::ActiveTexture(gl::TEXTURE1);
+        gl::BindTexture(gl::TEXTURE_2D, cloth.motifTexture);
+        shader_.set("uMotifTex", 1);
+        gl::ActiveTexture(gl::TEXTURE0);
+    }
     shader_.set("uBackSide", cloth.showBackSide ? 1 : 0);
     shader_.set("uHasPrints", printTexture_ != 0 ? 1 : 0);
     if (printTexture_ != 0) {

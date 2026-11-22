@@ -23,7 +23,11 @@
 #include "geometry/ClothMesh.h"
 #include "geometry/Mannequin.h"
 #include "garment/PatternOps.h"
+#include "garment/Grading.h"
 #include "io/GarmentExport.h"
+#include "io/SewingSheet.h"
+#include "io/Gif.h"
+#include "io/ViewCapture.h"
 #include "io/PatternImport.h"
 #include "io/PdfImport.h"
 #include "io/RasterImage.h"
@@ -451,6 +455,31 @@ int App::run(const AppOptions& options)
         camera_.pitch = 0.05f;
     }
     camera_.distance /= std::max(options_.zoom, 0.1f);
+    if (options_.showStrain) appearance_.showStrain = true;
+    if (options_.motif == "rayures") appearance_.motif = 1;
+    else if (options_.motif == "carreaux") appearance_.motif = 2;
+    if (options_.pose == "marche") pose_ = geometry::BodyPose::Walk;
+    else if (options_.pose == "bras") pose_ = geometry::BodyPose::ArmsUp;
+    if (options_.gradeTo >= 34 && !garment_.empty()) {
+        const int added = garment::appendGradedSize(garment_, gradeBase_, options_.gradeTo);
+        if (added > 0) {
+            commitGarment();
+            editor_.frameAll(garment_);
+        }
+    }
+    if (!options_.sheetPng.empty() && !garment_.empty()) {
+        std::vector<unsigned char> png;
+        std::string err;
+        io::SewingOptions opt;
+        if (io::writeSewingPreviewPng(garment_, opt, png, err)) io::writeBytes(options_.sheetPng, png, err);
+    }
+    if (!options_.photoPng.empty()) photoPath_ = options_.photoPng, photoPending_ = true;
+    showTutorial_ = options_.showTutorial || (options_.frames <= 0 && !io::tutorialDone());
+    showRecovery_ = options_.frames <= 0 && !showTutorial_ && io::hasRecovery();
+    if (showTutorial_) showRecovery_ = false;
+    benchStart_ = glfwGetTime();
+    lastAutosave_ = benchStart_;
+    projectDirty_ = false;
 
     while (!glfwWindowShouldClose(window_)) {
         glfwPollEvents();
@@ -479,15 +508,27 @@ int App::run(const AppOptions& options)
         drawViewportOverlay();
         drawAboutWindow();
         drawImageImportPopup();
+        drawTutorial();
+        drawRecovery();
 
-        if (clothValid_ && (playing_ || stepOnce_)) {
+        if (pose_ != geometry::BodyPose::Still && builtinAvatar_ && !turntable_) {
+            poseTime_ += kFrameDt;
+            applyAvatarTransform(false, false);
+        }
+        if (turntable_) camera_.yaw = turntableYaw0_ + turntableFrame_ * (2.0f * kPi / 24.0f);
+        autosave();
+
+        if (!options_.tourGif.empty() && !turntable_ && frameCount_ == 140 && clothValid_) beginTurntable(options_.tourGif);
+        if (clothValid_ && (playing_ || stepOnce_) && !turntable_) {
             solver_.step(kFrameDt);
             simTime_ += kFrameDt;
             stepOnce_ = false;
+            solverMsSum_ += solver_.stats().stepMilliseconds;
+            ++solverSteps_;
         }
         if (clothValid_) {
             geometry::computeVertexNormals(solver_.positions(), solver_.indices(), normals_);
-            solver_.computeStrain(strain_);
+            if (appearance_.showStrain) solver_.computeStrain(strain_);
             // Pièces posées (poches, bandes, écussons) : légèrement décollées à l'affichage
             // pour qu'elles ne se mélangent pas avec le tissu sur lequel elles sont cousues.
             // Épaisseur d'affichage d'une pièce : le tissu est dessiné décalé vers son endroit.
@@ -530,7 +571,49 @@ int App::run(const AppOptions& options)
         view.spheres = &solver_.spheres();
         view.groundEnabled = solver_.settings().groundEnabled;
         view.groundHeight = solver_.settings().groundHeight;
+        appearance_.motifTexture = motifTex_;
         renderer_.render(view, appearance_);
+        if (photoPending_ && (options_.frames <= 0 || frameCount_ + 1 >= options_.frames)) {
+            std::vector<unsigned char> rgb;
+            int pw = 0, ph = 0;
+            captureViewport(rgb, pw, ph);
+            std::vector<unsigned char> png;
+            std::string err;
+            if (io::encodePng(rgb, pw, ph, png) && io::writeBytes(photoPath_, png, err))
+                setStatus("Photo enregistrée : " + photoPath_, false);
+            else setStatus("Photo impossible" + (err.empty() ? "." : " : " + err), true);
+            photoPending_ = false;
+        }
+        if (turntable_) {
+            std::vector<unsigned char> rgb;
+            int pw = 0, ph = 0;
+            captureViewport(rgb, pw, ph);
+            const int dw = 480;
+            const int dh = std::max(1, ph * dw / std::max(pw, 1));
+            std::vector<unsigned char> small(static_cast<std::size_t>(dw) * dh * 3);
+            for (int y = 0; y < dh; ++y) {
+                const int sy = std::min(ph - 1, y * ph / dh);
+                for (int x = 0; x < dw; ++x) {
+                    const int sx0 = std::min(pw - 1, x * pw / dw);
+                    const std::size_t s = (static_cast<std::size_t>(sy) * pw + sx0) * 3;
+                    const std::size_t d = (static_cast<std::size_t>(y) * dw + x) * 3;
+                    small[d] = rgb[s];
+                    small[d + 1] = rgb[s + 1];
+                    small[d + 2] = rgb[s + 2];
+                }
+            }
+            turntableFrames_.push_back(std::move(small));
+            if (++turntableFrame_ >= 24) {
+                std::vector<unsigned char> gif;
+                std::string err;
+                if (io::encodeGif(turntableFrames_, dw, dh, 8, gif) && io::writeBytes(turntablePath_, gif, err))
+                    setStatus("Tour enregistré : " + turntablePath_, false);
+                else setStatus("Tour impossible" + (err.empty() ? "." : " : " + err), true);
+                camera_.yaw = turntableYaw0_;
+                turntable_ = false;
+                turntableFrames_.clear();
+            }
+        }
         gl::Disable(gl::SCISSOR_TEST);
         gl::Viewport(0, 0, fbw, fbh);
 
@@ -545,6 +628,15 @@ int App::run(const AppOptions& options)
         glfwSwapBuffers(window_);
     }
 
+    if (options_.frames > 0) {
+        const double wall = glfwGetTime() - benchStart_;
+        const double fps = wall > 1e-6 ? static_cast<double>(frameCount_) / wall : 0.0;
+        const double solver = solverSteps_ > 0 ? solverMsSum_ / solverSteps_ : 0.0;
+        std::printf("profil demarrage_ms=%.0f images=%d duree_ms=%.0f fps=%.1f solveur_ms=%.2f\n", benchStart_ * 1000.0,
+                    frameCount_, wall * 1000.0, fps, solver);
+    } else {
+        io::clearRecovery();
+    }
     shutdown();
     return 0;
 }
@@ -661,6 +753,7 @@ void App::loadLogo()
 void App::shutdown()
 {
     if (window_ == nullptr) return;
+    deleteTexture(motifTex_);
     deleteTexture(logoIcon_);
     deleteTexture(logoFull_);
     deleteTexture(backdropTex_);
@@ -845,6 +938,7 @@ void App::setGarment(garment::Garment g)
     editor_.frameAll(garment_);
     resetCloth();
     playing_ = true;
+    projectDirty_ = true;
 }
 
 void App::commitGarment()
@@ -857,6 +951,7 @@ void App::commitGarment()
     redoCloth_.clear();
     committed_ = garment_;
     resetCloth(true);   // la pause est respectée ; les pièces inchangées gardent leur drapé
+    projectDirty_ = true;
 }
 
 void App::undo()
@@ -1399,6 +1494,20 @@ void App::loadDefaultMannequin()
     avatarPath_.clear();
     avatarHeight_ = 1.75f;
     avatarRotation_ = 0.0f;
+    bodyRig_.build(avatarSource_.positions);
+    bodyBands_ = geometry::measureBands(avatarSource_.positions);
+    measures_.heightM = 1.75f;
+    measures_.chestCm = bodyBands_.chest * 100.0f;
+    measures_.waistCm = bodyBands_.waist * 100.0f;
+    measures_.hipsCm = bodyBands_.hips * 100.0f;
+    measuresReady_ = true;
+    if (options_.frames <= 0) {
+        const io::BodyPrefs prefs = io::loadBodyPrefs();
+        if (prefs.chestCm > 0.0f) measures_.chestCm = prefs.chestCm;
+        if (prefs.waistCm > 0.0f) measures_.waistCm = prefs.waistCm;
+        if (prefs.hipsCm > 0.0f) measures_.hipsCm = prefs.hipsCm;
+        if (prefs.heightM > 0.0f) avatarHeight_ = prefs.heightM;
+    }
     applyAvatarTransform();
     frameCamera();
 }
@@ -1496,9 +1605,21 @@ void App::buildSilhouette()
     editor_.silhouette.max = hi + glm::vec2(2.0f / sx, 2.0f / sy);
 }
 
-void App::applyAvatarTransform()
+void App::applyAvatarTransform(bool refitCloth, bool updateSilhouette)
 {
     avatarPositions_ = avatarSource_.positions;
+    if (builtinAvatar_ && measuresReady_ && pose_ != geometry::BodyPose::Still) {
+        geometry::shapeBody(avatarSource_.positions, bodyRig_, bodyBands_, measures_, avatarPositions_);
+        std::vector<glm::vec3> posed;
+        bodyRig_.pose(avatarPositions_, pose_, poseTime_, posed);
+        avatarPositions_.swap(posed);
+    } else if (builtinAvatar_ && measuresReady_) {
+        const float sc = bodyBands_.chest > 1e-4f ? (measures_.chestCm / 100.0f) / bodyBands_.chest : 1.0f;
+        const float sw = bodyBands_.waist > 1e-4f ? (measures_.waistCm / 100.0f) / bodyBands_.waist : 1.0f;
+        const float sh = bodyBands_.hips > 1e-4f ? (measures_.hipsCm / 100.0f) / bodyBands_.hips : 1.0f;
+        if (std::abs(sc - 1.0f) > 0.004f || std::abs(sw - 1.0f) > 0.004f || std::abs(sh - 1.0f) > 0.004f)
+            geometry::shapeBody(avatarSource_.positions, bodyRig_, bodyBands_, measures_, avatarPositions_);
+    }
     io::FitOptions fit;
     fit.targetHeight = avatarHeight_;
     fit.rotationYDegrees = avatarRotation_;
@@ -1508,9 +1629,9 @@ void App::applyAvatarTransform()
     avatarBvh_.build(avatarPositions_, avatarSource_.indices);
     if (showAvatar_) renderer_.setAvatarMesh(avatarPositions_, avatarNormals_, avatarSource_.indices);
     else renderer_.clearAvatar();
-    buildSilhouette();
+    if (updateSilhouette) buildSilhouette();
     solver_.setMeshCollider(&avatarBvh_);
-    resetCloth();   // le placement des pièces suit la taille de l'avatar
+    if (refitCloth) resetCloth();   // le placement des pièces suit la taille de l'avatar
 }
 
 void App::frameCamera()
@@ -2259,6 +2380,24 @@ void App::drawMenuBar()
             exportOnly_.clear();
             exportGarment();
         }
+        if (ImGui::MenuItem("Exporter le patron en PDF (A4)...", nullptr, false, !garment_.empty())) exportSewing(true);
+        if (ImGui::MenuItem("Exporter le patron en PDF (traceur)...", nullptr, false, !garment_.empty())) exportSewing(false);
+        if (ImGui::MenuItem("Exporter la photo (PNG)...", nullptr, false, true)) {
+            std::string path = hasNativeFileDialog() ? saveFileDialog("Photo de la vue 3D", "Image PNG|*.png", "png") : std::string();
+            if (path.empty() && !hasNativeFileDialog()) {
+                pathPopupKind_ = 6;
+                std::snprintf(pathInput_, sizeof(pathInput_), "drapeo.png");
+                showPathPopup_ = true;
+            } else if (!path.empty()) requestPhoto(path);
+        }
+        if (ImGui::MenuItem("Exporter un tour (GIF)...", nullptr, false, true)) {
+            std::string path = hasNativeFileDialog() ? saveFileDialog("Tour du vêtement", "GIF|*.gif", "gif") : std::string();
+            if (path.empty() && !hasNativeFileDialog()) {
+                pathPopupKind_ = 7;
+                std::snprintf(pathInput_, sizeof(pathInput_), "tour.gif");
+                showPathPopup_ = true;
+            } else if (!path.empty()) beginTurntable(path);
+        }
         ImGui::Separator();
         if (ImGui::MenuItem("Quitter", "Alt+F4")) glfwSetWindowShouldClose(window_, GLFW_TRUE);
         ImGui::EndMenu();
@@ -2337,6 +2476,10 @@ void App::drawMenuBar()
     }
     if (ImGui::BeginMenu("Aide")) {
         if (ImGui::MenuItem("Raccourcis clavier")) showShortcuts_ = true;
+        if (ImGui::MenuItem("Revoir le tutoriel")) {
+            tutorialStep_ = 0;
+            showTutorial_ = true;
+        }
         if (ImGui::MenuItem("À propos de Drapeo")) showAbout_ = true;
         ImGui::EndMenu();
     }
@@ -2530,6 +2673,13 @@ void App::drawToolbar()
     if (iconButton("reset", Icon::Reset, "Recoudre depuis le patron (R)", Btn::Quiet, b)) resetCloth();
     ImGui::SameLine(0, 2);
     if (iconButton("frame", Icon::Frame, "Cadrer l'avatar (F)", Btn::Quiet, b)) frameCamera();
+    ImGui::SameLine(0, 8);
+    ImGui::SetCursorPosY(y + (b - ImGui::GetFrameHeight()) * 0.5f);
+    if (appearance_.showStrain) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(kAccent.x, kAccent.y, kAccent.z, 0.45f));
+    if (ImGui::Button("Tension")) appearance_.showStrain = !appearance_.showStrain;
+    if (appearance_.showStrain) ImGui::PopStyleColor();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+        ImGui::SetTooltip("Carte de tension : bleu = lâche, vert = juste, rouge = serré.\nElle n'est calculée que lorsqu'elle est affichée.");
 
     toolbarSeparator(b);
     // Listes déroulantes : modèle, tissu, finesse du maillage.
@@ -2724,6 +2874,7 @@ void App::commitState()
     redoCloth_.clear();
     committed_ = garment_;
     apply3DState();
+    projectDirty_ = true;
 }
 
 void App::apply3DState()
@@ -3471,6 +3622,23 @@ void App::drawViewportOverlay()
     dl->AddText(titleFont, titleSize, {chip.x + pad * 0.7f, chip.y + pad * 0.28f}, ImGui::GetColorU32(kTextDim), "VUE 3D");
     dl->AddText({chip.x + pad * 0.7f, chip.y + pad * 0.28f + titleTs.y}, ImGui::GetColorU32(kText), text);
 
+    if (appearance_.showStrain) {
+        const float x = o.x + pad;
+        const float y = o.y + viewSize_.y * 0.28f;
+        const float bh = 120.0f * uiScale_, bw = 10.0f * uiScale_;
+        dl->AddRectFilled({x - 6, y - 22}, {x + 78 * uiScale_, y + bh + 36}, IM_COL32(14, 12, 10, 170), 6.0f);
+        dl->AddText({x, y - 18}, ImGui::GetColorU32(kText), "Tension");
+        for (int i = 0; i < static_cast<int>(bh); ++i) {
+            const float t = 1.0f - 2.0f * static_cast<float>(i) / bh;
+            const int r = t < 0 ? static_cast<int>(std::lerp(107.0f, 64.0f, -t)) : static_cast<int>(std::lerp(107.0f, 224.0f, t));
+            const int g = t < 0 ? static_cast<int>(std::lerp(188.0f, 115.0f, -t)) : static_cast<int>(std::lerp(188.0f, 56.0f, t));
+            const int b = t < 0 ? static_cast<int>(std::lerp(97.0f, 219.0f, -t)) : static_cast<int>(std::lerp(97.0f, 41.0f, t));
+            dl->AddLine({x, y + i}, {x + bw, y + i}, IM_COL32(r, g, b, 255));
+        }
+        dl->AddText({x + bw + 6, y - 2}, IM_COL32(224, 90, 70, 255), "Serré");
+        dl->AddText({x + bw + 6, y + bh * 0.5f - 8}, IM_COL32(140, 200, 110, 255), "Juste");
+        dl->AddText({x + bw + 6, y + bh - 14}, IM_COL32(90, 140, 220, 255), "Lâche");
+    }
     if (clothValid_ && solver_.seamCount() > 0 && solver_.seamProgress() < 1.0f) {
         std::snprintf(text, sizeof(text), "Couture en cours   %.0f %%", static_cast<double>(solver_.seamProgress() * 100.0f));
         const ImVec2 ts = ImGui::CalcTextSize(text);
@@ -3573,6 +3741,27 @@ void App::drawInspector()
     inspectorSeams();
     inspectorFabric();
     inspectorAvatar();
+    if (ImGui::CollapsingHeader("Tailles")) {
+        revealSection("tailles");
+        ImGui::TextDisabled("Le patron actuel est la taille de base. La copie n'est pas simulée.");
+        label("Base");
+        ImGui::SliderInt("##base", &gradeBase_, 34, 46, "%d");
+        gradeBase_ = std::clamp(gradeBase_ & ~1, 34, 46);
+        label("Nouvelle");
+        ImGui::SliderInt("##cible", &gradeTarget_, 34, 46, "%d");
+        gradeTarget_ = std::clamp(gradeTarget_ & ~1, 34, 46);
+        ImGui::BeginDisabled(garment_.empty() || gradeTarget_ == gradeBase_);
+        if (ImGui::Button("Ajouter cette taille", ImVec2(-1, 0))) {
+            const int added = garment::appendGradedSize(garment_, gradeBase_, gradeTarget_);
+            if (added > 0) {
+                commitGarment();
+                editor_.frameAll(garment_);
+                setStatus("Taille " + std::to_string(gradeTarget_) + " ajoutée au patron (non simulée, pour la planche). Ctrl+Z pour annuler.", false);
+            }
+        }
+        ImGui::EndDisabled();
+        ImGui::Spacing();
+    }
     inspectorSimulation();
     inspectorDisplay();
     ImGui::PopStyleVar();
@@ -4521,6 +4710,7 @@ void App::inspectorSeams()
 void App::inspectorFabric()
 {
     if (!ImGui::CollapsingHeader("Tissu", ImGuiTreeNodeFlags_DefaultOpen)) return;
+    revealSection("tissu");
     const auto presets = simulation::fabricPresets();
     label("Matière");
     if (ImGui::BeginCombo("##matiere", presets[static_cast<std::size_t>(presetIndex_)].name.c_str())) {
@@ -4565,19 +4755,81 @@ void App::inspectorFabric()
     ImGui::SameLine();
     if (ImGui::Checkbox("Couleurs des pièces", &panelColors_)) updateClothColors();
     ImGui::Spacing();
+    ImGui::SeparatorText("Motif");
+    const char* motifs[] = {"Uni", "Rayures", "Carreaux"};
+    int motif = appearance_.motif;
+    if (ImGui::Combo("##motif", &motif, motifs, 3)) appearance_.motif = motif;
+    label("Couleur du motif");
+    ImGui::ColorEdit3("##motifcol", &appearance_.motifColor.x, ImGuiColorEditFlags_NoInputs);
+    if (ImGui::Button("Image de motif...")) {
+        std::string path = hasNativeFileDialog() ? openFileDialog("Image de motif", "Images|*.png;*.jpg;*.jpeg;*.bmp;*.tga") : std::string();
+        if (path.empty() && !hasNativeFileDialog()) {
+            pathPopupKind_ = 8;
+            pathInput_[0] = '\0';
+            showPathPopup_ = true;
+        } else if (!path.empty()) loadMotifImage(path);
+    }
+    ImGui::SameLine();
+    ImGui::BeginDisabled(motifTex_ == 0);
+    if (ImGui::Button("Retirer")) {
+        deleteTexture(motifTex_);
+        appearance_.motifTexture = 0;
+    }
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("Rayures et carreaux sont calculés dans le pixel, sans texture.\nUne image est répétée sur le tissu (15 cm).");
+    ImGui::Spacing();
 }
 
 void App::inspectorAvatar()
 {
     if (!ImGui::CollapsingHeader("Avatar", ImGuiTreeNodeFlags_DefaultOpen)) return;
+    revealSection("avatar");
     ImGui::TextUnformatted(avatarSource_.name.c_str());
     ImGui::TextDisabled("%zu triangles   %zu particules en contact", avatarSource_.indices.size() / 3,
                         clothValid_ ? solver_.meshContacts() : std::size_t{0});
     bool changed = false;
+    bool live = false;
     float hcm = avatarHeight_ * 100.0f;
-    label("Taille");
-    if (ImGui::SliderFloat("##taille", &hcm, 50.0f, 250.0f, "%.0f cm")) avatarHeight_ = hcm / 100.0f;
+    label("Stature");
+    if (ImGui::SliderFloat("##taille", &hcm, 140.0f, 200.0f, "%.0f cm")) {
+        avatarHeight_ = hcm / 100.0f;
+        live = true;
+    }
     changed |= ImGui::IsItemDeactivatedAfterEdit();
+    if (builtinAvatar_) {
+        ImGui::TextDisabled("Confection");
+        for (const auto& preset : geometry::sizePresets()) {
+            char buf[8];
+            std::snprintf(buf, sizeof(buf), "%d", preset.size);
+            if (ImGui::SmallButton(buf)) {
+                measures_ = preset.measures;
+                avatarHeight_ = preset.measures.heightM;
+                changed = true;
+            }
+            ImGui::SameLine();
+        }
+        ImGui::NewLine();
+        auto band = [&](const char* id, const char* caption, float& cm) {
+            label(caption);
+            if (ImGui::SliderFloat(id, &cm, 50.0f, 140.0f, "%.0f cm")) live = true;
+            changed |= ImGui::IsItemDeactivatedAfterEdit();
+        };
+        band("##poitrine", "Poitrine", measures_.chestCm);
+        band("##hanches_wait", "Taille", measures_.waistCm);
+        band("##hanches", "Hanches", measures_.hipsCm);
+        label("Animation");
+        int pose = static_cast<int>(pose_);
+        const char* poses[] = {"Arrêt", "Marche", "Bras levés"};
+        if (ImGui::Combo("##pose", &pose, poses, 3)) {
+            pose_ = static_cast<geometry::BodyPose>(pose);
+            if (pose_ == geometry::BodyPose::Still) applyAvatarTransform(false, true);
+        }
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+            ImGui::SetTooltip("Le mannequin intégré seulement. La marche et les bras levés\nrecalculent les collisions ; à l'arrêt, aucun coût en plus.");
+    } else {
+        ImGui::TextDisabled("Mensurations et animation : mannequin intégré.");
+    }
     label("Rotation");
     ImGui::SliderFloat("##rotation", &avatarRotation_, -180.0f, 180.0f, "%.0f°");
     changed |= ImGui::IsItemDeactivatedAfterEdit();
@@ -4590,9 +4842,12 @@ void App::inspectorAvatar()
         showAvatar_ = !showAvatar_;
         changed = true;
     }
-    if (changed) {
+    if (changed || live) {
         avatarRotation_ = std::fmod(avatarRotation_ + 540.0f, 360.0f) - 180.0f;
-        applyAvatarTransform();
+        applyAvatarTransform(changed, changed);
+        if (changed && options_.frames <= 0) {
+            io::saveBodyPrefs({avatarHeight_, measures_.chestCm, measures_.waistCm, measures_.hipsCm});
+        }
     }
     const float hw = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
     if (ImGui::Button("Importer FBX / OBJ...", ImVec2(hw, 0))) openAvatarDialog();
@@ -4852,8 +5107,9 @@ void App::drawAboutWindow()
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     if (ImGui::BeginPopupModal("Ouvrir un fichier", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         const char* what[] = {"Avatar (.fbx, .obj)", "Projet .drapeo ou patron (.svg, .dxf, .pdf, .png, .jpg)", "Export OBJ",
-                              "Enregistrer le projet (.drapeo)"};
-        ImGui::TextUnformatted(what[pathPopupKind_]);
+                              "Enregistrer le projet (.drapeo)", "Planche de couture A4 (.pdf)", "Planche traceur (.pdf)",
+                              "Photo PNG", "Tour GIF", "Image de motif"};
+        if (pathPopupKind_ >= 0 && pathPopupKind_ < 9) ImGui::TextUnformatted(what[pathPopupKind_]);
         ImGui::SetNextItemWidth(420 * uiScale_);
         const bool enter = ImGui::InputText("##chemin", pathInput_, sizeof(pathInput_), ImGuiInputTextFlags_EnterReturnsTrue);
         if (primaryButton("Valider", ImVec2(120 * uiScale_, 0)) || enter) {
@@ -4862,6 +5118,11 @@ void App::drawAboutWindow()
             if (pathPopupKind_ == 0) loadAvatar(path);
             else if (pathPopupKind_ == 1) importPattern(path);
             else if (pathPopupKind_ == 3) saveProjectFile();
+            else if (pathPopupKind_ == 4) exportSewing(true);
+            else if (pathPopupKind_ == 5) exportSewing(false);
+            else if (pathPopupKind_ == 6) requestPhoto(path);
+            else if (pathPopupKind_ == 7) beginTurntable(path);
+            else if (pathPopupKind_ == 8) loadMotifImage(path);
             else exportGarment();
             pathInput_[0] = '\0';
         }
@@ -4922,6 +5183,172 @@ void App::saveScreenshot(const std::string& path) const
     for (int row = h - 1; row >= 0; --row)   // OpenGL lit de bas en haut
         out.write(reinterpret_cast<const char*>(&pixels[static_cast<std::size_t>(row * w * 3)]), w * 3);
     std::printf("Capture enregistrée : %s (%dx%d)\n", path.c_str(), w, h);
+}
+
+void App::revealSection(const char* name)
+{
+    if (options_.focus == name) ImGui::SetScrollHereY(0.05f);
+}
+
+void App::autosave()
+{
+    if (options_.frames > 0 || !projectDirty_ || garment_.empty()) return;
+    if (glfwGetTime() - lastAutosave_ < 20.0) return;
+    lastAutosave_ = glfwGetTime();
+    io::ProjectAvatar av;
+    av.present = true;
+    av.path = builtinAvatar_ ? std::string() : avatarPath_;
+    av.height = avatarHeight_;
+    av.rotationDeg = avatarRotation_;
+    if (io::writeRecovery(io::writeProject(garment_, &av))) projectDirty_ = false;
+}
+
+void App::captureViewport(std::vector<unsigned char>& rgb, int& width, int& height) const
+{
+    int fbw = 0, fbh = 0;
+    glfwGetFramebufferSize(window_, &fbw, &fbh);
+    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    const float sx = display.x > 0 ? static_cast<float>(fbw) / display.x : 1.0f;
+    const float sy = display.y > 0 ? static_cast<float>(fbh) / display.y : 1.0f;
+    const int x = std::max(0, static_cast<int>(viewPos_.x * sx));
+    const int y = std::max(0, fbh - static_cast<int>((viewPos_.y + viewSize_.y) * sy));
+    width = std::max(1, static_cast<int>(viewSize_.x * sx));
+    height = std::max(1, static_cast<int>(viewSize_.y * sy));
+    if (x + width > fbw) width = fbw - x;
+    if (y + height > fbh) height = fbh - y;
+    std::vector<unsigned char> raw(static_cast<std::size_t>(width) * height * 3);
+    gl::PixelStorei(gl::PACK_ALIGNMENT, 1);
+    gl::ReadPixels(x, y, width, height, gl::RGB, gl::UNSIGNED_BYTE, raw.data());
+    rgb.resize(raw.size());
+    for (int row = 0; row < height; ++row)
+        std::copy_n(raw.data() + static_cast<std::size_t>(row) * width * 3, width * 3,
+                    rgb.data() + static_cast<std::size_t>(height - 1 - row) * width * 3);
+}
+
+void App::exportSewing(bool a4)
+{
+    std::string path;
+    if (pathInput_[0] != '\0' && (pathPopupKind_ == 4 || pathPopupKind_ == 5)) path = pathInput_;
+    else if (hasNativeFileDialog()) {
+        path = saveFileDialog(a4 ? "Planche A4" : "Planche traceur", "PDF|*.pdf", "pdf");
+        if (path.empty()) return;
+    } else {
+        pathPopupKind_ = a4 ? 4 : 5;
+        std::snprintf(pathInput_, sizeof(pathInput_), a4 ? "patron-a4.pdf" : "patron-traceur.pdf");
+        showPathPopup_ = true;
+        return;
+    }
+    io::SewingOptions opt;
+    opt.a4 = a4;
+    std::vector<unsigned char> pdf;
+    std::string error;
+    if (!io::writeSewingPdf(garment_, opt, pdf, error) || !io::writeBytes(path, pdf, error)) {
+        setStatus("Planche impossible : " + error, true);
+        return;
+    }
+    setStatus(std::string(a4 ? "Planche A4 enregistrée : " : "Planche traceur enregistrée : ") + path, false);
+}
+
+void App::requestPhoto(const std::string& path)
+{
+    if (path.empty()) return;
+    photoPath_ = path;
+    photoPending_ = true;
+}
+
+void App::beginTurntable(const std::string& path)
+{
+    if (path.empty() || turntable_) return;
+    turntablePath_ = path;
+    turntableYaw0_ = camera_.yaw;
+    turntableFrame_ = 0;
+    turntableFrames_.clear();
+    turntable_ = true;
+    setStatus("Tour en cours : 24 vues, le tissu reste en place.", false);
+}
+
+void App::loadMotifImage(const std::string& path)
+{
+    io::RasterImage image;
+    std::string error;
+    if (!io::loadRasterImage(path, image, error)) {
+        setStatus("Image de motif impossible : " + error, true);
+        return;
+    }
+    deleteTexture(motifTex_);
+    motifTex_ = uploadTexture(image.width, image.height, image.rgba.data());
+    appearance_.motifTexture = motifTex_;
+    setStatus("Motif chargé : " + path, false);
+}
+
+void App::drawTutorial()
+{
+    if (!showTutorial_) return;
+    ImGui::OpenPopup("Premiers pas");
+    const ImVec2 center(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.42f);
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(460 * uiScale_, 0));
+    if (!ImGui::BeginPopupModal("Premiers pas", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+    const char* titles[] = {"1. Tracer", "2. Coudre", "3. Simuler"};
+    const char* bodies[] = {
+        "Sur l'ombre de l'avatar, à gauche, tracez une pièce avec Rectangle (B) ou Polygone (P).\nMaj aimante à la grille de 1 cm.",
+        "Choisissez Couture (S). Cliquez un bord, puis le bord qui doit le rejoindre.\nLa longueur des deux côtés s'affiche.",
+        "Le bouton laiton, ou la touche Espace, lance le drapé. R recoud depuis le patron.\nTension montre où le tissu est lâche (bleu) ou serré (rouge)."};
+    const int step = std::clamp(tutorialStep_, 0, 2);
+    paneTitle(titles[step], fontBold_);
+    ImGui::Spacing();
+    ImGui::TextWrapped("%s", bodies[step]);
+    ImGui::Spacing();
+    ImGui::TextDisabled("%d / 3", step + 1);
+    ImGui::Spacing();
+    if (ImGui::Button("Passer", ImVec2(120 * uiScale_, 0))) {
+        showTutorial_ = false;
+        if (options_.frames <= 0) io::setTutorialDone(true);
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (step < 2) {
+        if (primaryButton("Suivant", ImVec2(120 * uiScale_, 0))) ++tutorialStep_;
+    } else if (primaryButton("Commencer", ImVec2(140 * uiScale_, 0))) {
+        showTutorial_ = false;
+        if (options_.frames <= 0) io::setTutorialDone(true);
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
+void App::drawRecovery()
+{
+    if (!showRecovery_) return;
+    ImGui::OpenPopup("Reprendre la session");
+    const ImVec2 center(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.42f);
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    if (!ImGui::BeginPopupModal("Reprendre la session", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+    ImGui::TextUnformatted("Une session interrompue a été retrouvée.");
+    ImGui::TextDisabled("Le patron est repris. Le drapé repart de la couture.");
+    ImGui::Spacing();
+    if (primaryButton("Reprendre", ImVec2(140 * uiScale_, 0))) {
+        std::string text, error;
+        if (io::readFileBytes(io::recoveryFilePath(), text, error)) {
+            garment::Garment g;
+            io::ProjectAvatar av;
+            if (io::parseProject(text, g, error, &av)) {
+                if (av.present) avatarHeight_ = av.height;
+                setGarment(std::move(g));
+                setStatus("Session reprise.", false);
+            } else setStatus("Reprise impossible : " + error, true);
+        }
+        io::clearRecovery();
+        showRecovery_ = false;
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Ignorer", ImVec2(120 * uiScale_, 0))) {
+        io::clearRecovery();
+        showRecovery_ = false;
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
 }
 
 } // namespace drapeo::app
