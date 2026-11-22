@@ -28,7 +28,7 @@ struct FabricMaterial {
     float sheen             = 0.3f;   // reflet rasant typique des fibres
 };
 
-/// Coton, soie, denim, cuir.
+/// Coton, jersey, soie, jean, lin, cuir.
 [[nodiscard]] std::span<const FabricMaterial> fabricPresets();
 
 } // namespace drapeo::simulation

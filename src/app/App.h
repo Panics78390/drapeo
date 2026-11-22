@@ -23,6 +23,7 @@
 #include <glm/glm.hpp>
 
 #include "garment/PrintAtlas.h"
+#include "geometry/BodyShape.h"
 #include "garment/GarmentMesher.h"
 #include "garment/Pattern.h"
 #include "geometry/TriangleBvh.h"
@@ -46,6 +47,16 @@ struct AppOptions {
     std::string screenshotPath;   // capture PPM de la dernière image
     bool showAbout = false;       // ouvre la fenêtre « À propos » au démarrage
     std::string patternPath;      // patron à importer au démarrage (.svg, .dxf, .pdf, image)
+    std::string model;            // modèle de départ : debardeur, jupe ou robe
+    std::string focus;            // section à amener en vue (avatar, tissu, tailles)
+    std::string motif;            // uni, rayures, carreaux
+    std::string pose;             // arret, marche, bras
+    bool showStrain = false;
+    int gradeTo = 0;              // taille à ajouter au démarrage (0 = aucune)
+    bool showTutorial = false;
+    std::string sheetPng;         // aperçu PNG de la planche de couture
+    std::string photoPng;
+    std::string tourGif;          // tour de 24 vues, après le drapé
     bool acceptImport = false;    // valide directement la fenêtre d'import d'image
     bool startPaused = false;     // démarre simulation en pause (mise en place, captures)
     std::string avatarPath;       // avatar à charger au démarrage (.fbx / .obj)
@@ -125,7 +136,16 @@ private:
     // --- Avatar ---------------------------------------------------------------
     bool loadAvatar(const std::string& path);
     void loadDefaultMannequin();
-    void applyAvatarTransform();
+    void applyAvatarTransform(bool refitCloth = true, bool updateSilhouette = true);
+    void revealSection(const char* name);
+    void autosave();
+    void captureViewport(std::vector<unsigned char>& rgb, int& width, int& height) const;
+    void exportSewing(bool a4);
+    void requestPhoto(const std::string& path);
+    void beginTurntable(const std::string& path);
+    void drawTutorial();
+    void drawRecovery();
+    void loadMotifImage(const std::string& path);
     void buildSilhouette();                // ombre de l'avatar (vue de face) pour la vue patron
     unsigned int silhouetteTex_ = 0;
     void frameCamera();
@@ -233,6 +253,29 @@ private:
     std::vector<glm::vec3> avatarNormals_;
     geometry::TriangleBvh avatarBvh_;
     float avatarHeight_ = 1.75f;
+    geometry::BodyRig bodyRig_;
+    geometry::BodyBands bodyBands_;
+    geometry::BodyMeasures measures_;
+    geometry::BodyPose pose_ = geometry::BodyPose::Still;
+    float poseTime_ = 0.0f;
+    bool measuresReady_ = false;
+    int gradeBase_ = 38, gradeTarget_ = 42;
+    unsigned int motifTex_ = 0;
+    bool showTutorial_ = false;
+    int tutorialStep_ = 0;
+    bool showRecovery_ = false;
+    bool projectDirty_ = false;
+    double lastAutosave_ = 0.0;
+    double benchStart_ = 0.0;
+    double solverMsSum_ = 0.0;
+    int solverSteps_ = 0;
+    bool photoPending_ = false;
+    std::string photoPath_;
+    bool turntable_ = false;
+    int turntableFrame_ = 0;
+    float turntableYaw0_ = 0.0f;
+    std::string turntablePath_;
+    std::vector<std::vector<unsigned char>> turntableFrames_;
     std::string avatarPath_;                     // fichier de l'avatar importé (vide = mannequin)
     std::string watchedProject_;                 // projet .drapeo surveillé (rechargement automatique)
     long long watchedStamp_ = 0;                 // date + taille du fichier au dernier chargement

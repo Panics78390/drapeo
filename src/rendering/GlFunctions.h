@@ -42,7 +42,7 @@ inline constexpr GLenum COMPILE_STATUS = 0x8B81, LINK_STATUS = 0x8B82;
 inline constexpr GLenum RGB = 0x1907, RGBA = 0x1908, PACK_ALIGNMENT = 0x0D05, UNPACK_ALIGNMENT = 0x0CF5;
 inline constexpr GLenum TEXTURE_2D = 0x0DE1, TEXTURE_MIN_FILTER = 0x2801, TEXTURE_MAG_FILTER = 0x2800, LINEAR = 0x2601;
 inline constexpr GLenum TEXTURE_WRAP_S = 0x2802, TEXTURE_WRAP_T = 0x2803, CLAMP_TO_EDGE = 0x812F;
-inline constexpr GLenum TEXTURE0 = 0x84C0, LINEAR_MIPMAP_LINEAR = 0x2703;
+inline constexpr GLenum TEXTURE0 = 0x84C0, TEXTURE1 = 0x84C1, LINEAR_MIPMAP_LINEAR = 0x2703;
 inline constexpr GLenum FRONT_AND_BACK = 0x0408, LINE = 0x1B01, FILL = 0x1B02;
 inline constexpr GLenum VERSION = 0x1F02, RENDERER = 0x1F01;
 inline constexpr GLboolean FALSE_ = 0, TRUE_ = 1;
