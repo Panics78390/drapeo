@@ -82,6 +82,8 @@ private:
     static void drawMesh(const GpuMesh& mesh);
 
     Shader shader_;
+    Shader backdrop_;                 // cyclorama de l'atelier (dégradé, sans géométrie)
+    gl::GLuint backdropVao_ = 0;
     GpuMesh cloth_, sphere_, ground_, avatar_;
     bool clothHasColors_ = false;
     gl::GLuint printTexture_ = 0;

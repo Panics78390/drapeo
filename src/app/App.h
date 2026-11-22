@@ -46,6 +46,7 @@ struct AppOptions {
     std::string screenshotPath;   // capture PPM de la dernière image
     bool showAbout = false;       // ouvre la fenêtre « À propos » au démarrage
     std::string patternPath;      // patron à importer au démarrage (.svg, .dxf, .pdf, image)
+    std::string model;            // modèle de départ : debardeur, jupe ou robe
     bool acceptImport = false;    // valide directement la fenêtre d'import d'image
     bool startPaused = false;     // démarre simulation en pause (mise en place, captures)
     std::string avatarPath;       // avatar à charger au démarrage (.fbx / .obj)

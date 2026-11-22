@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <numbers>
+#include <cfloat>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -15,6 +16,7 @@
 #include <imgui_impl_opengl3.h>
 
 #include "app/FileDialog.h"
+#include "app/FontData.h"
 #include "io/ProjectFile.h"
 #include "io/Settings.h"
 #include "app/LogoData.h"
@@ -38,41 +40,46 @@ namespace {
 constexpr float kFrameDt = 1.0f / 60.0f;   // pas fixe : simulation déterministe
 constexpr float kPi = 3.14159265f;
 
-// --- Palette « graphite + fil d'or » propre à Drapeo --------------------------
-const ImVec4 kBg0(0.090f, 0.094f, 0.102f, 1.0f);    // fonds les plus sombres (barres)
-const ImVec4 kBg1(0.122f, 0.127f, 0.137f, 1.0f);    // panneaux
-const ImVec4 kBg2(0.165f, 0.171f, 0.184f, 1.0f);    // champs
-const ImVec4 kBg3(0.215f, 0.222f, 0.238f, 1.0f);    // survol
-const ImVec4 kLine(0.215f, 0.222f, 0.238f, 1.0f);
-const ImVec4 kAccent(0.87f, 0.63f, 0.29f, 1.0f);
-const ImVec4 kAccentDim(0.55f, 0.40f, 0.19f, 1.0f);
-const ImVec4 kText(0.88f, 0.87f, 0.84f, 1.0f);
-const ImVec4 kTextDim(0.56f, 0.57f, 0.60f, 1.0f);
-const ImU32 kAccentU32 = IM_COL32(222, 160, 74, 255);
+// --- Palette « atelier » : graphite chaud et laiton, sobre --------------------------
+const ImVec4 kBg0(0.078f, 0.073f, 0.066f, 1.0f);     // barres
+const ImVec4 kBgToolbar(0.098f, 0.091f, 0.082f, 1.0f);
+const ImVec4 kBg1(0.122f, 0.114f, 0.104f, 1.0f);     // panneaux
+const ImVec4 kBg2(0.172f, 0.160f, 0.144f, 1.0f);     // champs
+const ImVec4 kBg3(0.230f, 0.210f, 0.184f, 1.0f);     // survol
+const ImVec4 kLine(0.40f, 0.34f, 0.26f, 0.45f);
+const ImVec4 kAccent(0.86f, 0.68f, 0.38f, 1.0f);     // laiton
+const ImVec4 kAccentHi(0.94f, 0.80f, 0.52f, 1.0f);
+const ImVec4 kAccentDim(0.58f, 0.44f, 0.24f, 1.0f);
+const ImVec4 kText(0.93f, 0.91f, 0.86f, 1.0f);
+const ImVec4 kTextDim(0.64f, 0.60f, 0.54f, 1.0f);
+const ImVec4 kInkOnAccent(0.16f, 0.12f, 0.07f, 1.0f);
+const ImU32 kAccentU32 = IM_COL32(220, 174, 96, 255);
+const ImVec4 kOk(0.62f, 0.78f, 0.56f, 1.0f);
+const ImVec4 kBad(0.93f, 0.48f, 0.40f, 1.0f);
 
 void applyStyle(float scale)
 {
     ImGuiStyle& s = ImGui::GetStyle();
     ImGui::StyleColorsDark(&s);
     s.WindowRounding = 0.0f;
-    s.ChildRounding = 4.0f;
-    s.FrameRounding = 3.0f;
-    s.PopupRounding = 4.0f;
-    s.GrabRounding = 3.0f;
-    s.TabRounding = 3.0f;
-    s.ScrollbarRounding = 6.0f;
+    s.ChildRounding = 6.0f;
+    s.FrameRounding = 5.0f;
+    s.PopupRounding = 8.0f;
+    s.GrabRounding = 4.0f;
+    s.TabRounding = 5.0f;
+    s.ScrollbarRounding = 8.0f;
     s.WindowBorderSize = 0.0f;
     s.PopupBorderSize = 1.0f;
     s.FrameBorderSize = 0.0f;
-    s.WindowPadding = ImVec2(12, 10);
-    s.FramePadding = ImVec2(8, 4);
-    s.ItemSpacing = ImVec2(8, 6);
+    s.WindowPadding = ImVec2(14, 12);
+    s.FramePadding = ImVec2(10, 5);
+    s.ItemSpacing = ImVec2(8, 7);
     s.ItemInnerSpacing = ImVec2(6, 4);
-    s.IndentSpacing = 14.0f;
-    s.ScrollbarSize = 11.0f;
-    s.GrabMinSize = 9.0f;
+    s.IndentSpacing = 16.0f;
+    s.ScrollbarSize = 10.0f;
+    s.GrabMinSize = 10.0f;
     s.SeparatorTextBorderSize = 1.0f;
-    s.SeparatorTextPadding = ImVec2(0, 4);
+    s.SeparatorTextPadding = ImVec2(8, 6);
     s.WindowMinSize = ImVec2(2, 2);   // la poignée de redimensionnement est très fine
     s.ScaleAllSizes(scale);
 
@@ -81,34 +88,40 @@ void applyStyle(float scale)
     c[ImGuiCol_TextDisabled] = kTextDim;
     c[ImGuiCol_WindowBg] = kBg1;
     c[ImGuiCol_ChildBg] = ImVec4(0, 0, 0, 0);
-    c[ImGuiCol_PopupBg] = ImVec4(0.110f, 0.114f, 0.124f, 0.98f);
+    c[ImGuiCol_PopupBg] = ImVec4(0.102f, 0.094f, 0.084f, 0.98f);
     c[ImGuiCol_Border] = kLine;
     c[ImGuiCol_FrameBg] = kBg2;
     c[ImGuiCol_FrameBgHovered] = kBg3;
-    c[ImGuiCol_FrameBgActive] = ImVec4(0.25f, 0.26f, 0.28f, 1.0f);
+    c[ImGuiCol_FrameBgActive] = ImVec4(0.26f, 0.23f, 0.19f, 1.0f);
     c[ImGuiCol_TitleBg] = kBg0;
     c[ImGuiCol_TitleBgActive] = kBg0;
     c[ImGuiCol_MenuBarBg] = kBg0;
     c[ImGuiCol_ScrollbarBg] = ImVec4(0, 0, 0, 0);
-    c[ImGuiCol_ScrollbarGrab] = kBg3;
+    c[ImGuiCol_ScrollbarGrab] = ImVec4(0.32f, 0.28f, 0.22f, 0.85f);
+    c[ImGuiCol_ScrollbarGrabHovered] = kAccentDim;
+    c[ImGuiCol_ScrollbarGrabActive] = kAccent;
     c[ImGuiCol_CheckMark] = kAccent;
     c[ImGuiCol_SliderGrab] = kAccentDim;
     c[ImGuiCol_SliderGrabActive] = kAccent;
     c[ImGuiCol_Button] = kBg2;
     c[ImGuiCol_ButtonHovered] = kBg3;
     c[ImGuiCol_ButtonActive] = kAccentDim;
-    c[ImGuiCol_Header] = ImVec4(0.18f, 0.185f, 0.20f, 1.0f);
-    c[ImGuiCol_HeaderHovered] = kBg3;
-    c[ImGuiCol_HeaderActive] = ImVec4(0.26f, 0.27f, 0.29f, 1.0f);
-    c[ImGuiCol_Separator] = kLine;
+    c[ImGuiCol_Header] = ImVec4(0.20f, 0.18f, 0.15f, 1.0f);
+    c[ImGuiCol_HeaderHovered] = ImVec4(0.28f, 0.24f, 0.18f, 1.0f);
+    c[ImGuiCol_HeaderActive] = ImVec4(0.34f, 0.27f, 0.16f, 1.0f);
+    c[ImGuiCol_Separator] = ImVec4(0.86f, 0.74f, 0.50f, 0.16f);
     c[ImGuiCol_SeparatorHovered] = kAccentDim;
     c[ImGuiCol_SeparatorActive] = kAccent;
     c[ImGuiCol_ResizeGrip] = ImVec4(0, 0, 0, 0);
     c[ImGuiCol_Tab] = kBg1;
     c[ImGuiCol_TabHovered] = kBg3;
     c[ImGuiCol_TabSelected] = kBg2;
-    c[ImGuiCol_PlotHistogram] = kAccentDim;
-    c[ImGuiCol_TextSelectedBg] = ImVec4(0.87f, 0.63f, 0.29f, 0.35f);
+    c[ImGuiCol_TabSelectedOverline] = kAccent;
+    c[ImGuiCol_PlotHistogram] = kAccent;
+    c[ImGuiCol_PlotHistogramHovered] = kAccentHi;
+    c[ImGuiCol_TextSelectedBg] = ImVec4(0.86f, 0.68f, 0.38f, 0.35f);
+    c[ImGuiCol_NavHighlight] = kAccent;
+    c[ImGuiCol_ModalWindowDimBg] = ImVec4(0.04f, 0.03f, 0.025f, 0.62f);
 }
 
 /// Curseur logarithmique pour les compliances (plusieurs ordres de grandeur).
@@ -133,6 +146,7 @@ void label(const char* text)
 
 // --- Icônes dessinées (aucune ressource externe) ---------------------------
 enum class Icon { Select, Polygon, Rectangle, Pocket, Seam, Magnet, Symmetry, Play, Pause, Step, Reset, Frame };
+enum class Btn { Quiet, On, Primary };   // Quiet : repos, On : outil actif, Primary : action principale
 
 void drawIcon(ImDrawList* dl, Icon icon, ImVec2 c, float r, ImU32 col)
 {
@@ -237,23 +251,32 @@ void drawIcon(ImDrawList* dl, Icon icon, ImVec2 c, float r, ImU32 col)
     }
 }
 
-bool iconButton(const char* id, Icon icon, const char* tooltip, bool active, float size)
+bool iconButton(const char* id, Icon icon, const char* tooltip, Btn tone, float size)
 {
     ImGui::PushID(id);
-    if (active) {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.87f, 0.63f, 0.29f, 0.22f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.87f, 0.63f, 0.29f, 0.32f));
+    ImU32 iconCol = ImGui::GetColorU32(ImGuiCol_Text);
+    if (tone == Btn::Primary) {
+        ImGui::PushStyleColor(ImGuiCol_Button, kAccent);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kAccentHi);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, kAccentDim);
+        iconCol = ImGui::GetColorU32(kInkOnAccent);
+    } else if (tone == Btn::On) {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(kAccent.x, kAccent.y, kAccent.z, 0.20f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(kAccent.x, kAccent.y, kAccent.z, 0.34f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, kAccentDim);
+        iconCol = kAccentU32;
     } else {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kBg3);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(kAccent.x, kAccent.y, kAccent.z, 0.30f));
     }
     const bool pressed = ImGui::Button("##icon", ImVec2(size, size));
-    ImGui::PopStyleColor(2);
+    ImGui::PopStyleColor(3);
     const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    if (active) dl->AddLine({a.x + 4, b.y - 1}, {b.x - 4, b.y - 1}, kAccentU32, 2.0f);
-    const ImU32 col = active ? kAccentU32 : ImGui::GetColorU32(ImGuiCol_Text);
-    drawIcon(dl, icon, {(a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f}, size * 0.30f, col);
+    if (tone == Btn::On) dl->AddLine({a.x + 6, b.y - 2}, {b.x - 6, b.y - 2}, kAccentU32, 2.0f);
+    if (tone == Btn::Quiet && ImGui::IsItemHovered()) iconCol = kAccentU32;
+    drawIcon(dl, icon, {(a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f}, size * 0.30f, iconCol);
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("%s", tooltip);
     ImGui::PopID();
     return pressed;
@@ -272,10 +295,26 @@ void toolbarSeparator(float height)
 void paneTitle(const char* text, ImFont* bold)
 {
     if (bold) ImGui::PushFont(bold);
+    const float h = ImGui::GetTextLineHeight();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    ImGui::GetWindowDrawList()->AddRectFilled({p.x, p.y + 2.0f}, {p.x + 2.0f, p.y + h - 1.0f}, kAccentU32, 1.0f);
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8.0f);
     ImGui::PushStyleColor(ImGuiCol_Text, kTextDim);
     ImGui::TextUnformatted(text);
     ImGui::PopStyleColor();
     if (bold) ImGui::PopFont();
+}
+
+/// Bouton plein laiton : l'action qui valide une fenêtre.
+bool primaryButton(const char* label, const ImVec2& size)
+{
+    ImGui::PushStyleColor(ImGuiCol_Button, kAccent);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kAccentHi);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, kAccentDim);
+    ImGui::PushStyleColor(ImGuiCol_Text, kInkOnAccent);
+    const bool pressed = ImGui::Button(label, size);
+    ImGui::PopStyleColor(4);
+    return pressed;
 }
 
 bool fileExists(const char* path)
@@ -376,12 +415,34 @@ int App::run(const AppOptions& options)
         if (!startAvatar.empty()) loadAvatar(startAvatar);
     }
     setGarment({});   // au lancement : l'avatar seul, aucune pièce
-    setStatus("Bienvenue dans Drapeo. Tracez une pièce sur l'ombre de l'avatar à gauche, ou choisissez un modèle (menu Modèles).", false);
+    setStatus("Bienvenue dans Drapeo.", false);
     showAbout_ = options_.showAbout;
     if (!options_.patternPath.empty()) {
         setGarment({});
         importPattern(options_.patternPath);
         if (options_.acceptImport && pendingImage_.width > 0) finishImageImport();
+        if (options_.startPaused) playing_ = false;
+    } else if (!options_.model.empty()) {
+        std::string m = options_.model;
+        for (char& c : m) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        const char* label = nullptr;
+        garment::Garment g;
+        if (m == "debardeur") {
+            g = garment::makeTankTop();
+            label = "Débardeur";
+        } else if (m == "jupe") {
+            g = garment::makeSkirt();
+            label = "Jupe droite";
+        } else if (m == "robe") {
+            g = garment::makeDress();
+            label = "Robe";
+        } else {
+            setStatus("Modèle inconnu (« " + options_.model + " »). Utilisez debardeur, jupe ou robe.", true);
+        }
+        if (label != nullptr) {
+            setGarment(std::move(g));
+            setStatus(std::string("Modèle « ") + label + " » chargé.", false);
+        }
         if (options_.startPaused) playing_ = false;
     }
     if (options_.yawDeg > -999.0f) {
@@ -544,27 +605,36 @@ bool App::initWindow()
 
 void App::loadFonts(float scale)
 {
-    // Police du système : Segoe UI sous Windows, DejaVu Sans sous Linux.
-    // Plage de glyphes par défaut : latin de base + latin-1 (accents français).
+    // Inter est embarquée : l'atelier reste identique hors ligne, sans fichier à côté de l'exe.
+    // Plage par défaut d'ImGui : latin + latin-1, ce qui couvre le français.
     ImGuiIO& io = ImGui::GetIO();
+    ImFontConfig cfg;
+    cfg.FontDataOwnedByAtlas = false;
+    cfg.OversampleH = 2;
+    cfg.OversampleV = 2;
+    cfg.PixelSnapH = false;
+    const float size = 16.5f * scale;
+    ImFont* base = io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(font::kRegular), font::kRegularSize, size, &cfg);
+    ImFontConfig boldCfg = cfg;
+    boldCfg.FontDataOwnedByAtlas = false;
+    fontBold_ = io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(font::kSemiBold), font::kSemiBoldSize, size * 0.94f, &boldCfg);
+    if (base != nullptr) return;
+
     const char* regular[] = {"C:\\Windows\\Fonts\\segoeui.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
                              "/System/Library/Fonts/Supplemental/Arial.ttf"};
     const char* bold[] = {"C:\\Windows\\Fonts\\segoeuib.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
                           "/System/Library/Fonts/Supplemental/Arial Bold.ttf"};
-    const bool segoe = fileExists(regular[0]);
-    const float size = (segoe ? 17.0f : 15.0f) * scale;
-    ImFontConfig cfg;
-    cfg.OversampleH = 2;
-    ImFont* base = nullptr;
+    ImFontConfig fileCfg;
+    fileCfg.OversampleH = 2;
     for (const char* path : regular)
-        if (fileExists(path) && (base = io.Fonts->AddFontFromFileTTF(path, size, &cfg)) != nullptr) break;
-    if (base == nullptr) {
+        if (fileExists(path) && io.Fonts->AddFontFromFileTTF(path, size, &fileCfg) != nullptr) break;
+    if (io.Fonts->Fonts.empty()) {
         ImFontConfig def;
         def.SizePixels = 13.0f * scale;
         io.Fonts->AddFontDefault(&def);
     }
     for (const char* path : bold)
-        if (fileExists(path) && (fontBold_ = io.Fonts->AddFontFromFileTTF(path, size * 0.86f, &cfg)) != nullptr) break;
+        if (fileExists(path) && (fontBold_ = io.Fonts->AddFontFromFileTTF(path, size * 0.94f, &fileCfg)) != nullptr) break;
 }
 
 void App::loadLogo()
@@ -1458,9 +1528,9 @@ void App::computeLayout()
 {
     const ImVec2 display = ImGui::GetIO().DisplaySize;
     menuHeight_ = ImGui::GetFrameHeight();
-    toolbarHeight_ = std::round(44.0f * uiScale_);
-    statusHeight_ = std::round(ImGui::GetFrameHeight() + 4.0f * uiScale_);
-    inspectorWidth_ = std::round(345.0f * uiScale_);
+    toolbarHeight_ = std::round(50.0f * uiScale_);
+    statusHeight_ = std::round(ImGui::GetFrameHeight() + 8.0f * uiScale_);
+    inspectorWidth_ = std::round(360.0f * uiScale_);
     const float splitter = 5.0f * uiScale_;
     const float free = display.x - inspectorWidth_;
     if (leftWidth_ < 0.0f) leftWidth_ = std::round(free * 0.42f);
@@ -2271,6 +2341,8 @@ void App::drawMenuBar()
         ImGui::EndMenu();
     }
     ImGui::EndMainMenuBar();
+    ImGui::GetForegroundDrawList()->AddRectFilled({0, menuHeight_ - 1.0f}, {ImGui::GetIO().DisplaySize.x, menuHeight_},
+                                                  IM_COL32(220, 174, 96, 70));
 }
 
 void App::drawToolbar()
@@ -2278,8 +2350,8 @@ void App::drawToolbar()
     const ImVec2 display = ImGui::GetIO().DisplaySize;
     ImGui::SetNextWindowPos({0, menuHeight_});
     ImGui::SetNextWindowSize({display.x, toolbarHeight_});
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, kBg0);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8 * uiScale_, 0));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, kBgToolbar);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10 * uiScale_, 0));
     ImGui::Begin("##toolbar", nullptr, kPaneFlags);
     ImGui::PopStyleVar();
     const float b = std::round(32.0f * uiScale_);
@@ -2294,7 +2366,7 @@ void App::drawToolbar()
             if (t.tool == editor_.tool) cur = &t;
         char tip[256];
         std::snprintf(tip, sizeof(tip), "%s (%s)\n%s", cur->name, cur->key, cur->help);
-        if (iconButton("sel", Icon::Select, tip, ui::isEditTool(editor_.tool), b)) editor_.tool = cur->tool;
+        if (iconButton("sel", Icon::Select, tip, ui::isEditTool(editor_.tool) ? Btn::On : Btn::Quiet, b)) editor_.tool = cur->tool;
         ImGui::SameLine(0, 0);
         ImGui::SetCursorPosY(y);
         const float aw = std::round(14.0f * uiScale_);
@@ -2383,13 +2455,13 @@ void App::drawToolbar()
         }
     }
     ImGui::SameLine(0, 2);
-    if (iconButton("poly", Icon::Polygon, "Polygone (P)\nTracer une pièce point par point", editor_.tool == Tool::Polygon, b))
+    if (iconButton("poly", Icon::Polygon, "Polygone (P)\nTracer une pièce point par point", editor_.tool == Tool::Polygon ? Btn::On : Btn::Quiet, b))
         editor_.tool = Tool::Polygon;
     ImGui::SameLine(0, 2);
-    if (iconButton("rect", Icon::Rectangle, "Rectangle (B)\nTracer une pièce rectangulaire", editor_.tool == Tool::Rectangle, b))
+    if (iconButton("rect", Icon::Rectangle, "Rectangle (B)\nTracer une pièce rectangulaire", editor_.tool == Tool::Rectangle ? Btn::On : Btn::Quiet, b))
         editor_.tool = Tool::Rectangle;
     ImGui::SameLine(0, 2);
-    if (iconButton("poche", Icon::Pocket, "Poche (O)\nTracer un rectangle sur une pièce : la poche y est cousue directement", editor_.tool == Tool::Pocket, b))
+    if (iconButton("poche", Icon::Pocket, "Poche (O)\nTracer un rectangle sur une pièce : la poche y est cousue directement", editor_.tool == Tool::Pocket ? Btn::On : Btn::Quiet, b))
         editor_.tool = Tool::Pocket;
     ImGui::SameLine(0, 2);
     {
@@ -2400,7 +2472,7 @@ void App::drawToolbar()
         char tip[256];
         std::snprintf(tip, sizeof(tip), "%s (%s)\n%s", cur->name, cur->key, cur->help);
         const bool seamTool = editor_.tool == Tool::Seam || editor_.tool == Tool::FreeSeam || editor_.tool == Tool::Gusset;
-        if (iconButton("seam", Icon::Seam, tip, seamTool, b)) editor_.tool = cur->tool;
+        if (iconButton("seam", Icon::Seam, tip, seamTool ? Btn::On : Btn::Quiet, b)) editor_.tool = cur->tool;
         ImGui::SameLine(0, 0);
         ImGui::SetCursorPosY(y);
         const float aw = std::round(14.0f * uiScale_);
@@ -2430,7 +2502,7 @@ void App::drawToolbar()
         }
     }
     ImGui::SameLine(0, 2);
-    if (iconButton("magnet", Icon::Magnet, "Aimant (M)\nLes points et les pièces s'accrochent aux points et bords voisins", editor_.magnet, b))
+    if (iconButton("magnet", Icon::Magnet, "Aimant (M)\nLes points et les pièces s'accrochent aux points et bords voisins", editor_.magnet ? Btn::On : Btn::Quiet, b))
         editor_.magnet = !editor_.magnet;
     ImGui::SameLine(0, 2);
     {
@@ -2440,7 +2512,7 @@ void App::drawToolbar()
         if (iconButton("sym", Icon::Symmetry,
                        has ? "Symétrie de la pièce sélectionnée\nUn point déplacé, ajouté ou supprimé l'est aussi de l'autre côté de l'axe"
                            : "Symétrie\nSélectionnez d'abord une pièce",
-                       on, b) && has) {
+                       on ? Btn::On : Btn::Quiet, b) && has) {
             std::vector<int> targets = editor_.selection;
             if (targets.empty()) targets.push_back(sel);
             for (const int p : targets) setPanelSymmetric(p, !on);
@@ -2449,14 +2521,15 @@ void App::drawToolbar()
     }
 
     toolbarSeparator(b);
-    if (iconButton("play", playing_ ? Icon::Pause : Icon::Play, playing_ ? "Pause (Espace)" : "Simuler (Espace)", playing_, b))
+    const Btn playTone = !clothValid_ ? Btn::Quiet : (playing_ ? Btn::On : Btn::Primary);
+    if (iconButton("play", playing_ ? Icon::Pause : Icon::Play, playing_ ? "Pause (Espace)" : "Simuler (Espace)", playTone, b))
         playing_ = !playing_;
     ImGui::SameLine(0, 2);
-    if (iconButton("step", Icon::Step, "Image suivante", false, b)) stepOnce_ = true;
+    if (iconButton("step", Icon::Step, "Image suivante", Btn::Quiet, b)) stepOnce_ = true;
     ImGui::SameLine(0, 2);
-    if (iconButton("reset", Icon::Reset, "Recoudre depuis le patron (R)", false, b)) resetCloth();
+    if (iconButton("reset", Icon::Reset, "Recoudre depuis le patron (R)", Btn::Quiet, b)) resetCloth();
     ImGui::SameLine(0, 2);
-    if (iconButton("frame", Icon::Frame, "Cadrer l'avatar (F)", false, b)) frameCamera();
+    if (iconButton("frame", Icon::Frame, "Cadrer l'avatar (F)", Btn::Quiet, b)) frameCamera();
 
     toolbarSeparator(b);
     // Listes déroulantes : modèle, tissu, finesse du maillage.
@@ -2494,19 +2567,51 @@ void App::drawToolbar()
         spacing_ = kSpacingValues[sp];
         resetCloth();
     }
+    ImGui::SameLine(0, 14);
+    ImGui::SetCursorPosY(comboY);
+    ImGui::TextDisabled("Modèle");
+    ImGui::SameLine();
+    ImGui::SetCursorPosY(comboY);
+    ImGui::SetNextItemWidth(112 * uiScale_);
+    if (ImGui::BeginCombo("##modele", "Choisir")) {
+        auto loadModel = [&](const char* label, garment::Garment (*make)()) {
+            if (!ImGui::Selectable(label)) return;
+            setGarment(make());
+            setStatus(std::string("Modèle « ") + label + " » chargé.", false);
+        };
+        loadModel("Débardeur", garment::makeTankTop);
+        loadModel("Jupe droite", garment::makeSkirt);
+        loadModel("Robe", garment::makeDress);
+        ImGui::EndCombo();
+    }
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+        ImGui::SetTooltip("Charge un modèle prêt à coudre.\nLe patron actuel est remplacé (Ctrl+Z pour annuler).");
 
     // À droite : avancement de la couture.
     if (clothValid_) {
-        const float w = 190 * uiScale_;
-        ImGui::SameLine(ImGui::GetWindowWidth() - w - 12 * uiScale_);
-        ImGui::SetCursorPosY(comboY);
         const float prog = solver_.seamCount() > 0 ? solver_.seamProgress() : 1.0f;
+        const bool live = playing_ && prog >= 1.0f;
+        const float dot = live || prog < 1.0f ? 16.0f * uiScale_ : 0.0f;
+        const float w = 190 * uiScale_;
+        ImGui::SameLine(ImGui::GetWindowWidth() - w - dot - 14 * uiScale_);
+        ImGui::SetCursorPosY(comboY);
+        if (dot > 0.0f) {
+            const float pulse = prog < 1.0f ? 1.0f : (0.45f + 0.55f * (0.5f + 0.5f * std::sin(static_cast<float>(ImGui::GetTime()) * 2.8f)));
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            const float cy = p.y + ImGui::GetFrameHeight() * 0.5f;
+            const ImU32 col = prog < 1.0f ? kAccentU32 : IM_COL32(130, 186, 112, static_cast<int>(255.0f * pulse));
+            ImGui::GetWindowDrawList()->AddCircleFilled({p.x + 5.0f * uiScale_, cy}, 3.2f * uiScale_, col);
+            ImGui::Dummy(ImVec2(dot, ImGui::GetFrameHeight()));
+            ImGui::SameLine(0, 0);
+            ImGui::SetCursorPosY(comboY);
+        }
         char text[64];
-        if (prog < 1.0f) std::snprintf(text, sizeof(text), "Couture %.0f %%", static_cast<double>(prog * 100.0f));
+        if (prog < 1.0f) std::snprintf(text, sizeof(text), "Couture  %.0f %%", static_cast<double>(prog * 100.0f));
         else std::snprintf(text, sizeof(text), playing_ ? "Drapé en cours" : "En pause");
-        ImGui::PushStyleColor(ImGuiCol_FrameBg, kBg2);
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, kBg0);
+        ImGui::PushStyleColor(ImGuiCol_PlotHistogram, prog < 1.0f ? kAccent : ImVec4(0.45f, 0.58f, 0.40f, 1.0f));
         ImGui::ProgressBar(prog, ImVec2(w, ImGui::GetFrameHeight()), text);
-        ImGui::PopStyleColor();
+        ImGui::PopStyleColor(2);
     }
     ImGui::End();
     ImGui::PopStyleColor();
@@ -2525,6 +2630,7 @@ void App::drawPatternPane()
         const float h = ImGui::GetFrameHeight() + 6 * uiScale_;
         const ImVec2 p = ImGui::GetCursorScreenPos();
         ImGui::GetWindowDrawList()->AddRectFilled(p, {p.x + leftWidth_, p.y + h}, ImGui::GetColorU32(kBg1));
+        ImGui::GetWindowDrawList()->AddLine({p.x, p.y + h - 1.0f}, {p.x + leftWidth_, p.y + h - 1.0f}, IM_COL32(220, 174, 96, 36));
         ImGui::SetCursorPos({12 * uiScale_, (h - ImGui::GetTextLineHeight()) * 0.5f});
         paneTitle("PATRON 2D", fontBold_);
         ImGui::SameLine();
@@ -3341,64 +3447,109 @@ void App::drawViewportOverlay()
     // Textes dessinés sur la vue 3D (sous les fenêtres, au-dessus de l'image 3D).
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     const ImVec2 o(viewPos_.x, viewPos_.y);
+    const ImVec2 br(o.x + viewSize_.x, o.y + viewSize_.y);
     const float pad = 12 * uiScale_;
-    if (fontBold_) dl->AddText(fontBold_, fontBold_->FontSize, {o.x + pad, o.y + pad * 0.7f}, ImGui::GetColorU32(kTextDim), "VUE 3D");
-    else dl->AddText({o.x + pad, o.y + pad * 0.7f}, ImGui::GetColorU32(kTextDim), "VUE 3D");
+    // Vignette légère : le regard reste sur le vêtement, sans assombrir le centre.
+    {
+        const float v = 64.0f * uiScale_;
+        const ImU32 edge = IM_COL32(8, 7, 6, 78), mid = IM_COL32(8, 7, 6, 0);
+        dl->AddRectFilledMultiColor(o, {br.x, o.y + v}, edge, edge, mid, mid);
+        dl->AddRectFilledMultiColor({o.x, br.y - v}, br, mid, mid, edge, edge);
+        dl->AddRectFilledMultiColor(o, {o.x + v * 0.7f, br.y}, edge, mid, mid, edge);
+        dl->AddRectFilledMultiColor({br.x - v * 0.7f, o.y}, br, mid, edge, edge, mid);
+    }
     char text[160];
-    std::snprintf(text, sizeof(text), "%s  -  %.2f m", avatarSource_.name.c_str(), static_cast<double>(avatarHeight_));
-    dl->AddText({o.x + pad, o.y + pad * 0.7f + ImGui::GetTextLineHeightWithSpacing()}, ImGui::GetColorU32(kTextDim), text);
+    std::snprintf(text, sizeof(text), "%s   ·   %.2f m", avatarSource_.name.c_str(), static_cast<double>(avatarHeight_));
+    ImFont* titleFont = fontBold_ ? fontBold_ : ImGui::GetFont();
+    const float titleSize = titleFont->FontSize;
+    const ImVec2 titleTs = titleFont->CalcTextSizeA(titleSize, FLT_MAX, 0.0f, "VUE 3D");
+    const ImVec2 subTs = ImGui::CalcTextSize(text);
+    const ImVec2 chip(o.x + pad * 0.7f, o.y + pad * 0.45f);
+    const ImVec2 chipBr(chip.x + std::max(titleTs.x, subTs.x) + pad * 1.4f, chip.y + titleTs.y + subTs.y + pad * 0.85f);
+    dl->AddRectFilled(chip, chipBr, IM_COL32(14, 12, 10, 150), 7.0f);
+    dl->AddRectFilled({chip.x, chip.y + 7.0f}, {chip.x + 2.0f, chipBr.y - 7.0f}, kAccentU32, 1.0f);
+    dl->AddText(titleFont, titleSize, {chip.x + pad * 0.7f, chip.y + pad * 0.28f}, ImGui::GetColorU32(kTextDim), "VUE 3D");
+    dl->AddText({chip.x + pad * 0.7f, chip.y + pad * 0.28f + titleTs.y}, ImGui::GetColorU32(kText), text);
 
     if (clothValid_ && solver_.seamCount() > 0 && solver_.seamProgress() < 1.0f) {
-        std::snprintf(text, sizeof(text), "Couture en cours  %.0f %%", static_cast<double>(solver_.seamProgress() * 100.0f));
+        std::snprintf(text, sizeof(text), "Couture en cours   %.0f %%", static_cast<double>(solver_.seamProgress() * 100.0f));
         const ImVec2 ts = ImGui::CalcTextSize(text);
-        const ImVec2 c(o.x + viewSize_.x * 0.5f, o.y + pad * 4.2f);
-        dl->AddRectFilled({c.x - ts.x * 0.5f - 12, c.y - 6}, {c.x + ts.x * 0.5f + 12, c.y + ts.y + 6}, IM_COL32(18, 19, 21, 210), 12.0f);
+        const ImVec2 c(o.x + viewSize_.x * 0.5f, o.y + pad * 4.4f);
+        dl->AddRectFilled({c.x - ts.x * 0.5f - 14, c.y - 7}, {c.x + ts.x * 0.5f + 14, c.y + ts.y + 7}, IM_COL32(16, 13, 10, 220), 8.0f);
+        dl->AddRect({c.x - ts.x * 0.5f - 14, c.y - 7}, {c.x + ts.x * 0.5f + 14, c.y + ts.y + 7}, IM_COL32(220, 174, 96, 90), 8.0f);
         dl->AddText({c.x - ts.x * 0.5f, c.y}, kAccentU32, text);
     }
-    if (!clothValid_ && garment_.empty()) {
-        const char* msg = "Patron vide : tracez une pièce à gauche ou choisissez un modèle (menu Modèles).";
+    const bool modalSoon = showAbout_ || showShortcuts_ || showPathPopup_ || showImagePopup_;
+    if (!clothValid_ && garment_.empty() && !modalSoon) {
+        const char* msg = "Aucun vêtement — tracez sur l'ombre à gauche, ou choisissez un modèle en haut.";
         const ImVec2 ts = ImGui::CalcTextSize(msg);
-        dl->AddText({o.x + (viewSize_.x - ts.x) * 0.5f, o.y + viewSize_.y * 0.5f}, ImGui::GetColorU32(kTextDim), msg);
+        const float h = ts.y + pad * 1.15f;
+        dl->PushClipRect(o, br, true);
+        dl->AddRectFilled({o.x, br.y - h}, br, IM_COL32(14, 12, 10, 200));
+        dl->AddLine({o.x, br.y - h}, {br.x, br.y - h}, IM_COL32(220, 174, 96, 80));
+        const float x = o.x + std::max(pad, (viewSize_.x - ts.x) * 0.5f);
+        dl->AddText({x, br.y - h + pad * 0.45f}, ImGui::GetColorU32(kText), msg);
+        dl->PopClipRect();
     }
     drawSelection3D();
     drawSeams3D();
     drawGrain3D();
     drawGizmo();
-    const char* help = playing_ ? "Pièce : clic = la choisir, glisser = la faire tourner autour du corps    Ailleurs : tourner la vue    Maj / clic milieu : déplacer    Clic droit : saisir le tissu"
-                                : "En pause : glisser une pièce = la faire tourner autour du corps, gizmo pour la déplacer ou la pivoter    Alt + clic sur une couture : activer / désactiver    Ailleurs : tourner la vue";
+    const char* help = playing_ ? "Clic : choisir   ·   glisser : tourner la pièce   ·   Maj : déplacer   ·   clic droit : saisir le tissu"
+                                : "Pause   ·   gizmo : déplacer   ·   Alt + clic : couture   ·   glisser le vide : tourner la vue";
     const ImVec2 hs = ImGui::CalcTextSize(help);
-    if (hs.x < viewSize_.x - 2 * pad)
-        dl->AddText({o.x + pad, o.y + viewSize_.y - hs.y - pad * 0.7f}, IM_COL32(150, 154, 162, 170), help);
+    if (!garment_.empty() && hs.x < viewSize_.x - 2 * pad) {
+        dl->AddRectFilled({o.x, br.y - hs.y - pad * 1.15f}, br, IM_COL32(10, 9, 8, 128));
+        dl->AddText({o.x + pad, br.y - hs.y - pad * 0.45f}, IM_COL32(214, 206, 190, 210), help);
+    }
 
     // Boutons de vues prédéfinies, en haut à droite.
     const float bw = 54 * uiScale_;
-    ImGui::SetNextWindowPos({o.x + viewSize_.x - 5.5f * bw - pad - 30 * uiScale_, o.y + pad * 0.5f});
+    ImGui::SetNextWindowPos({o.x + viewSize_.x - 5.6f * bw - pad - 28 * uiScale_, o.y + pad * 0.45f});
     ImGui::SetNextWindowBgAlpha(0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4, 4));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f * uiScale_);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
     ImGui::Begin("##vues", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                                         ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoFocusOnAppearing);
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.10f, 0.105f, 0.115f, 0.80f));
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.09f, 0.08f, 0.07f, 0.78f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.24f, 0.20f, 0.14f, 0.94f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, kAccentDim);
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.90f, 0.78f, 0.52f, 0.16f));
+    auto nearYaw = [&](float target, float pitch) {
+        float d = std::fmod(std::abs(camera_.yaw - target), 2.0f * kPi);
+        if (d > kPi) d = 2.0f * kPi - d;
+        return d < 0.09f && std::abs(camera_.pitch - pitch) < 0.09f;
+    };
     auto viewButton = [&](const char* name, float yaw) {
+        const bool on = nearYaw(yaw, 0.05f);
+        if (on) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(kAccent.x, kAccent.y, kAccent.z, 0.55f));
         if (ImGui::Button(name, ImVec2(bw, 0))) {
             frameCamera();
             camera_.yaw = yaw;
             camera_.pitch = 0.05f;
         }
+        if (on) ImGui::PopStyleColor();
         ImGui::SameLine(0, 3);
     };
     viewButton("Face", 0.0f);
     viewButton("Dos", kPi);
     viewButton("Profil", kPi * 0.5f);
-    if (ImGui::Button("3/4", ImVec2(bw, 0))) frameCamera();
+    {
+        const bool on = nearYaw(0.45f, 0.12f);
+        if (on) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(kAccent.x, kAccent.y, kAccent.z, 0.55f));
+        if (ImGui::Button("3/4", ImVec2(bw, 0))) frameCamera();
+        if (on) ImGui::PopStyleColor();
+    }
     ImGui::SameLine(0, 10);
-    if (showSeams3D_) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.87f, 0.63f, 0.29f, 0.45f));
+    if (showSeams3D_) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(kAccent.x, kAccent.y, kAccent.z, 0.50f));
     if (ImGui::Button("Coutures", ImVec2(bw * 1.5f, 0))) showSeams3D_ = !showSeams3D_;
     if (showSeams3D_) ImGui::PopStyleColor();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         ImGui::SetTooltip("Afficher les coutures dans la vue 3D.\nCliquer une couture l'active ou la désactive.");
-    ImGui::PopStyleColor();
+    ImGui::PopStyleColor(4);
     ImGui::End();
-    ImGui::PopStyleVar();
+    ImGui::PopStyleVar(3);
 }
 
 void App::drawInspector()
@@ -4581,29 +4732,57 @@ void App::drawStatusBar()
     ImGui::SetNextWindowPos({0, display.y - statusHeight_});
     ImGui::SetNextWindowSize({display.x, statusHeight_});
     ImGui::PushStyleColor(ImGuiCol_WindowBg, kBg0);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10 * uiScale_, 2 * uiScale_));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12 * uiScale_, 2 * uiScale_));
     ImGui::Begin("##etat", nullptr, kPaneFlags | ImGuiWindowFlags_NoScrollbar);
     ImGui::PopStyleVar();
+    const ImVec2 bar = ImGui::GetWindowPos();
+    ImGui::GetWindowDrawList()->AddLine(bar, {bar.x + display.x, bar.y}, IM_COL32(220, 174, 96, 40));
     ImGui::SetCursorPosY((statusHeight_ - ImGui::GetTextLineHeight()) * 0.5f);
-
-    // Message récent (8 s) sinon l'aide de l'outil courant.
-    const bool recent = !status_.empty() && ImGui::GetTime() - statusTime_ < 8.0;
-    if (recent) {
-        ImGui::PushStyleColor(ImGuiCol_Text, statusIsError_ ? ImVec4(0.95f, 0.46f, 0.40f, 1.0f) : ImVec4(0.60f, 0.83f, 0.62f, 1.0f));
-        ImGui::TextUnformatted(status_.c_str());
-        ImGui::PopStyleColor();
-    } else {
-        ImGui::TextDisabled("%s", editor_.hint().c_str());
-    }
 
     char right[200];
     const auto& st = solver_.stats();
-    std::snprintf(right, sizeof(right), "%zu particules   |   %zu triangles   |   simulation %.1f ms   |   t = %.1f s   |   %.0f img/s",
+    std::snprintf(right, sizeof(right), "%zu particules   ·   %zu triangles   ·   %.1f ms   ·   t = %.1f s   ·   %.0f img/s",
                   clothValid_ ? st.particles : std::size_t{0}, clothValid_ ? solver_.indices().size() / 3 : std::size_t{0},
                   static_cast<double>(st.stepMilliseconds), static_cast<double>(simTime_),
                   static_cast<double>(ImGui::GetIO().Framerate));
-    const float w = ImGui::CalcTextSize(right).x;
-    ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 20, display.x - w - 14 * uiScale_));
+    const float rightW = ImGui::CalcTextSize(right).x;
+    // Message récent (8 s, fondu) sinon l'aide de l'outil courant. Le texte long est coupé, pas superposé aux chiffres.
+    const float age = static_cast<float>(ImGui::GetTime() - statusTime_);
+    const bool recent = !status_.empty() && age < 8.0f;
+    const float leftOrigin = (recent ? 28.0f : 12.0f) * uiScale_;
+    const float maxLeft = std::max(40.0f, display.x - rightW - 28.0f * uiScale_ - leftOrigin);
+    float alpha = 1.0f;
+    if (recent) {
+        if (age < 0.16f) alpha = age / 0.16f;
+        else if (age > 6.8f) alpha = std::clamp((8.0f - age) / 1.2f, 0.0f, 1.0f);
+    }
+    std::string left = recent ? status_ : editor_.hint();
+    auto popChar = [](std::string& s) {
+        while (!s.empty() && (static_cast<unsigned char>(s.back()) & 0xC0) == 0x80) s.pop_back();
+        if (!s.empty()) s.pop_back();
+    };
+    bool clipped = false;
+    while (ImGui::CalcTextSize(left.c_str()).x > maxLeft && left.size() > 1) {
+        popChar(left);
+        clipped = true;
+    }
+    if (clipped) {
+        popChar(left);
+        left += "…";
+    }
+    if (recent) {
+        ImVec4 col = statusIsError_ ? kBad : kOk;
+        col.w = alpha;
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        const float cy = p.y + ImGui::GetTextLineHeight() * 0.5f;
+        ImGui::GetWindowDrawList()->AddCircleFilled({p.x + 3.5f, cy}, 3.2f, ImGui::GetColorU32(col));
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 14.0f * uiScale_);
+        ImGui::TextColored(col, "%s", left.c_str());
+    } else {
+        ImGui::TextDisabled("%s", left.c_str());
+    }
+    ImGui::SetCursorPosY((statusHeight_ - ImGui::GetTextLineHeight()) * 0.5f);
+    ImGui::SetCursorPosX(display.x - rightW - 14.0f * uiScale_);
     ImGui::TextDisabled("%s", right);
     ImGui::End();
     ImGui::PopStyleColor();
@@ -4627,6 +4806,7 @@ void App::drawAboutWindow()
         ImGui::Separator();
         ImGui::TextDisabled("Patrons 2D, coutures, drapé physique XPBD sur avatar.");
         ImGui::TextDisabled("C++20, OpenGL 3.3, Dear ImGui, GLFW, glm, ufbx, CDT.");
+        ImGui::TextDisabled("Interface : Inter (SIL Open Font License).");
         ImGui::Spacing();
         if (ImGui::Button("Fermer", ImVec2(120 * uiScale_, 0))) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
@@ -4676,7 +4856,7 @@ void App::drawAboutWindow()
         ImGui::TextUnformatted(what[pathPopupKind_]);
         ImGui::SetNextItemWidth(420 * uiScale_);
         const bool enter = ImGui::InputText("##chemin", pathInput_, sizeof(pathInput_), ImGuiInputTextFlags_EnterReturnsTrue);
-        if (ImGui::Button("Valider", ImVec2(120 * uiScale_, 0)) || enter) {
+        if (primaryButton("Valider", ImVec2(120 * uiScale_, 0)) || enter) {
             const std::string path = pathInput_;
             ImGui::CloseCurrentPopup();
             if (pathPopupKind_ == 0) loadAvatar(path);
@@ -4717,7 +4897,7 @@ void App::drawImageImportPopup()
         ImGui::TextDisabled("Traits ou pièces sombres sur papier clair. Sinon, tracez\nles pièces sur l'image avec l'outil Polygone (P).");
     }
     ImGui::Spacing();
-    if (ImGui::Button("Importer", ImVec2(140 * uiScale_, 0))) {
+    if (primaryButton("Importer", ImVec2(140 * uiScale_, 0))) {
         ImGui::CloseCurrentPopup();
         finishImageImport();
     }

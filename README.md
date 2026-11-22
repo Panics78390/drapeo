@@ -312,7 +312,7 @@ Au démarrage, Drapeo recharge le dernier avatar utilisé (mémorisé dans `%APP
 | Clone symétrique cousu / inverser la sélection | Ctrl+D / Ctrl+Maj+I |
 | Désactiver / figer / renforcer / masquer en 3D | Ctrl+J / Ctrl+K / Ctrl+H / Maj+Q |
 
-Options : `drapeo --frames 200 --screenshot capture.ppm --size 1600x900` lance 200 images puis enregistre une capture (utile pour les tests automatiques).
+Options : `drapeo --frames 200 --screenshot capture.ppm --size 1600x900` lance 200 images puis enregistre une capture (utile pour les tests automatiques). `--modele debardeur`, `jupe` ou `robe` ouvre directement ce modèle.
 
 ## Organisation du code
 

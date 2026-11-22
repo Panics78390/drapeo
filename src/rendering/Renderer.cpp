@@ -101,15 +101,18 @@ void main() {
     vec3 albedo = uVertexColor == 1 ? vColor : uBaseColor;
     float shadow = 1.0;
     if (uMode == 2) {
-        // Sol : damier de 50 cm qui s'estompe avec la distance.
-        vec2 cell = floor(vWorldPos.xz * 2.0);
-        float checker = mod(cell.x + cell.y, 2.0);
-        albedo = mix(vec3(0.30, 0.31, 0.34), vec3(0.36, 0.37, 0.40), checker);
-        // Ombre douce de la sphère : distance du rayon vers la lumière au centre.
+        // Sol d'atelier : plan continu, flaque de lumière, ombre de contact sous l'avatar.
+        albedo = vec3(0.162, 0.150, 0.136);
+        float pool = exp(-0.30 * dot(vWorldPos.xz, vWorldPos.xz));
+        albedo *= mix(0.58, 1.38, pool);
         vec3 toC = uSphereCenter - vWorldPos;
         float t = max(dot(toC, L), 0.0);
         float dist = length(toC - L * t);
         shadow = mix(0.35, 1.0, smoothstep(uSphereRadius * 0.6, uSphereRadius * 1.25, dist));
+        if (uSphereRadius < 0.01) {
+            float contact = smoothstep(0.78, 0.05, length(vWorldPos.xz));
+            shadow *= mix(1.0, 0.50, contact);
+        }
     }
     float roughness = uRoughness;
     float sheenAmount = uSheen;
@@ -164,20 +167,50 @@ void main() {
     vec3 diffuse = (1.0 - F) * base / PI;
     vec3 sheen = sheenAmount * base * pow(1.0 - NoV, 3.0);   // reflet rasant des fibres
 
-    vec3 sun = vec3(3.2, 3.05, 2.85);
+    vec3 sun = vec3(3.55, 3.12, 2.52);                  // lampe d'atelier, un peu tungstène
     vec3 color = (diffuse + specular) * sun * NoL * shadow;
     // Ciel (hémisphère) + contre-jour froid
-    vec3 sky = mix(vec3(0.10, 0.09, 0.08), vec3(0.32, 0.36, 0.44), 0.5 + 0.5 * N.y);
-    color += base * sky + sheen * 1.2;
-    color += base * 0.25 * max(dot(N, normalize(vec3(-0.5, 0.2, -0.8))), 0.0) * vec3(0.55, 0.65, 0.9);
+    vec3 sky = mix(vec3(0.09, 0.072, 0.058), vec3(0.27, 0.31, 0.40), 0.5 + 0.5 * N.y);
+    color += base * sky + sheen * 1.15;
+    color += base * 0.32 * max(dot(N, normalize(vec3(-0.35, 0.22, -0.90))), 0.0) * vec3(0.48, 0.60, 0.92);
 
     if (uMode == 2) {
-        float fade = exp(-0.06 * dot(vWorldPos.xz, vWorldPos.xz));
-        color = mix(vec3(0.0070, 0.0078, 0.0094), color, fade);   // = couleur du fond après tone mapping
+        float fade = exp(-0.048 * dot(vWorldPos.xz, vWorldPos.xz));
+        // Valeur linéaire qui, après tone mapping, rejoint l'horizon du cyclorama.
+        color = mix(vec3(0.0104, 0.0078, 0.0055), color, fade);
     }
 
     color = color / (color + vec3(1.0));                // tone mapping de Reinhard
     fragColor = vec4(pow(color, vec3(1.0 / 2.2)), 1.0);
+}
+)GLSL";
+
+// Fond de la vue 3D : dégradé déjà en sRGB (pas de tone mapping).
+const char* kBackdropVertex = R"GLSL(
+#version 330 core
+out vec2 vUv;
+void main() {
+    const vec2 pos[3] = vec2[](vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
+    vec2 p = pos[gl_VertexID];
+    vUv = p * 0.5 + 0.5;
+    gl_Position = vec4(p, 1.0, 1.0);
+}
+)GLSL";
+
+const char* kBackdropFragment = R"GLSL(
+#version 330 core
+in vec2 vUv;
+out vec4 fragColor;
+void main() {
+    float y = clamp(vUv.y, 0.0, 1.0);
+    vec3 top = vec3(0.034, 0.031, 0.028);
+    vec3 horizon = vec3(0.125, 0.110, 0.094);
+    vec3 below = vec3(0.058, 0.052, 0.046);
+    vec3 col = y < 0.46 ? mix(below, horizon, smoothstep(0.0, 0.46, y))
+                        : mix(horizon, top, smoothstep(0.46, 1.0, y));
+    vec2 d = clamp(vUv, 0.0, 1.0) - vec2(0.50, 0.40);
+    col += vec3(0.050, 0.034, 0.016) * exp(-5.2 * dot(d, d));
+    fragColor = vec4(col, 1.0);
 }
 )GLSL";
 
@@ -191,6 +224,7 @@ Renderer::~Renderer()
     destroyMesh(ground_);
     destroyMesh(avatar_);
     if (printTexture_ != 0) gl::DeleteTextures(1, &printTexture_);
+    if (backdropVao_ != 0 && gl::DeleteVertexArrays != nullptr) gl::DeleteVertexArrays(1, &backdropVao_);
 }
 
 void Renderer::setAvatarMesh(const std::vector<glm::vec3>& positions, const std::vector<glm::vec3>& normals,
@@ -202,6 +236,8 @@ void Renderer::setAvatarMesh(const std::vector<glm::vec3>& positions, const std:
 bool Renderer::init(std::string& error)
 {
     if (!shader_.create(kVertexShader, kFragmentShader, error)) return false;
+    if (!backdrop_.create(kBackdropVertex, kBackdropFragment, error)) return false;
+    gl::GenVertexArrays(1, &backdropVao_);
 
     std::vector<glm::vec3> pos;
     std::vector<uint32_t> idx;
@@ -335,11 +371,19 @@ void Renderer::render(const SceneView& scene, const ClothAppearance& cloth)
     gl::Viewport(scene.x, scene.y, scene.width, scene.height);
     gl::Enable(gl::SCISSOR_TEST);
     gl::Scissor(scene.x, scene.y, scene.width, scene.height);
-    gl::ClearColor(0.105f, 0.112f, 0.125f, 1.0f);
+    gl::ClearColor(0.058f, 0.052f, 0.046f, 1.0f);
     gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
     gl::Disable(gl::SCISSOR_TEST);
-    gl::Enable(gl::DEPTH_TEST);
+    gl::Disable(gl::BLEND);
     gl::Disable(gl::CULL_FACE);
+    if (backdropVao_ != 0) {
+        gl::Disable(gl::DEPTH_TEST);
+        backdrop_.use();
+        gl::BindVertexArray(backdropVao_);
+        gl::DrawArrays(gl::TRIANGLES, 0, 3);
+        gl::Clear(gl::DEPTH_BUFFER_BIT);
+    }
+    gl::Enable(gl::DEPTH_TEST);
 
     const float aspect = static_cast<float>(scene.width) / static_cast<float>(std::max(scene.height, 1));
     const glm::mat4 viewProj = scene.camera->projection(aspect) * scene.camera->view();
@@ -347,7 +391,7 @@ void Renderer::render(const SceneView& scene, const ClothAppearance& cloth)
     shader_.use();
     shader_.set("uViewProj", viewProj);
     shader_.set("uCameraPos", scene.camera->position());
-    shader_.set("uLightDir", glm::normalize(glm::vec3(-0.45f, -1.0f, -0.35f)));
+    shader_.set("uLightDir", glm::normalize(glm::vec3(-0.30f, -1.0f, -0.46f)));
     shader_.set("uShowStrain", 0);
     shader_.set("uBackSide", 0);
     shader_.set("uHasPrints", 0);
@@ -385,8 +429,8 @@ void Renderer::render(const SceneView& scene, const ClothAppearance& cloth)
     // Avatar : gris chaud mat, comme un mannequin de couture
     if (avatar_.vao != 0) {
         shader_.set("uMode", 1);
-        shader_.set("uBaseColor", glm::vec3(0.72f, 0.68f, 0.63f));
-        shader_.set("uRoughness", 0.6f);
+        shader_.set("uBaseColor", glm::vec3(0.78f, 0.71f, 0.62f));
+        shader_.set("uRoughness", 0.72f);
         shader_.set("uSheen", 0.0f);
         shader_.set("uModel", glm::mat4(1.0f));
         drawMesh(avatar_);

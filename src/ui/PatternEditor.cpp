@@ -585,7 +585,9 @@ bool PatternEditor::draw(garment::Garment& g)
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 c0 = canvasPos_, c1(canvasPos_.x + canvasSize_.x, canvasPos_.y + canvasSize_.y);
     dl->PushClipRect(c0, c1, true);
-    dl->AddRectFilled(c0, c1, IM_COL32(30, 32, 36, 255));
+    // Table de coupe : un peu plus clair en haut, comme sous une lampe.
+    dl->AddRectFilledMultiColor(c0, c1, IM_COL32(48, 44, 39, 255), IM_COL32(48, 44, 39, 255), IM_COL32(26, 24, 22, 255),
+                                IM_COL32(26, 24, 22, 255));
 
     // --- Grille : 1 cm (fine, si zoom suffisant), 10 cm, 50 cm ---------------
     const glm::vec2 wLo = toWorld({c0.x, c1.y}), wHi = toWorld({c1.x, c0.y});
@@ -599,9 +601,17 @@ bool PatternEditor::draw(garment::Garment& g)
             dl->AddLine({c0.x, sy}, {c1.x, sy}, col);
         }
     };
-    if (zoom_ * 0.01f > 7.0f) gridLines(0.01f, IM_COL32(255, 255, 255, 8));
-    gridLines(0.1f, IM_COL32(255, 255, 255, 18));
-    gridLines(0.5f, IM_COL32(255, 255, 255, 34));
+    if (zoom_ * 0.01f > 7.0f) gridLines(0.01f, IM_COL32(232, 214, 186, 16));
+    gridLines(0.1f, IM_COL32(232, 214, 186, 28));
+    gridLines(0.5f, IM_COL32(214, 170, 96, 52));
+    {
+        const float v = 42.0f;
+        const ImU32 edge = IM_COL32(0, 0, 0, 48), mid = IM_COL32(0, 0, 0, 0);
+        dl->AddRectFilledMultiColor(c0, {c1.x, c0.y + v}, edge, edge, mid, mid);
+        dl->AddRectFilledMultiColor({c0.x, c1.y - v}, c1, mid, mid, edge, edge);
+        dl->AddRectFilledMultiColor(c0, {c0.x + v, c1.y}, edge, mid, mid, edge);
+        dl->AddRectFilledMultiColor({c1.x - v, c0.y}, c1, mid, edge, edge, mid);
+    }
     // Silhouette de l'avatar (ombre de face, de profil ou du dessus) sous tout le reste
     if (silhouette.texture != 0 && silhouette.visible) {
         dl->AddImage(silhouette.texture, toScreen({silhouette.min.x, silhouette.max.y}), toScreen({silhouette.max.x, silhouette.min.y}),
@@ -621,9 +631,13 @@ bool PatternEditor::draw(garment::Garment& g)
         }
     }
     {   // échelle graphique
-        const ImVec2 o(c0.x + 14, c1.y - 16);
-        dl->AddLine(o, {o.x + 0.1f * zoom_, o.y}, kMuted, 2.0f);
-        dl->AddText({o.x, o.y - 18}, kMuted, "10 cm");
+        const ImU32 brass = IM_COL32(214, 172, 102, 220);
+        const ImVec2 o(c0.x + 16, c1.y - 18);
+        const float len = 0.1f * zoom_;
+        dl->AddLine(o, {o.x + len, o.y}, brass, 1.6f);
+        dl->AddLine({o.x, o.y - 4}, {o.x, o.y + 4}, brass, 1.6f);
+        dl->AddLine({o.x + len, o.y - 4}, {o.x + len, o.y + 4}, brass, 1.6f);
+        dl->AddText({o.x, o.y - 18}, brass, "10 cm");
     }
 
     // --- Survol ---------------------------------------------------------------
